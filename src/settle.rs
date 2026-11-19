@@ -168,7 +168,10 @@ pub fn measure_with(cfg: &Config, p: &SettleParams, mut hook: impl FnMut(&mut Si
     let mut last_impact: Option<u64> = None;
     let mut last_fast: Option<u64> = None; // last substep with max speed >= V
     let mut max_speed_after = 0.0_f64;
-    let mut min_e_after = f64::INFINITY;
+    // The reference for the rise is the energy at T itself. The loop starts at substep 1, so
+    // when T = 0 the state at T is the initial one: seed with E(0), or a rise in the first
+    // substep followed by a fall would read as zero.
+    let mut min_e_after = if p.by - tol <= 0.0 { e0 } else { f64::INFINITY };
     let mut rise_after = 0.0_f64;
     let mut gain = 0.0_f64;
     let mut peak = max_strain(&sim.beams, &sim.pos);

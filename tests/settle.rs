@@ -77,6 +77,21 @@ fn planted_energy_injection_fails_settle() {
 }
 
 #[test]
+fn rise_with_settle_by_zero_counts_from_the_initial_energy() {
+    // T = 0: the reference is E(0). An injection in the very first substep, followed by the
+    // energy only falling (bounces and damping), is still a rise over E(0).
+    let p = SettleParams { by: 0.0, hold: 10.0, speed: 100.0, energy_rise: 0.001, energy_gain: 1e9 };
+    assert!(measure(&cfg10(), &p).is_ok(), "control without injection");
+    let r = measure_with(&cfg10(), &p, |sim, i| {
+        if i == 1 {
+            sim.vel[7].y += 0.5; // 0.125 J
+        }
+    });
+    let msg = r.verdict.expect_err("first-substep injection must fail");
+    assert!(msg.starts_with("energy rise"), "{msg}");
+}
+
+#[test]
 fn non_finite_state_is_an_abort_not_a_success() {
     let nan = |sim: &mut Sim, i: u64| {
         if i == 500 {
