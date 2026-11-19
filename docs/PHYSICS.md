@@ -26,6 +26,27 @@ For a beam from node a to node b, let `d = pos_b - pos_a`, `len = |d|`, `dir = d
 
 with `BEAM_STIFFNESS` = 20000 N/m and `BEAM_DAMPING` = 20 N*s/m. The first term is a spring (Hooke's law); the second is a damper that resists the ends moving apart or together. The force `dir * mag` is added to node a and its negative to node b, so a stretched beam pulls its ends together. A beam shorter than 1e-12 m is skipped to avoid dividing by zero.
 
+## Plastic beams (yield)
+
+A material of a `.bsn` body may give a `yield_strain` y (unitless, > 0). Its beams are then plastic; every other beam, and every beam of the built-in cube, is elastic and never changes. After every physics substep (after the solver step, `Sim::apply_yield`), for each plastic beam with current length `len` and rest length `rest`, the strain is
+
+    s = (len - rest) / rest
+
+and when |s| > y + 1e-12 (`YIELD_EPS`, so rounding right after a yield cannot trigger another) the rest length moves so that the strain at the current length returns to the yield limit (perfectly plastic: no hardening, the force never exceeds the one at strain y):
+
+    stretched, s > y:     rest' = len / (1 + y)      so that (len - rest') / rest' = +y
+    squeezed,  s < -y:    rest' = len / (1 - y)      so that (len - rest') / rest' = -y
+
+Positions and velocities are not touched, and |len - rest'| < |len - rest|, so the elastic energy (1/2) k (len - rest)^2 goes down at every yield and nothing else changes: plastic flow only removes energy. (It is applied once per substep, so a beam can end a substep slightly past the limit and is brought back at the end of that substep.) The rest length never becomes zero or negative: for len > 0 both formulas give a positive number (a squeeze needs y < 1, and a strain below -1 cannot happen). If a beam yields while its two nodes are at the same place (len below 1e-12 m, where the force step skips it too) the new rest length would be zero: the rest length is left alone, the beam's index goes into `Sim::yield_refused`, and `Sim::check` fails with a message naming the beam. Breaking a beam is a later brief; `MAX_STRAIN_LIMIT` still applies to the elastic strain, which for a plastic beam never exceeds y by more than one substep's worth.
+
+Total energy for a plastic body uses each beam's current rest length (`settle::total_energy` already does), so the energy before and after a yield can be compared directly (`tests/deform.rs`).
+
+## Bodies from a file
+
+`crash-sim --body <file.bsn>` builds the sim from a `.bsn` body (docs/FORMAT.md) instead of the built-in cube: node positions, masses and start velocities, beam stiffness and damping from the beam's material, rest lengths from the file. `--drop-height`, `--no-tilt` (they set up the cube) and `--settle-report` (it builds its own cube sim; not wired yet) are refused with exit code 2, and so is a body with collider planes (the sim has only the y = 0 ground until nb-36). `--duration`, `--dt`, `--substeps`, `--gravity` and `--summary` work as before and the output columns are the same. The CSV of `--body scenarios/cube.bsn` is byte-identical to the CSV of the default cube.
+
+The step limit of a loaded body cannot use the cube's stiffest-mode numbers, so `solver::body_step_error` bounds both the spring rate and the damping rate of the stiffest mode by Gershgorin: w2 = 2 * (largest sum of the beam stiffnesses at one node) / (lightest mass), g = 2 * (largest sum of the beam dampings at one node) / (lightest mass), and the step must satisfy h^2 w2 + 2 h g < 4 (the cube's coupled condition, see below). For a body of one material this is a bound; for mixed materials it is conservative but not proven. It is stricter than the cube's own limit, so `--body scenarios/cube.bsn` refuses a physics step that the built-in cube still accepts above about 2.9 ms.
+
 ## Gravity
 
 Each node gets a downward force of `gravity * NODE_MASS`. The default `gravity` is `GRAVITY` = 9.81 m/s^2; it is a config value (the code comments mention Moon 1.62 and Mars 3.71).

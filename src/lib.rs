@@ -31,6 +31,9 @@ pub const FRICTION_RATE: f64 = 5.0;
 /// otherwise gravity's per-substep velocity would keep re-bouncing forever.
 pub const REST_SPEED: f64 = 0.2;
 /// Strain above this means the run has blown up (or the cube is crushed); the sim aborts.
+/// A beam yields only when |strain| exceeds its yield strain by more than this, so a strain that
+/// rounding leaves one ulp past the limit right after a yield does not yield again.
+pub const YIELD_EPS: f64 = 1e-12;
 pub const MAX_STRAIN_LIMIT: f64 = 0.5;
 /// Initial tilt in degrees about x and z when tilt is on.
 pub const TILT_DEG: f64 = 5.0;
@@ -144,13 +147,7 @@ impl Default for Config {
 impl Config {
     /// Reject settings that cannot give a valid run, including unstable physics steps.
     pub fn validate(&self) -> Result<(), String> {
-        let ok = self.dt.is_finite() && self.dt > 0.0;
-        if !(ok && self.duration.is_finite() && self.duration >= 0.0 && self.substeps >= 1
-            && self.drop_height.is_finite() && self.drop_height >= 0.0
-            && self.gravity.is_finite() && self.gravity > 0.0)
-        {
-            return Err("dt must be > 0, duration >= 0, substeps >= 1, drop-height >= 0, gravity > 0 (all finite)".into());
-        }
+        self.validate_numbers()?;
         let h = self.dt / self.substeps as f64;
         // The limits come from the stiffest beam and the lightest node of the body this
         // config builds (today always the cube, whose numbers are the constants above).
@@ -168,6 +165,31 @@ impl Config {
             return Err(e);
         }
         Ok(())
+    }
+
+    /// The finite-number checks shared by `validate` and `validate_body` (same message).
+    fn validate_numbers(&self) -> Result<(), String> {
+        let ok = self.dt.is_finite() && self.dt > 0.0;
+        if !(ok && self.duration.is_finite() && self.duration >= 0.0 && self.substeps >= 1
+            && self.drop_height.is_finite() && self.drop_height >= 0.0
+            && self.gravity.is_finite() && self.gravity > 0.0)
+        {
+            return Err("dt must be > 0, duration >= 0, substeps >= 1, drop-height >= 0, gravity > 0 (all finite)".into());
+        }
+        Ok(())
+    }
+
+    /// Like `validate`, for a body loaded from a `.bsn` file. The cube's stiffest-mode
+    /// numbers do not hold for another body, so the step limit is `solver::body_step_error`
+    /// (a Gershgorin bound that is valid for any body). `drop_height`, `tilt` and `edge`
+    /// do not apply to a loaded body: its positions come from the file.
+    pub fn validate_body(&self, beams: &[Beam], mass: &[f64]) -> Result<(), String> {
+        self.validate_numbers()?;
+        let h = self.dt / self.substeps as f64;
+        match solver::body_step_error(h, beams, mass) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 
@@ -201,6 +223,13 @@ pub struct Sim {
     /// ground (0.0 if the cube starts there); None until then. Set inside the substep
     /// loop, so it cannot miss a contact that starts and ends between two output samples.
     pub first_contact_s: Option<f64>,
+    /// Per beam: the strain beyond which it yields (its rest length moves, see
+    /// `apply_yield`), or None for an elastic beam. One entry per beam, same order.
+    pub yield_strain: Vec<Option<f64>>,
+    /// Indices of beams that exceeded their yield strain while their two nodes were (almost)
+    /// at the same place, where the new rest length would be zero: their rest length was left
+    /// alone and `check` reports them (breaking is a later brief).
+    pub yield_refused: Vec<usize>,
     solver: Box<dyn Solver>,
     step: u64,
 }
@@ -253,14 +282,90 @@ impl Sim {
         let (pos, beams, mass) = build_cube(&cfg);
         let first_contact_s = if pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
         let n = pos.len();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, solver, step: 0 }
+        let yield_strain = vec![None; beams.len()];
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, yield_strain, yield_refused: Vec::new(), solver, step: 0 }
     }
 
-    fn substep(&mut self, h: f64) {
+    /// A sim of a body loaded from a `.bsn` file, with the default solver.
+    pub fn from_body(cfg: Config, body: &Body) -> Result<Sim, String> {
+        Sim::from_body_with_solver(cfg, body, Box::new(SymplecticEuler))
+    }
+
+    /// A sim of a body loaded from a `.bsn` file, advanced by the given solver. Refused (Err)
+    /// when the config is invalid, the step is not below the body's stability bound, or the
+    /// body has collider planes (the sim has only the y = 0 ground until nb-36 wires planes).
+    /// Positions, start velocities, masses and per-beam stiffness and damping come from the
+    /// body; a material's `yield_strain` makes its beams plastic (`apply_yield`).
+    pub fn from_body_with_solver(cfg: Config, body: &Body, solver: Box<dyn Solver>) -> Result<Sim, String> {
+        if !body.planes.is_empty() {
+            return Err(format!("the body has {} collider plane(s): the sim only has the y = 0 ground for now", body.planes.len()));
+        }
+        let built = body.build();
+        cfg.validate_body(&built.beams, &built.mass)?;
+        let yield_strain = body
+            .beams
+            .iter()
+            .map(|b| body.materials.iter().find(|m| m.name == b.material).expect("beam names an existing material").yield_strain)
+            .collect();
+        let first_contact_s = if built.pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
+        Ok(Sim {
+            cfg,
+            pos: built.pos,
+            vel: built.vel,
+            beams: built.beams,
+            mass: built.mass,
+            first_contact_s,
+            yield_strain,
+            yield_refused: Vec::new(),
+            solver,
+            step: 0,
+        })
+    }
+
+    /// One solver substep of length `h` (no yield pass). `advance` does this and then
+    /// `apply_yield`, once per substep; the two are public so a test can measure the energy
+    /// between them.
+    pub fn integrate(&mut self, h: f64) {
         self.solver.step(
             State { pos: &mut self.pos, vel: &mut self.vel, beams: &self.beams, mass: &self.mass, gravity: self.cfg.gravity },
             h,
         );
+    }
+
+    /// Plastic flow, after a substep. For every beam with a yield strain y whose strain
+    /// s = (len - rest) / rest has |s| > y, the rest length moves so that the strain returns to
+    /// the yield limit at the current length (perfectly plastic):
+    ///     stretched (s > y):    rest' = len / (1 + y)     so that (len - rest') / rest' = +y
+    ///     compressed (s < -y):  rest' = len / (1 - y)     so that (len - rest') / rest' = -y
+    /// Positions and velocities are untouched, and |len - rest'| < |len - rest|, so the stored
+    /// elastic energy only goes down. A beam whose new rest length would not be a positive
+    /// finite number (length below 1e-12 m, where the force step skips it too) keeps its
+    /// rest length and its index goes into `yield_refused`. Returns how many beams yielded.
+    pub fn apply_yield(&mut self) -> usize {
+        let mut yielded = 0;
+        for (i, bm) in self.beams.iter_mut().enumerate() {
+            let Some(y) = self.yield_strain[i] else { continue };
+            let len = (self.pos[bm.a] - self.pos[bm.b]).length();
+            let strain = (len - bm.rest) / bm.rest;
+            if !(strain.abs() > y + YIELD_EPS) {
+                continue;
+            }
+            let new_rest = if strain > 0.0 { len / (1.0 + y) } else { len / (1.0 - y) };
+            if len < 1e-12 || !(new_rest.is_finite() && new_rest > 0.0) {
+                if !self.yield_refused.contains(&i) {
+                    self.yield_refused.push(i);
+                }
+                continue;
+            }
+            bm.rest = new_rest;
+            yielded += 1;
+        }
+        yielded
+    }
+
+    fn substep(&mut self, h: f64) {
+        self.integrate(h);
+        self.apply_yield();
     }
 
     pub fn sample(&self) -> Sample {
@@ -278,6 +383,11 @@ impl Sim {
         }
         if let Some(i) = self.vel.iter().position(|v| !finite(v)) {
             return Err(format!("node {i} velocity is not finite"));
+        }
+        if let Some(&i) = self.yield_refused.first() {
+            return Err(format!(
+                "beam {i} would yield to a rest length of zero or negative (its nodes are at the same place): breaking is not implemented"
+            ));
         }
         let strain = max_strain(&self.beams, &self.pos);
         if strain.is_nan() || strain > MAX_STRAIN_LIMIT {
@@ -332,8 +442,22 @@ pub fn run_checked_with_contact(cfg: &Config) -> (Vec<Sample>, Option<f64>, Resu
     if let Err(e) = cfg.validate() {
         return (Vec::new(), None, Err(e));
     }
+    run_sim(Sim::new(cfg.clone()))
+}
+
+/// Like `run_checked_with_contact`, for a body loaded from a `.bsn` file. A refused body or
+/// config comes back as the error with no samples.
+pub fn run_body_checked_with_contact(cfg: &Config, body: &Body) -> (Vec<Sample>, Option<f64>, Result<(), String>) {
+    match Sim::from_body(cfg.clone(), body) {
+        Ok(sim) => run_sim(sim),
+        Err(e) => (Vec::new(), None, Err(e)),
+    }
+}
+
+/// The run loop shared by both entry points, on a sim whose config is already validated.
+fn run_sim(mut sim: Sim) -> (Vec<Sample>, Option<f64>, Result<(), String>) {
+    let cfg = sim.cfg.clone();
     let steps = (cfg.duration / cfg.dt).round() as u64;
-    let mut sim = Sim::new(cfg.clone());
     let mut out = Vec::with_capacity(steps as usize + 1);
     out.push(sim.sample());
     for _ in 0..steps {

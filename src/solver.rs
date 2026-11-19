@@ -92,3 +92,37 @@ pub fn gershgorin_omega_max(n_nodes: usize, beams: &[Beam], mass: &[f64]) -> f64
 pub fn gershgorin_step_limit(n_nodes: usize, beams: &[Beam], mass: &[f64]) -> f64 {
     2.0 / gershgorin_omega_max(n_nodes, beams, mass)
 }
+
+/// Error text if step `h` is not safe for a body of any shape, else None. The cube's
+/// `STIFFEST_MODE_EIGENVALUE` = 8 does not hold for another body, so both the spring rate and
+/// the damping rate of the stiffest mode are replaced by their Gershgorin bounds:
+///     w2 = 2 * (largest sum of beam stiffnesses at one node) / (lightest mass)
+///     g  = 2 * (largest sum of beam dampings at one node)    / (lightest mass)
+/// and the step must meet the cube's coupled condition with them, h^2 w2 + 2 h g < 4 (see
+/// `stable_step_limit_with_cause`). The spring part is a proven bound for any body. Pairing it
+/// with the damping bound is conservative but not proven when beams of different materials
+/// make the damping matrix not proportional to the stiffness matrix; for a body of one
+/// material it is the cube's argument with 8 replaced by the larger bound.
+pub fn body_step_error(h: f64, beams: &[Beam], mass: &[f64]) -> Option<String> {
+    let n = mass.len();
+    let mut k_at = vec![0.0_f64; n];
+    let mut c_at = vec![0.0_f64; n];
+    for b in beams {
+        k_at[b.a] += b.stiffness;
+        k_at[b.b] += b.stiffness;
+        c_at[b.a] += b.damping;
+        c_at[b.b] += b.damping;
+    }
+    let m = mass.iter().cloned().fold(f64::INFINITY, f64::min);
+    let w2 = 2.0 * k_at.iter().cloned().fold(0.0, f64::max) / m;
+    let g = 2.0 * c_at.iter().cloned().fold(0.0, f64::max) / m;
+    if h * h * w2 + 2.0 * h * g < 4.0 {
+        return None;
+    }
+    // The positive root of h^2 w2 + 2 h g = 4, written without cancellation (as in
+    // `stable_step_limit_with_cause`); with w2 = 0 the limit is 2/g.
+    let limit = 4.0 / (g + (g * g + 4.0 * w2).sqrt());
+    Some(format!(
+        "physics step h = dt/substeps = {h:.6} s reaches the body's stability limit {limit:.6} s (h^2*w2 + 2*h*g < 4 with the Gershgorin bounds w2 = {w2}, g = {g}); raise --substeps or lower --dt"
+    ))
+}
