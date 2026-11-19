@@ -2,8 +2,18 @@ use crash_sim::{run_checked_with_contact, to_csv, Config};
 use std::io::Write;
 use std::process::exit;
 
+// INTERIM: src/lib.rs is outside this task's claim, so the settle module is compiled into this
+// binary from its file, and the names it reaches through `crate::` are imported here. Once
+// lib.rs has `pub mod settle;`, delete these three lines (and the `mod settle` line) and use
+// `crash_sim::settle`. The file src/settle.rs does not change.
+#[allow(unused_imports)]
+use crash_sim::{max_strain, vec3, Beam, Sim};
+#[path = "settle.rs"]
+mod settle;
+
 fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
+    eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
     exit(2)
 }
 
@@ -20,6 +30,9 @@ fn num<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, flag: &str
 fn main() {
     let mut cfg = Config::default();
     let mut summary = false;
+    let mut settle_report = false;
+    let (mut by, mut hold, mut speed, mut rise, mut gain): (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>) =
+        (None, None, None, None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -30,8 +43,41 @@ fn main() {
             "--gravity" => cfg.gravity = num(&mut args, "--gravity"),
             "--no-tilt" => cfg.tilt = false,
             "--summary" => summary = true,
+            "--settle-report" => settle_report = true,
+            "--settle-by" => by = Some(num(&mut args, "--settle-by")),
+            "--settle-hold" => hold = Some(num(&mut args, "--settle-hold")),
+            "--settle-speed" => speed = Some(num(&mut args, "--settle-speed")),
+            "--energy-rise" => rise = Some(num(&mut args, "--energy-rise")),
+            "--energy-gain" => gain = Some(num(&mut args, "--energy-gain")),
             _ => usage(),
         }
+    }
+    let any_threshold = by.is_some() || hold.is_some() || speed.is_some() || rise.is_some() || gain.is_some();
+    if settle_report {
+        // No defaults: all five thresholds are required, and --summary is a different output.
+        let (Some(by), Some(hold), Some(speed), Some(rise), Some(gain)) = (by, hold, speed, rise, gain) else {
+            eprintln!("--settle-report needs --settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain");
+            usage()
+        };
+        if summary {
+            eprintln!("--settle-report and --summary cannot be used together");
+            usage()
+        }
+        let params = settle::SettleParams { by, hold, speed, energy_rise: rise, energy_gain: gain };
+        if let Err(e) = params.validate() {
+            eprintln!("{e}");
+            usage()
+        }
+        let report = settle::measure(&cfg, &params);
+        let _ = std::io::stdout().write_all(report.render().as_bytes());
+        if !report.is_ok() {
+            exit(1);
+        }
+        return;
+    }
+    if any_threshold {
+        eprintln!("--settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain need --settle-report");
+        usage()
     }
     let (samples, first_contact, result) = run_checked_with_contact(&cfg);
     if summary {
