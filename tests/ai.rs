@@ -284,3 +284,68 @@ fn integral_is_clamped() {
     }
     assert!((d.integral() - params().integral_max).abs() < 1e-12);
 }
+
+#[test]
+fn invalid_params_stop_without_panic() {
+    let path = circle(30.0, 36);
+    let tspeed = vec![5.0; path.len()];
+    let s = Model { x: 30.0, z: 0.0, heading: FRAC_PI_2, speed: 5.0 }.state();
+    let mut p = params();
+    p.integral_max = -1.0;
+    let mut d = Driver::new(p);
+    assert_eq!(d.update(&s, &path, &tspeed, 0.1), Controls::STOP);
+    assert_eq!(d.control(&s, &path, &tspeed), Controls::STOP);
+    assert_eq!(d.integral(), 0.0);
+    for bad in [f64::NAN, f64::INFINITY] {
+        let mut p = params();
+        p.integral_max = bad;
+        let mut d = Driver::new(p);
+        assert_eq!(d.update(&s, &path, &tspeed, 0.1), Controls::STOP);
+    }
+    // Zero is a legal clamp (integral stays 0), not a panic.
+    let mut p = params();
+    p.integral_max = 0.0;
+    let mut d = Driver::new(p);
+    let _ = d.update(&s, &path, &tspeed, 0.1);
+    assert_eq!(d.integral(), 0.0);
+}
+
+#[test]
+fn extreme_finite_inputs_never_give_nan() {
+    let path = vec![(0.0, 0.0), (1e200, 0.0), (1e200, 1e200)];
+    let tspeed = vec![5.0; 3];
+    let mut d = Driver::new(params());
+    let s = Model { x: 0.0, z: 0.0, heading: 0.0, speed: 5.0 }.state();
+    let c = d.update(&s, &path, &tspeed, 0.1);
+    assert!(c.throttle.is_finite() && c.brake.is_finite() && c.steer.is_finite());
+}
+
+#[test]
+fn lookahead_longer_than_two_laps_still_turns() {
+    // Unit square, lookahead 10 = 2.5 laps: the target is 2 m along, at (1, 1).
+    let path = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let tspeed = vec![5.0; 4];
+    let mut p = params();
+    p.lookahead_min = 10.0;
+    p.lookahead_max = 10.0;
+    let d = Driver::new(p);
+    let s = Model { x: 0.0, z: 0.0, heading: 0.0, speed: 5.0 }.state();
+    assert!(d.control(&s, &path, &tspeed).steer > 0.1);
+}
+
+#[test]
+fn ki_changes_the_speed_command() {
+    let path = circle(30.0, 36);
+    let tspeed = vec![10.0; path.len()];
+    let s = Model { x: 30.0, z: 0.0, heading: FRAC_PI_2, speed: 9.0 }.state();
+    let mut with_ki = Driver::new(params());
+    let mut p = params();
+    p.ki = 0.0;
+    let mut no_ki = Driver::new(p);
+    let (mut a, mut b) = (Controls::STOP, Controls::STOP);
+    for _ in 0..20 {
+        a = with_ki.update(&s, &path, &tspeed, 0.1);
+        b = no_ki.update(&s, &path, &tspeed, 0.1);
+    }
+    assert!(a.throttle > b.throttle + 0.05);
+}

@@ -99,7 +99,15 @@ fn point_ahead(path: &[(f64, f64)], seg: usize, t: f64, dist: f64) -> (f64, f64)
     let mut i = seg;
     let a = path[i];
     let b = path[(i + 1) % n];
-    let mut remaining = dist;
+    // Whole laps change nothing, so reduce to less than one lap (the loop below is
+    // bounded and would otherwise stop short when dist exceeds two laps).
+    let perimeter: f64 = (0..n)
+        .map(|k| {
+            let (p, q) = (path[k], path[(k + 1) % n]);
+            ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt()
+        })
+        .sum();
+    let mut remaining = if perimeter > 0.0 && perimeter.is_finite() { dist % perimeter } else { dist };
     let mut cur = (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1));
     // Bounded: at most two laps, so degenerate (zero length) paths cannot loop forever.
     for _ in 0..2 * n + 1 {
@@ -144,6 +152,8 @@ impl Driver {
                 .all(|v| finite(*v))
             && p.lookahead_min > 0.0
             && p.lookahead_max >= p.lookahead_min
+            // clamp(-m, m) panics for m < 0 (and for NaN, excluded above).
+            && p.integral_max >= 0.0
     }
 
     /// Target speed at the nearest path point (interpolated along its segment).
@@ -172,7 +182,13 @@ impl Driver {
         let err = self.speed_error(s, path, target_speed);
         let u = p.kp * err + p.ki * integral;
         let (throttle, brake) = if u >= 0.0 { (u.min(1.0), 0.0) } else { (0.0, (-u).min(1.0)) };
-        Controls { throttle, brake, steer }
+        let c = Controls { throttle, brake, steer };
+        // Overflow on extreme (finite) inputs can still produce NaN: never hand that out.
+        if c.throttle.is_finite() && c.brake.is_finite() && c.steer.is_finite() {
+            c
+        } else {
+            Controls::STOP
+        }
     }
 
     /// Pure function of its inputs and the stored integral (no state change).
@@ -193,7 +209,10 @@ impl Driver {
         }
         let err = self.speed_error(state, path, target_speed);
         let m = self.params.integral_max;
-        self.integral = (self.integral + err * dt).clamp(-m, m);
+        let next = (self.integral + err * dt).clamp(-m, m);
+        if next.is_finite() {
+            self.integral = next;
+        }
         self.controls(state, path, target_speed, self.integral)
     }
 }
