@@ -24,7 +24,7 @@ plane <px> <py> <pz> <nx> <ny> <nz>
 - `beam`: both nodes must be declared above the beam, differ, and be at different positions (a zero-length beam is refused even when `rest` is given); the material must exist; a pair of nodes has at most one beam (either order). The rest length is the distance between the two nodes unless `rest <r>` gives it (`r` > 0).
 - `group`: at least one node, each declared, none twice.
 - `velocity`: sets the start velocity (m/s) of every node of an existing group; one line per group; two groups that both have a velocity must not share a node. Nodes in no such group start at rest.
-- `plane`: a collider plane through a point with a normal (not zero); the side the normal points to is free space. Wiring planes and velocities into the sim is nb-34 and nb-36's job; the format only holds them.
+- `plane`: a collider plane through a point with a normal (not zero by components; it is stored as written, not normalised, so a consumer must scale by the largest component before taking a length); the side the normal points to is free space. Wiring planes and velocities into the sim is nb-34 and nb-36's job; the format only holds them.
 
 ## Canonical form
 
@@ -45,5 +45,4 @@ The first line names the version. This parser reads version 1 only and refuses a
 
 ## Line endings in a Windows checkout
 
-The format is strict about `
-`. Git on Windows with `core.autocrlf=true` would check text files out with CRLF, which `parse` refuses by name. The repo now enforces LF: `.gitattributes` has `*.bsn text eol=lf` and `*.input text eol=lf`, and the tests read scenario files exactly as checked out (`scenario_files_have_no_carriage_returns` fails on a CRLF copy).
+The format is strict about the line ending `\n` (LF). Git on Windows with `core.autocrlf=true` would check text files out with CRLF, which `parse` refuses by name. The repo now enforces LF: `.gitattributes` has `*.bsn text eol=lf` and `*.input text eol=lf`, and the tests read scenario files exactly as checked out (`scenario_files_have_no_carriage_returns` fails on a CRLF copy).

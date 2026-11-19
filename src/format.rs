@@ -280,11 +280,11 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
             parse_header(line)?;
             continue;
         }
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
         if let Some(p) = line.find('\r') {
             return Err(err(n, Some(line[..p].chars().count() + 1), "carriage return: the file must use \\n line endings".into()));
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
         }
         if let Some(p) = line.find('\t') {
             return Err(err(n, Some(line[..p].chars().count() + 1), "tab: tokens are separated by single spaces".into()));
@@ -380,6 +380,9 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
                     return Err(t.err(Some(ac), format!("zero-length beam: nodes {a} and {b} are at the same position")));
                 }
                 let mut rest = dist;
+                if t.peek().is_none() && !dist.is_finite() {
+                    return Err(t.err(Some(ac), format!("beam between nodes {a} and {b} is too long: its length is not finite, so give an explicit `rest`")));
+                }
                 if t.peek().is_some() {
                     t.keyword("rest")?;
                     let (c, r) = t.number("rest length")?;
@@ -436,7 +439,7 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
                 let point = t.vec3("plane point")?;
                 let normal = t.vec3("plane normal")?;
                 t.done()?;
-                if normal.length() == 0.0 {
+                if normal.x == 0.0 && normal.y == 0.0 && normal.z == 0.0 {
                     return Err(t.err(None, "plane normal is the zero vector".into()));
                 }
                 body.planes.push(Plane { point, normal });
@@ -458,6 +461,9 @@ fn parse_header(line: &str) -> Result<(), ParseError> {
     match parse_id(rest) {
         Some(v) if v == VERSION => Ok(()),
         Some(v) => Err(err(Some(5), format!("unknown version {v}: this parser reads version {VERSION} only"))),
+        None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => {
+            Err(err(Some(5), format!("unknown version {rest}: this parser reads version {VERSION} only")))
+        }
         None => Err(err(Some(5), format!("version `{rest}` is not a version number (the first line must be `bsn {VERSION}`)"))),
     }
 }

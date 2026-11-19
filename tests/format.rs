@@ -281,7 +281,7 @@ fn refuse_missing_header() {
 fn refuse_unknown_version() {
     expect("bsn 2\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 2");
     expect("bsn 0\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 0");
-    expect("bsn 99999999999\nnode 0 0 0 0 mass 1\n", 1, Some(5), "not a version number");
+    expect("bsn 99999999999\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 99999999999");
 }
 
 #[test]
@@ -521,4 +521,26 @@ fn refuse_non_finite_velocity() {
 fn refuse_plane_with_zero_normal() {
     expect(&base("plane 0 0 0 0 0 0\n"), 5, None, "zero vector");
     expect(&base("plane 0 0 0 0 0 inf\n"), 5, Some(17), "plane normal z");
+}
+
+#[test]
+fn refuse_beam_whose_length_overflows_unless_rest_is_given() {
+    let nodes = "bsn 1\nmaterial m stiffness 100 damping 1\nnode 0 -1e308 0 0 mass 1\nnode 1 1e308 0 0 mass 1\n";
+    expect(&format!("{nodes}beam 0 1 m\n"), 5, Some(6), "not finite");
+    let ok = parse(&format!("{nodes}beam 0 1 m rest 5\n")).expect("explicit rest is accepted");
+    assert_eq!(ok.beams[0].rest, 5.0);
+}
+
+#[test]
+fn refuse_carriage_return_on_comment_and_blank_lines() {
+    expect(&base("# comment\r\n"), 5, Some(10), "carriage return");
+    expect(&base("\r\n"), 5, Some(1), "carriage return");
+}
+
+#[test]
+fn tiny_plane_normal_is_not_the_zero_vector_and_round_trips() {
+    let b = parse(&base("plane 0 0 0 1e-200 0 0\n")).expect("a tiny nonzero normal is a direction");
+    assert_eq!(b.planes[0].normal, Vec3::new(1e-200, 0.0, 0.0));
+    assert_eq!(parse(&write(&b)).unwrap(), b);
+    expect(&base("plane 0 0 0 0 0 0\n"), 5, None, "zero vector");
 }
