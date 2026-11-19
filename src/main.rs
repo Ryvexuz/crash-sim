@@ -4,6 +4,28 @@ use std::process::exit;
 
 use crash_sim::settle;
 
+/// Write `text` and flush. The only path any stdout output takes, so a closed pipe or a full
+/// disk is an error value, never a panic and never silently dropped.
+fn write_all_flush(out: &mut impl Write, text: &str) -> std::io::Result<()> {
+    out.write_all(text.as_bytes())?;
+    out.flush()
+}
+
+/// The message printed to stderr when stdout cannot be written.
+fn write_failure_message(e: &std::io::Error) -> String {
+    format!("crash-sim: cannot write output: {e}")
+}
+
+/// Write to the locked stdout; on failure print one stderr line and exit 1.
+fn emit(text: &str) {
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    if let Err(e) = write_all_flush(&mut lock, text) {
+        eprintln!("{}", write_failure_message(&e));
+        exit(1);
+    }
+}
+
 fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary]");
@@ -105,7 +127,7 @@ fn main() {
             usage()
         }
         let report = settle::measure(&cfg, &params);
-        let _ = std::io::stdout().write_all(report.render().as_bytes());
+        emit(&report.render());
         if !report.is_ok() {
             exit(1);
         }
@@ -129,17 +151,71 @@ fn main() {
                     None => "none".to_string(),
                 };
                 let peak = samples.iter().map(|s| s.max_beam_strain).fold(f64::MIN, f64::max);
-                println!(
-                    "first_contact_s={contact},peak_strain={peak:.6},final_center_y={:.4}",
+                emit(&format!(
+                    "first_contact_s={contact},peak_strain={peak:.6},final_center_y={:.4}\n",
                     last.center_y
-                );
+                ));
             }
         }
     } else if !samples.is_empty() {
-        let _ = std::io::stdout().write_all(to_csv(&samples).as_bytes());
+        emit(&to_csv(&samples));
     }
     if let Err(e) = result {
         eprintln!("crash-sim: {e}");
         exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    struct FailWrite;
+    impl Write for FailWrite {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(Error::new(ErrorKind::BrokenPipe, "pipe closed"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailFlush(Vec<u8>);
+    impl Write for FailFlush {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(Error::new(ErrorKind::Other, "disk full"))
+        }
+    }
+
+    #[test]
+    fn write_error_is_returned() {
+        let e = write_all_flush(&mut FailWrite, "x\n").unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn flush_error_is_returned() {
+        let mut w = FailFlush(Vec::new());
+        let e = write_all_flush(&mut w, "x\n").unwrap_err();
+        assert_eq!(e.to_string(), "disk full");
+        assert_eq!(w.0, b"x\n");
+    }
+
+    #[test]
+    fn success_writes_exact_bytes() {
+        let mut v: Vec<u8> = Vec::new();
+        write_all_flush(&mut v, "a,b\n1,2\n").unwrap();
+        assert_eq!(v, b"a,b\n1,2\n");
+    }
+
+    #[test]
+    fn failure_message_names_the_write() {
+        let m = write_failure_message(&Error::new(ErrorKind::BrokenPipe, "pipe closed"));
+        assert_eq!(m, "crash-sim: cannot write output: pipe closed");
     }
 }
