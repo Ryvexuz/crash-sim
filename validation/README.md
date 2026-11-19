@@ -11,7 +11,7 @@ calibration, test B for the check.
 | `test-b.pulse.csv` | NHTSA test 7751, 2012 Kia Rio LX 4-door, same channel location, same format |
 | `test-b.meta` | its provenance |
 | `convert.py` | std-only converter: database EV zip + curve number -> the two files above |
-| `test_convert.py` | tests of the converter on a hand-written EV5 sample, plus the delta-V check on the committed pulses |
+| `test_convert.py` | tests of the converter on a hand-written EV5 sample, plus the delta-V check on the committed pulses and a recompute of every test A/B figure in this README (number, mass, speed, delta-V, crush) from the committed files |
 
 Raw downloads are not committed. Every meta file has the `url` of the zip it
 came from, so it can be fetched again (see "Redo the download").

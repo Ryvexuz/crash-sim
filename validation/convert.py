@@ -25,6 +25,7 @@ missing field) is refused with exit code 2 and the reason on stderr.
 """
 
 import argparse
+import math
 import sys
 import zipfile
 
@@ -72,9 +73,12 @@ def _section(lines, name):
 
 def _num(text, what):
     try:
-        return float(text)
+        value = float(text)
     except ValueError:
         raise ConvertError("%s is not a number: %r" % (what, text)) from None
+    if not math.isfinite(value):
+        raise ConvertError("%s is not a finite number: %r" % (what, text))
+    return value
 
 
 def _int(text, what):

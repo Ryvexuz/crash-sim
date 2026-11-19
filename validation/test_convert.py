@@ -141,6 +141,22 @@ class ConvertSample(unittest.TestCase):
         with self.assertRaises(convert.ConvertError):
             self.run_sample(channels={"v01234.094": shifted})
 
+    def test_time_tolerance_edge(self):
+        # The column is printed to 1 us; 0.4 us off passes, 0.6 us off is refused.
+        near = CHANNEL_94.replace("0.000100\t-1.000000", "0.0001004\t-1.000000")
+        rows, _ = self.run_sample(channels={"v01234.094": near})
+        self.assertAlmostEqual(rows[4][0], 0.0001, places=12)  # time from NFP/DELT
+        far = CHANNEL_94.replace("0.000100\t-1.000000", "0.0001006\t-1.000000")
+        with self.assertRaises(convert.ConvertError):
+            self.run_sample(channels={"v01234.094": far})
+
+    def test_non_finite_value_refused(self):
+        for bad in ("nan", "inf", "-inf"):
+            with self.subTest(bad=bad):
+                text = CHANNEL_94.replace("0.000200\t-2.000000", "0.000200\t" + bad)
+                with self.assertRaises(convert.ConvertError):
+                    self.run_sample(channels={"v01234.094": text})
+
     def test_point_count_must_match_nfp_nlp(self):
         short = "".join(CHANNEL_94.splitlines(True)[:-1])
         with self.assertRaises(convert.ConvertError):
@@ -221,6 +237,74 @@ class CommittedPulses(unittest.TestCase):
                 dv = convert.delta_v(rows)
                 self.assertLess(dv, 0.0)
                 self.assertLessEqual(abs(-dv - speed) / speed, 0.10)
+
+
+def load_pulse(name):
+    with open(os.path.join(HERE, name + ".pulse.csv"), encoding="ascii") as f:
+        lines = f.read().splitlines()
+    return [tuple(float(x) for x in ln.split(",")) for ln in lines[1:]]
+
+
+def readme_row(text, label):
+    """The cells after the label of the one README table row starting with it."""
+    rows = [ln for ln in text.splitlines() if ln.startswith("| " + label + " |")]
+    if len(rows) != 1:
+        raise AssertionError("README needs exactly one row %r, found %d" % (label, len(rows)))
+    return [c.strip() for c in rows[0].strip().strip("|").split("|")][1:]
+
+
+class ReadmeFigures(unittest.TestCase):
+    """Every figure the README records for tests A and B is recomputed from the
+    committed pulse and meta files; a README figure that drifts fails here."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(HERE, "README.md"), encoding="utf-8") as f:
+            cls.readme = f.read()
+        cls.names = ("test-a", "test-b")
+        cls.meta = {n: convert.read_meta(os.path.join(HERE, n + ".meta")) for n in cls.names}
+        cls.rows = {n: load_pulse(n) for n in cls.names}
+
+    def test_number_mass_speed(self):
+        numbers = readme_row(self.readme, "NHTSA test number")
+        mass = readme_row(self.readme, "Test mass (VEHTWT)")
+        speed = readme_row(self.readme, "Impact speed (CLSSPD)")
+        for i, n in enumerate(self.names):
+            with self.subTest(name=n):
+                m = self.meta[n]
+                self.assertTrue(numbers[i].startswith(m["test"] + " "), numbers[i])
+                self.assertTrue(mass[i].startswith(m["mass_kg"] + " kg"), mass[i])
+                self.assertTrue(speed[i].startswith(m["speed_kmh"] + " km/h"), speed[i])
+
+    def test_delta_v_row(self):
+        cells = readme_row(self.readme, "Delta-V, trapezoid over t >= 0")
+        for i, n in enumerate(self.names):
+            with self.subTest(name=n):
+                kmh = -convert.delta_v(self.rows[n]) * 3.6
+                pct = (kmh / float(self.meta[n]["speed_kmh"]) - 1.0) * 100.0
+                self.assertEqual(cells[i], "%.2f km/h, %+.1f%% of impact speed" % (kmh, pct))
+
+    def test_candidate_table_full_record(self):
+        # "Why these two": delta-V of the full record (t < 0 included).
+        for n in self.names:
+            with self.subTest(name=n):
+                r = self.rows[n]
+                full = sum(0.5 * (a0 + a1) * (t1 - t0) for (t0, a0), (t1, a1) in zip(r, r[1:]))
+                pct = (-full * 3.6 / float(self.meta[n]["speed_kmh"]) - 1.0) * 100.0
+                cells = readme_row(self.readme, self.meta[n]["test"])
+                self.assertEqual(cells[1], self.meta[n]["mass_kg"])
+                self.assertEqual(cells[2], "%+.1f%%" % pct)
+
+    def test_static_crush_row(self):
+        cells = readme_row(self.readme, "Static crush C1..C6 (DPD1..6)")
+        for i, n in enumerate(self.names):
+            with self.subTest(name=n):
+                profile, sep, mean = cells[i].partition(" mm; mean ")
+                self.assertEqual(sep, " mm; mean ", cells[i])
+                c = [int(x) for x in profile.split(",")]
+                self.assertEqual(len(c), 6)
+                self.assertEqual(mean, "%.4f m" % (sum(c) / 6 / 1000.0))
+                self.assertEqual(mean, self.meta[n]["static_crush_m"] + " m")
 
 
 if __name__ == "__main__":
