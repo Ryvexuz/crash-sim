@@ -1,0 +1,10 @@
+test = 7504
+vehicle = 2012 HYUNDAI ACCENT GLS 4-DR SEDAN
+mass_kg = 1330
+speed_kmh = 56.2
+channel = curve 94 FLRR XG G'S (RIGHT REAR SEAT CROSSMEMBER X)
+channel_location = right rear seat crossmember
+sample_rate_hz = 10000
+prefilter = 2800 Hz low-pass by the lab (PREFIL); data as measured (DASTAT AM); no further filtering
+url = https://nrd-static.nhtsa.dot.gov/compress/ev/vehdb/v00000/v07500/v07504.zip
+static_crush_m = 0.3508
