@@ -1,16 +1,8 @@
 //! Tests of the settle report (docs/STAGE6.md, milestone 1).
-//!
-//! INTERIM: src/lib.rs is outside the claim of this task, so the module is compiled into this
-//! test from its file. Once lib.rs has `pub mod settle;`, replace the next block with
-//! `use crash_sim::settle::{...};`.
 
-#[allow(unused_imports)]
-use crash_sim::{max_strain, vec3, Beam, Config, Sim};
-#[path = "../src/settle.rs"]
-mod settle;
-
+use crash_sim::settle::{measure, measure_with, total_energy, SettleParams};
 use crash_sim::vec3::Vec3;
-use settle::{measure, measure_with, total_energy, SettleParams};
+use crash_sim::{Beam, Config, Sim};
 use std::process::{Command, Output};
 
 /// The thresholds of docs/STAGE6.md check 1.3.

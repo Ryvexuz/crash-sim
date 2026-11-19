@@ -2,14 +2,7 @@ use crash_sim::{run_checked_with_contact, to_csv, Config};
 use std::io::Write;
 use std::process::exit;
 
-// INTERIM: src/lib.rs is outside this task's claim, so the settle module is compiled into this
-// binary from its file, and the names it reaches through `crate::` are imported here. Once
-// lib.rs has `pub mod settle;`, delete these three lines (and the `mod settle` line) and use
-// `crash_sim::settle`. The file src/settle.rs does not change.
-#[allow(unused_imports)]
-use crash_sim::{max_strain, vec3, Beam, Sim};
-#[path = "settle.rs"]
-mod settle;
+use crash_sim::settle;
 
 fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");

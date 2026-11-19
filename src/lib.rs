@@ -4,6 +4,7 @@
 //! restitution and friction. Std only, deterministic (no RNG, fixed step order).
 
 pub mod format;
+pub mod settle;
 pub mod solver;
 pub mod vec3;
 
