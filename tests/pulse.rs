@@ -162,3 +162,16 @@ fn olc_refusals() {
     assert!(olc(&[-1.0, f64::INFINITY], 1e-4, 15.0).is_err());
     assert_eq!(olc(&[], 1e-4, 15.0).unwrap(), None);
 }
+
+/// The corner is where J211 puts it. The filter is a 2-pole Butterworth with analog corner
+/// 2.0775 x CFC run twice, so the gain is |H|^2 = 1 / (1 + (f / (2.0775 CFC))^4); at f = CFC
+/// that is 1 / (1 + 0.0537) = 0.9490 (-0.45 dB).
+#[test]
+fn gain_at_cfc_matches_j211_corner() {
+    let (dt, cfc) = (1e-4, 180.0);
+    let x = sine(cfc, dt, 20000);
+    let y = cfc_filter(&x, dt, cfc).unwrap();
+    let gain = mid_amp(&y) / mid_amp(&x);
+    let want = 1.0 / (1.0 + (1.0f64 / 2.0775).powi(4));
+    assert!((gain - want).abs() < 0.005, "gain {gain}, want {want}");
+}
