@@ -400,6 +400,11 @@ fn wall_touched(sim: &Sim) -> Option<usize> {
     })
 }
 
+/// Whether `body` has the `front` and `rear` groups the heading of a drive needs.
+pub fn has_heading_groups(body: &Body) -> bool {
+    group_indices(body, "rear").is_ok() && group_indices(body, "front").is_ok()
+}
+
 /// Run the drive of `setup` (which must carry a script) on `body` and measure it at every
 /// substep. `lap_min_heading` (degrees) is the heading change at which the lap path and closing
 /// distance are read; pass `f64::INFINITY` when no lap report is wanted. The run is
@@ -419,7 +424,7 @@ pub fn drive(
     let rear = group_indices(body, "rear")?;
     let front = group_indices(body, "front")?;
     let h = cfg.dt / cfg.substeps as f64;
-    let total = run_substeps(cfg, setup);
+    let total = run_substeps(cfg, setup)?;
     let mut one = cfg.clone();
     one.dt = h;
     one.substeps = 1;

@@ -162,14 +162,23 @@ pub struct CarSetup {
 
 /// How many substeps (of `cfg.dt / cfg.substeps`) a car run takes: `step_count(cfg)` output steps
 /// of `cfg.substeps`, or, when `setup` ends at its script's last line, the whole substeps up to
-/// that line's time (with the same relative epsilon as `step_count`).
-pub fn run_substeps(cfg: &Config, setup: &CarSetup) -> u64 {
+/// that line's time (with the same relative epsilon as `step_count`). A script that ends before
+/// one whole substep (a single `0 ...` line) with no `--duration` would run 0 substeps and every
+/// report would fail at t = 0 with no hint why: that is an error naming the cause.
+pub fn run_substeps(cfg: &Config, setup: &CarSetup) -> Result<u64, String> {
     match (&setup.script, setup.until_script_end) {
         (Some(s), true) => {
             let h = cfg.dt / cfg.substeps as f64;
-            (s.t_last() / h * (1.0 + 1e-9)).floor() as u64
+            let n = (s.t_last() / h * (1.0 + 1e-9)).floor() as u64;
+            if n == 0 {
+                return Err(format!(
+                    "the script ends at t={}, so the run has 0 substeps: pass --duration",
+                    s.t_last()
+                ));
+            }
+            Ok(n)
         }
-        _ => crate::step_count(cfg) * cfg.substeps as u64,
+        _ => Ok(crate::step_count(cfg) * cfg.substeps as u64),
     }
 }
 
@@ -378,7 +387,10 @@ fn measure_inner(
     }
     let h = cfg.dt / cfg.substeps as f64;
     let total = match car {
-        Some(setup) => run_substeps(cfg, setup),
+        Some(setup) => match run_substeps(cfg, setup) {
+            Ok(n) => n,
+            Err(e) => return aborted(e),
+        },
         None => crate::step_count(cfg) * cfg.substeps as u64,
     };
     // One `advance` of this config is exactly one substep, so the substep loop is here, where

@@ -640,27 +640,47 @@ fn drive_work_enters_the_energy_rule() {
 /// A line the car cannot obey is refused by name before the run: no driven wheel, no throttle.
 #[test]
 fn a_control_the_car_cannot_obey_is_refused() {
-    let text = car_text().replace("driven yes", "driven no");
-    assert_ne!(text, car_text());
-    let Ok(body) = parse(&text) else {
-        // the file format may itself demand a driven wheel; then the car is refused earlier
-        return;
-    };
-    let setup = CarSetup {
-        script: Some(script("0 0 0 0\n1 0.5 0 0\n")),
-        until_script_end: false,
-        grip_frac: None,
-    };
-    let e = car_sim(substep_cfg(1.0), &body, &setup)
-        .err()
-        .expect("throttle with no driven wheel must be refused");
+    // The file format already refuses a car with no driven, braked or steerable wheel (so no
+    // file can reach this), but a car built in code can lose a wheel's role: take it away here.
+    let mut sim = Sim::from_car(substep_cfg(1.0), &car()).unwrap();
+    let car = sim.car.as_mut().unwrap();
+    assert!(car.set_controls(0.5, 1.0, -1.0).is_ok());
+    for w in car.wheels.iter_mut() {
+        w.p.driven = false;
+    }
+    let e = car
+        .set_controls(0.5, 0.0, 0.0)
+        .expect_err("throttle with no driven wheel");
+    assert!(e.contains("driven"), "{e}");
+    assert!(
+        car.set_controls(0.0, 1.0, 1.0).is_ok(),
+        "brake and steer are still allowed"
+    );
+    // the script is checked line by line, before the run
+    let e = script(
+        "0 0 0 0
+1 0.5 0 0
+",
+    )
+    .check_for(car)
+    .expect_err("line 2 asks for throttle");
     assert!(e.contains("input line 2") && e.contains("driven"), "{e}");
-    let ok = CarSetup {
-        script: Some(script("0 0 1 1\n")),
-        until_script_end: false,
-        grip_frac: None,
-    };
-    assert!(car_sim(substep_cfg(1.0), &body, &ok).is_ok());
+    assert!(script(
+        "0 0 1 1
+"
+    )
+    .check_for(car)
+    .is_ok());
+    for w in car.wheels.iter_mut() {
+        w.p.steerable = false;
+    }
+    let e = script(
+        "0 0 0 0.1
+",
+    )
+    .check_for(car)
+    .expect_err("steer with no steerable wheel");
+    assert!(e.contains("input line 1") && e.contains("steerable"), "{e}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1204,4 +1224,107 @@ fn a_drive_without_front_and_rear_groups_is_refused() {
     let (code, out, err) = cli(&["--body", &body, "--input", &input, "--duration", "1"]);
     assert_eq!((code, out.is_empty()), (Some(2), true));
     assert!(err.contains("front") || err.contains("rear"), "{err}");
+}
+
+const SETTLE_ARGS: [&str; 10] = [
+    "--settle-report",
+    "--settle-by",
+    "8",
+    "--settle-hold",
+    "4",
+    "--settle-speed",
+    "0.001",
+    "--energy-rise",
+    "0.01",
+    "--energy-gain",
+];
+
+/// A one-line script with no --duration would run 0 substeps: refused (exit 2) with the cause,
+/// for the rows and the settle report; with --duration, or in a slope run (which has its own
+/// length), it runs.
+#[test]
+fn a_script_that_ends_at_zero_needs_a_duration() {
+    let path = car_path();
+    let input = tmp_file(
+        "zero.input",
+        "0 0 1 0
+",
+    );
+    let mut settle = vec!["--body", path.as_str(), "--input", input.as_str()];
+    settle.extend(SETTLE_ARGS);
+    settle.push("0.01");
+    for args in [
+        vec!["--body", path.as_str(), "--input", input.as_str()],
+        settle.clone(),
+    ] {
+        let (code, out, err) = cli(&args);
+        assert_eq!((code, out.is_empty()), (Some(2), true), "{args:?}");
+        assert!(
+            err.contains("0 substeps") && err.contains("--duration"),
+            "{err}"
+        );
+    }
+    settle.extend(["--duration", "12"]);
+    assert_eq!(cli(&settle).0, Some(0));
+    let (code, out, _) = cli(&[
+        "--body",
+        &path,
+        "--input",
+        &input,
+        "--slope-grip-frac",
+        "1.2",
+        "--slope-report",
+        "--slope-from",
+        "1",
+        "--slope-to",
+        "2",
+    ]);
+    assert_eq!(code, Some(0), "{out}");
+}
+
+/// The settle report of a car with --input needs no front/rear groups (only the rows and the
+/// drive report need a heading): it runs, and prints no `final` line.
+#[test]
+fn settle_report_with_input_needs_no_heading_groups() {
+    let text = car_text()
+        .replace("group front", "group nose")
+        .replace("group rear", "group tail");
+    let body = tmp_file("no_groups_settle.bsn", &text);
+    let input = tmp_file(
+        "no_groups_settle.input",
+        "0 0 1 0
+",
+    );
+    let mut args = vec![
+        "--body",
+        body.as_str(),
+        "--input",
+        input.as_str(),
+        "--duration",
+        "12",
+    ];
+    args.extend(SETTLE_ARGS);
+    args.push("0.01");
+    let (code, out, _) = cli(&args);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        out.lines().any(|l| l == "settle: ok") && !out.contains("final t="),
+        "{out}"
+    );
+}
+
+/// --events belongs to a plain run: a car run refuses it, as it refuses --summary.
+#[test]
+fn car_runs_refuse_plain_run_flags() {
+    let path = car_path();
+    let input = tmp_file(
+        "events.input",
+        "0 0 0 0
+",
+    );
+    for flag in ["--events", "--summary"] {
+        let (code, out, err) = cli(&["--body", &path, "--input", &input, "--duration", "1", flag]);
+        assert_eq!((code, out.is_empty()), (Some(2), true), "{flag}");
+        assert!(err.contains(flag), "{err}");
+    }
 }

@@ -213,6 +213,10 @@ fn main() {
             eprintln!("--summary cannot be used with --input, --slope-grip-frac, --slope-report or --drive-report");
             usage()
         }
+        if events {
+            eprintln!("--events cannot be used with --input, --slope-grip-frac, --slope-report or --drive-report");
+            usage()
+        }
         if (drive_report || any_lap) && input_path.is_none() {
             eprintln!("--drive-report and its flags need --input");
             usage()
@@ -468,8 +472,22 @@ fn run_car(a: &CarArgs) -> i32 {
     let mut failed = false;
     // The drive run feeds the rows, the drive report and the `final` line. It runs first, so a
     // refusal is reported before anything is printed.
+    let rows_mode = a.settle.is_none() && a.slope.is_none() && a.drive.is_none();
+    // The settle and slope reports need no heading: a body without `front` and `rear` groups
+    // still runs them (and prints no `final` line); the rows and the drive report need them.
+    let heading = input::has_heading_groups(a.body);
+    // A slope run has its own length, so a script that ends at 0 only costs it the `final` line.
+    let has_length = settle::run_substeps(a.cfg, &a.setup).is_ok();
+    let needs_run =
+        a.setup.script.is_some() && has_length && (a.drive.is_some() || rows_mode || heading);
+    if a.setup.script.is_some() && (a.settle.is_some() || a.drive.is_some() || rows_mode) {
+        if let Err(e) = settle::run_substeps(a.cfg, &a.setup) {
+            eprintln!("crash-sim: {e}");
+            return 2;
+        }
+    }
     let run: Option<DriveRun> = match &a.setup.script {
-        Some(_) => match input::drive(
+        Some(_) if needs_run => match input::drive(
             a.cfg,
             a.body,
             &a.setup,
@@ -481,7 +499,7 @@ fn run_car(a: &CarArgs) -> i32 {
                 return 2;
             }
         },
-        None => None,
+        _ => None,
     };
     let reports = a.settle.is_some() || a.slope.is_some() || a.drive.is_some();
     if let Some(r) = &run {
