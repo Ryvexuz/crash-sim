@@ -2,7 +2,7 @@
 //!
 //! Pure and std only: no physics, no track types. The driver sees a car state, a closed
 //! polyline (x, z) and one target speed per polyline point, and answers with the same
-//! throttle / brake / steer a player gives (throttle 0..1, brake 0..1, steer -1..1).
+//! throttle / brake / steer a player gives (throttle -1..1, brake 0..1, steer -1..1; this driver only ever gives throttle 0..1).
 //!
 //! Conventions: heading is an angle in radians, the car's forward direction is
 //! (cos heading, sin heading) in the (x, z) plane, and positive steer increases heading.
@@ -20,7 +20,8 @@ pub struct CarState {
     pub max_steer: f64,
 }
 
-/// Same ranges as the input script: throttle 0..1, brake 0..1, steer -1..1.
+/// Same ranges as the input script: throttle -1..1, brake 0..1, steer -1..1. The driver never
+/// asks for reverse: a speed below target brakes, so its throttle stays 0..1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
     pub throttle: f64,

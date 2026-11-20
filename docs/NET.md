@@ -10,7 +10,7 @@ No floats cross the wire: inputs are integers in 1/1000 units, so text round-tri
 | Message | Line | Fields |
 |---|---|---|
 | hello | `hello 1 <seed> <tick_rate>` | `1` is the protocol version; `seed` is u64; `tick_rate` is 1..=1000 ticks per second |
-| input | `input <tick> <throttle> <brake> <steer>` | `tick` is u64; throttle and brake 0..=1000; steer -1000..=1000 |
+| input | `input <tick> <throttle> <brake> <steer>` | `tick` is u64; brake 0..=1000; throttle and steer -1000..=1000 (a negative throttle is reverse) |
 | hash | `hash <tick> <16 lower-case hex>` | `tick` is u64; the hash is a u64 as exactly 16 lower-case hex digits, zero padded |
 | bye | `bye` | no fields |
 
@@ -23,7 +23,7 @@ Examples: `hello 1 42 60`, `input 7 1000 0 -250`, `hash 9 00000000000000ab`, `by
 - empty input (`Empty`) and lines over 128 bytes (`TooLong`, checked before parsing);
 - unknown words, including wrong case (`UnknownWord`);
 - extra or missing fields (`WrongFieldCount`);
-- a version other than 1 in `hello` (`WrongVersion`);
+- a version other than 1 in `hello` (`WrongVersion`). The version stays 1: the wire was already signed decimal text, so a v1 peer from before 15499f4 refuses a reverse input with `OutOfRange` mid-session;
 - values outside the ranges above, including u64 overflow and tick_rate 0 (`OutOfRange`);
 - numbers that are not canonical decimal: a `+`, leading zeros, `-0`, a bare `-`, decimals, exponents,
   `0x`, underscores, non-digits (`BadNumber`); hash text that is not 16 lower-case hex digits (`BadNumber`);

@@ -100,10 +100,22 @@ fn run_peer<T: Transport>(
     input_seed: u64,
     ticks: u64,
 ) -> Result<(StandIn, Vec<u64>), (SessionError, u64)> {
+    run_peer_with(transport, role, c, input_seed, ticks, input_at)
+}
+
+/// `run_peer` with the per-tick input chosen by `input`.
+fn run_peer_with<T: Transport>(
+    transport: T,
+    role: Role,
+    c: SessionConfig,
+    input_seed: u64,
+    ticks: u64,
+    input: fn(u64, u64) -> Input,
+) -> Result<(StandIn, Vec<u64>), (SessionError, u64)> {
     let mut s = Session::connect(transport, StandIn::new(SEED), c, role).map_err(|e| (e, 0))?;
     let mut checked = Vec::new();
     for t in 0..ticks {
-        match s.advance(input_at(input_seed, t)) {
+        match s.advance(input(input_seed, t)) {
             Ok(step) => {
                 assert_eq!(step.tick, t);
                 if step.checked_hash.is_some() {
@@ -633,6 +645,71 @@ fn bad_config_and_bad_local_input_are_refused() {
     };
     assert_eq!(s.advance(bad), Err(SessionError::LocalInputOutOfRange(bad)));
     // Hello and the one neutral input, then bye: the bad input never went out.
+    assert_eq!(
+        heard(&mut fake),
+        vec!["hello 1 42 60", "input 0 0 0 0", "bye"]
+    );
+}
+
+/// Like `input_at` but ticks 200..400 are a reverse segment: throttle -1..-1000, no brake.
+fn reverse_input_at(peer_seed: u64, t: u64) -> Input {
+    let mut i = input_at(peer_seed, t);
+    if (200..400).contains(&t) {
+        i.throttle = -1 - (mix(peer_seed ^ t) % 1000) as i32;
+        i.brake = 0;
+    }
+    i
+}
+
+#[test]
+fn two_peers_stay_in_sync_through_a_reverse_segment() {
+    let c = cfg(3, 60, 5000);
+    let (a, b) = channel_pair();
+    let host = thread::spawn(move || {
+        run_peer_with(a, Role::Host, c, HOST_INPUTS, 1000, reverse_input_at)
+    });
+    let guest = thread::spawn(move || {
+        run_peer_with(b, Role::Guest, c, GUEST_INPUTS, 1000, reverse_input_at)
+    });
+    let (hs, hc) = host.join().unwrap().expect("host ok");
+    let (gs, gc) = guest.join().unwrap().expect("guest ok");
+    assert_eq!(hs.state_hash(), gs.state_hash());
+    assert_eq!(hs.applied, gs.applied);
+    // The reverse segment really crossed the wire: both sides stepped negative throttle from both peers.
+    let reversed = hs
+        .applied
+        .iter()
+        .filter(|p| p[0].throttle < 0 && p[1].throttle < 0)
+        .count();
+    assert_eq!(reversed, 200, "ticks 203..403 apply the delayed reverse inputs");
+    // Every hash check passed (no Desync) and they match a single machine stepping the same inputs.
+    assert_eq!(hc.len(), 16);
+    assert_eq!(hc, gc);
+    let mut sim = StandIn::new(SEED);
+    for t in 0..1000u64 {
+        let pick = |seed| {
+            if t < 3 {
+                Input::NEUTRAL
+            } else {
+                reverse_input_at(seed, t - 3)
+            }
+        };
+        sim.step(t, [pick(HOST_INPUTS), pick(GUEST_INPUTS)]);
+    }
+    assert_eq!(hs.state_hash(), sim.state_hash());
+}
+
+#[test]
+fn local_throttle_past_full_reverse_is_refused_and_not_sent() {
+    let (a, mut fake) = channel_pair();
+    say(&mut fake, "hello 1 42 60");
+    let mut s = connect(a, cfg(1, 60, 2000)).unwrap();
+    let bad = Input {
+        throttle: -1001,
+        brake: 0,
+        steer: 0,
+    };
+    assert_eq!(s.advance(bad), Err(SessionError::LocalInputOutOfRange(bad)));
     assert_eq!(
         heard(&mut fake),
         vec!["hello 1 42 60", "input 0 0 0 0", "bye"]

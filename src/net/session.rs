@@ -48,8 +48,8 @@ use super::{decode, encode, Msg, NetError, INPUT_SCALE, MAX_LINE_BYTES, MAX_TICK
 /// Highest accepted input delay in ticks (the neutral inputs for the first D ticks are sent at once).
 pub const MAX_INPUT_DELAY: u64 = 1000;
 
-/// One peer's controls for one tick, in 1/1000 units: throttle and brake 0..=1000,
-/// steer -1000..=1000 (the ranges of the `input` message).
+/// One peer's controls for one tick, in 1/1000 units: brake 0..=1000,
+/// throttle and steer -1000..=1000 (a negative throttle is reverse) (the ranges of the `input` message).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Input {
     pub throttle: i32,
@@ -66,7 +66,7 @@ impl Input {
     };
 
     pub fn in_range(&self) -> bool {
-        (0..=INPUT_SCALE).contains(&self.throttle)
+        (-INPUT_SCALE..=INPUT_SCALE).contains(&self.throttle)
             && (0..=INPUT_SCALE).contains(&self.brake)
             && (-INPUT_SCALE..=INPUT_SCALE).contains(&self.steer)
     }

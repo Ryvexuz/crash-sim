@@ -13,7 +13,8 @@ pub mod session;
 
 /// Wire protocol version carried by `hello`.
 pub const VERSION: u32 = 1;
-/// Throttle and brake range 0..=INPUT_SCALE; steer ranges -INPUT_SCALE..=INPUT_SCALE.
+/// Brake ranges 0..=INPUT_SCALE; throttle (negative is reverse) and steer range
+/// -INPUT_SCALE..=INPUT_SCALE.
 pub const INPUT_SCALE: i32 = 1000;
 /// Highest accepted tick rate (ticks per second) in `hello`; the lowest is 1.
 pub const MAX_TICK_RATE: u32 = 1000;
@@ -142,7 +143,7 @@ pub fn decode(line: &str) -> Result<Msg, NetError> {
         "input" => {
             expect_count("input", args, 4)?;
             let tick = parse_u64("tick", args[0])?;
-            let throttle = parse_i32("throttle", args[1], 0, INPUT_SCALE)?;
+            let throttle = parse_i32("throttle", args[1], -INPUT_SCALE, INPUT_SCALE)?;
             let brake = parse_i32("brake", args[2], 0, INPUT_SCALE)?;
             let steer = parse_i32("steer", args[3], -INPUT_SCALE, INPUT_SCALE)?;
             Ok(Msg::Input {

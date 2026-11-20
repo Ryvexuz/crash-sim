@@ -164,7 +164,7 @@ fn refuses_wrong_version() {
 fn refuses_out_of_range() {
     for s in [
         "input 1 1001 0 0",
-        "input 1 -1 0 0",
+        "input 1 -1001 0 0",
         "input 1 0 1001 0",
         "input 1 0 -1 0",
         "input 1 0 0 1001",
@@ -292,4 +292,44 @@ fn garbage_never_panics_and_accepted_text_is_canonical() {
             );
         }
     }
+}
+
+#[test]
+fn reverse_throttle_round_trips_exactly() {
+    // The full signed range, one step at a time, with the same 1/1000 quantisation as forward.
+    for throttle in -INPUT_SCALE..=INPUT_SCALE {
+        roundtrip(Msg::Input {
+            tick: 7,
+            throttle,
+            brake: 0,
+            steer: 0,
+        });
+    }
+    assert_eq!(
+        encode(&Msg::Input {
+            tick: 7,
+            throttle: -250,
+            brake: 0,
+            steer: 0
+        }),
+        "input 7 -250 0 0"
+    );
+    assert_eq!(
+        decode("input 7 -1000 0 0"),
+        Ok(Msg::Input {
+            tick: 7,
+            throttle: -INPUT_SCALE,
+            brake: 0,
+            steer: 0
+        })
+    );
+    // One step past full reverse is still refused, and `-0` is still not canonical.
+    assert!(matches!(
+        refused("input 7 -1001 0 0"),
+        NetError::OutOfRange { field: "throttle" }
+    ));
+    assert!(matches!(
+        refused("input 7 -0 0 0"),
+        NetError::BadNumber { field: "throttle" }
+    ));
 }
