@@ -78,7 +78,11 @@ fn live_matches_file_input_bytes() {
     drop(stdin); // end of input ends the run at the last line
     let live = child.wait_with_output().unwrap();
     assert_eq!(live.status.code(), Some(0));
-    assert!(live.stderr.is_empty(), "{:?}", String::from_utf8_lossy(&live.stderr));
+    assert!(
+        live.stderr.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&live.stderr)
+    );
     assert_eq!(
         String::from_utf8_lossy(&live.stdout),
         String::from_utf8_lossy(&file.stdout),
@@ -87,7 +91,10 @@ fn live_matches_file_input_bytes() {
     assert!(live.stdout == file.stdout);
     let text = String::from_utf8(live.stdout).unwrap();
     assert!(text.starts_with("t,speed_mps,x,y,z,heading_deg\n0.0000,"));
-    assert!(text.lines().last().unwrap().starts_with("final t=4.0000 "), "{text}");
+    assert!(
+        text.lines().last().unwrap().starts_with("final t=4.0000 "),
+        "{text}"
+    );
 }
 
 /// Rows arrive while stdin is still open, and a row is not written before the line that lets the
@@ -141,7 +148,10 @@ fn live_rows_arrive_before_end_of_input() {
 
     drop(stdin);
     let rest: Vec<String> = rx.iter().collect();
-    assert!(rest.last().unwrap().starts_with("final t=0.5200 "), "{rest:?}");
+    assert!(
+        rest.last().unwrap().starts_with("final t=0.5200 "),
+        "{rest:?}"
+    );
     assert_eq!(child.wait().unwrap().code(), Some(0));
 }
 
@@ -152,7 +162,9 @@ fn live_bad_line_exits_2_naming_the_line() {
     {
         let mut stdin = child.stdin.take().unwrap();
         // Line 3 is blank (counts), line 4 has a brake of 2.
-        stdin.write_all(b"0 0 0 0\n0.5 0.2 0 0\n\n1 0 2 0\n").unwrap();
+        stdin
+            .write_all(b"0 0 0 0\n0.5 0.2 0 0\n\n1 0 2 0\n")
+            .unwrap();
     }
     let o = child.wait_with_output().unwrap();
     let err = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -163,7 +175,10 @@ fn live_bad_line_exits_2_naming_the_line() {
     );
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.starts_with("t,speed_mps,x,y,z,heading_deg\n"));
-    assert!(!out.contains("final "), "a refused run has no final line: {out}");
+    assert!(
+        !out.contains("final "),
+        "a refused run has no final line: {out}"
+    );
 }
 
 /// A closed stdout ends the run quietly: exit 0 and nothing on stderr.
@@ -180,5 +195,9 @@ fn live_closed_stdout_ends_quietly() {
         child.wait_with_output().unwrap()
     };
     assert_eq!(o.status.code(), Some(0));
-    assert!(o.stderr.is_empty(), "{:?}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.stderr.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

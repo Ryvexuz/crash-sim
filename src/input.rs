@@ -57,7 +57,9 @@ impl LineParser {
         self.fed += 1;
         let number = self.fed;
         if raw.contains('\r') {
-            return Err(format!("input line {number}: a carriage return is not allowed (lines end with \\n only)"));
+            return Err(format!(
+                "input line {number}: a carriage return is not allowed (lines end with \\n only)"
+            ));
         }
         if raw.trim().is_empty() {
             return Ok(None);
@@ -660,7 +662,7 @@ pub fn live(
             if let Err(e) = sim.check() {
                 return Err(LiveError::Abort(format!("unstable at t = {t:.4} s: {e}")));
             }
-            if done % cfg.substeps as u64 == 0 {
+            if done.is_multiple_of(cfg.substeps as u64) {
                 emit(&render_row(&row_of(&sim, &front, &rear, t))).map_err(LiveError::Output)?;
             }
         }
