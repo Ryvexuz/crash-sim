@@ -35,6 +35,45 @@ The Accent and the Rio are two different vehicles on a shared Hyundai/Kia
 platform (a sibling pair, which the brief allows). Delta-V is above the
 impact speed because it includes the rebound.
 
+Delta-V has one definition, `convert.delta_v`: trapezoid integral of the
+committed pulse over the intervals that start at t >= 0. The "Delta-V" row
+above and done check 2's 10% criterion (`test_convert.py`, `CommittedPulses`)
+both come from it through one helper, `delta_v_vs_speed`; only the candidate
+table under "Why these two" uses the full record (`t_from=None`), and says so.
+
+### Static crush: field mapping, checked against the source format
+
+The EV5 VEHICLE record is `|`-separated fields with no names in the file, so
+the positions were checked three ways. `convert.py` reads every field through
+named tables (`TEST_FIELD`, `VEHICLE_FIELD`, `INSTR_FIELD`) whose numbers a
+test pins to the Guide's.
+
+- **Format document:** NHTSA Test Reference Guide Vol. I, Version 5 (Rev. Nov
+  2014; downloaded text `scratch/n20-02/ref/vol1.txt`), section 2.4 Vehicle
+  Information, table of contents line 126: "48 - 53. DPD1 - DPD6 -- Damage
+  Profile Distances"; body line 1627 (page 36): "48 - 53. DPD1-DPD6 -- Damage
+  Profile Distances", "Integer(s), millimeters", and line 1664: "For front
+  and rear damage, the DPD measurements are taken from the vehicle's left to
+  the vehicle's right". Neighbours, same table: line 109 "11. VEHTWT", line
+  120 "42. VEHSPD -- Vehicle Speed", lines 123-125 "45. BMPENG", "46. SILENG",
+  "47. APLENG", line 127 "54. VDI", line 128 "55. LENCNT -- Total Length of
+  Indentation", line 130 "57. CRHDST -- Maximum Crush Distance".
+- **Raw file** (`v07504.EV5` in `v07504.zip`, line 7, the VEHICLE record;
+  fields 42 to 57): `56.2|0|0|DE|NA|NA|253|351|402|403|391|305|12FDEW6|1366|0|470`.
+  Field 42 (VEHSPD) equals CLSSPD 56.2, 45-47 are codes (DE, NA, NA), 54 is a
+  CDC code (12FDEW6), 55 (LENCNT) 1366 and 57 (CRHDST) 470. Test 7751, same
+  line: `56.1|0|0|DE|NA|NA|409|448|452|458|447|407|12FDEW6|1104|0|507`.
+- **Test report:** `v07504R001.pdf` "CRUSH PROFILE" (text lines 1090-1100):
+  "Damage Region Length (mm): 1366", "C1 Crush zone 1 at left side ... 253"
+  to "C6 Crush zone 6 at right side ... 305"; `v07751R001.pdf` (lines
+  1101-1110): 1104 mm, C1 409 to C6 407. The DPDs equal C1..C6 in order, LENCNT
+  equals the damage length, and CRHDST equals the reported maximum crush
+  (470 and 507 mm).
+
+`convert.py` refuses a VEHICLE record whose field 42 is not the closing
+speed, or whose DPDs go deeper than CRHDST, so a record laid out differently
+gives an error, not a wrong crush.
+
 ### Channel details (both tests)
 
 - **Location:** accelerometer on the rear seat crossmember, right side

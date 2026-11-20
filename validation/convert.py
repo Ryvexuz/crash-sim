@@ -51,6 +51,30 @@ META_KEYS = ("test", "vehicle", "mass_kg", "speed_kmh", "channel", "channel_loca
 
 TIME_TOL_S = 0.5e-6  # the time column is printed to 1 us
 
+# The fields read, by name and 1-based field number, exactly as the table of
+# contents of NHTSA Test Reference Guide Vol. I, Version 5 (Revision Nov 2014)
+# numbers them: 2.3 Test Information ("2. TITLE", "15. CLSSPD -- Closing
+# Speed"), 2.4 Vehicle Information ("11. VEHTWT -- Vehicle Test Weight",
+# "42. VEHSPD -- Vehicle Speed", "48 - 53. DPD1 - DPD6 -- Damage Profile
+# Distances", "57. CRHDST -- Maximum Crush Distance") and Instrumentation
+# Information ("2. CURNO" ... "20. INSCOM"). The EV5 records are '|'-separated
+# fields in that order with no field names in the file, so every read goes
+# through these tables and the VEHICLE record is cross-checked (VEHSPD equals
+# CLSSPD, no DPD deeper than CRHDST) before anything is taken from it.
+TEST_FIELD = {"TITLE": 2, "CLSSPD": 15}
+VEHICLE_FIELD = {"VEHNO": 1, "VEHTWT": 11, "VEHSPD": 42,
+                 "DPD1": 48, "DPD2": 49, "DPD3": 50, "DPD4": 51, "DPD5": 52, "DPD6": 53,
+                 "CRHDST": 57}
+INSTR_FIELD = {"VEHNO": 1, "CURNO": 2, "SENTYP": 3, "SENATT": 5, "AXIS": 6, "XUNITS": 7,
+               "YUNITS": 8, "PREFIL": 9, "NFP": 15, "NLP": 16, "DELT": 17, "DASTAT": 18,
+               "INSCOM": 20}
+DPD_NAMES = ("DPD1", "DPD2", "DPD3", "DPD4", "DPD5", "DPD6")
+
+
+def _field(record, table, name):
+    """Field `name` of a split EV5 record, by its Guide field number."""
+    return record[table[name] - 1]
+
 
 class ConvertError(Exception):
     pass
@@ -100,14 +124,15 @@ def parse_ev5(text):
     if len(test) < 20:
         raise ConvertError("EV5 TEST record has %d fields, expected 20" % len(test))
     vehicles = _section(lines, "VEHICLE")
-    veh = [v for v in vehicles if v[0] == "1"]
-    if len(veh) != 1 or len(veh[0]) < 57:
-        raise ConvertError("EV5 needs exactly one VEHICLE record for vehicle 1 with >= 57 fields")
+    veh = [v for v in vehicles if _field(v, VEHICLE_FIELD, "VEHNO") == "1"]
+    if len(veh) != 1 or len(veh[0]) < max(VEHICLE_FIELD.values()):
+        raise ConvertError("EV5 needs exactly one VEHICLE record for vehicle 1 with >= %d fields"
+                           % max(VEHICLE_FIELD.values()))
     instr = {}
     for row in _section(lines, "INSTRUMENTATION"):
         if len(row) < 20:
             raise ConvertError("EV5 INSTRUMENTATION record has %d fields, expected 20" % len(row))
-        instr[_int(row[1], "CURNO")] = row
+        instr[_int(_field(row, INSTR_FIELD, "CURNO"), "CURNO")] = row
     return {"test_no": test_no, "test": test, "vehicle": veh[0], "instr": instr}
 
 
@@ -123,8 +148,9 @@ def build(spec, points, curve, url):
     if curve not in spec["instr"]:
         raise ConvertError("curve %d is not in the EV5 instrumentation list" % curve)
     f = spec["instr"][curve]
-    vehno, sentyp, senatt, axis, xunits, yunits = f[0], f[2], f[4], f[5], f[6], f[7]
-    prefil, nfp, nlp, delt, dastat, inscom = f[8], f[14], f[15], f[16], f[17], f[19]
+    vehno, sentyp, senatt, axis, xunits, yunits, prefil, nfp, nlp, delt, dastat, inscom = (
+        _field(f, INSTR_FIELD, n) for n in ("VEHNO", "SENTYP", "SENATT", "AXIS", "XUNITS", "YUNITS",
+                                            "PREFIL", "NFP", "NLP", "DELT", "DASTAT", "INSCOM"))
     if vehno != "1":
         raise ConvertError("curve %d is on vehicle %r, not vehicle 1" % (curve, vehno))
     if sentyp != "AC":
@@ -154,12 +180,16 @@ def build(spec, points, curve, url):
         rows.append((t, value * factor))
 
     test, veh = spec["test"], spec["vehicle"]
-    title = test[1].strip()
+    title = _field(test, TEST_FIELD, "TITLE").strip()
     if not title.startswith("NCAP - "):
         raise ConvertError("test title %r does not start with 'NCAP - '" % title)
-    mass = _int(veh[10], "VEHTWT")
-    speed = test[14].strip()
-    _num(speed, "CLSSPD")
+    mass = _int(_field(veh, VEHICLE_FIELD, "VEHTWT"), "VEHTWT")
+    speed = _field(test, TEST_FIELD, "CLSSPD").strip()
+    vehspd = _field(veh, VEHICLE_FIELD, "VEHSPD").strip()
+    if _num(speed, "CLSSPD") != _num(vehspd, "VEHSPD"):
+        raise ConvertError("VEHICLE field 42 (VEHSPD) %r is not TEST field 15 (CLSSPD) %r: "
+                           "the VEHICLE record is not laid out as Guide Vol. I numbers it"
+                           % (vehspd, speed))
     meta = {
         "test": str(spec["test_no"]),
         "vehicle": title[len("NCAP - "):],
@@ -172,9 +202,15 @@ def build(spec, points, curve, url):
                      "no further filtering" % prefil,
         "url": url,
     }
-    dpd = [d.strip() for d in veh[47:53]]
+    dpd = [_field(veh, VEHICLE_FIELD, n).strip() for n in DPD_NAMES]
     if all(dpd) and any(_int(d, "DPD") != 0 for d in dpd):
-        meta["static_crush_m"] = "%.4f" % (sum(_int(d, "DPD") for d in dpd) / 6 / 1000.0)
+        mm = [_int(d, n) for d, n in zip(dpd, DPD_NAMES)]
+        crhdst = _int(_field(veh, VEHICLE_FIELD, "CRHDST"), "CRHDST")
+        if max(mm) > crhdst:
+            raise ConvertError("DPD1..DPD6 %s go deeper than CRHDST (maximum crush) %d mm: "
+                               "the VEHICLE record is not laid out as Guide Vol. I numbers it"
+                               % (mm, crhdst))
+        meta["static_crush_m"] = "%.4f" % (sum(mm) / 6 / 1000.0)
     return rows, meta
 
 
@@ -193,11 +229,13 @@ def convert_zip(zip_file, curve, url):
     return build(spec, points, curve, url)
 
 
-def delta_v(rows):
-    """Trapezoid integral of the acceleration over t >= 0, in m/s."""
+def delta_v(rows, t_from=0.0):
+    """Trapezoid integral of the acceleration in m/s, over the intervals that
+    start at t >= t_from (default: t >= 0, the figure the README records and
+    done check 2 judges); t_from=None integrates the full record."""
     dv = 0.0
     for (t0, a0), (t1, a1) in zip(rows, rows[1:]):
-        if t0 >= 0.0:
+        if t_from is None or t0 >= t_from:
             dv += 0.5 * (a0 + a1) * (t1 - t0)
     return dv
 

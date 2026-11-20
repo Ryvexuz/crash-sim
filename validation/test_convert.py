@@ -191,6 +191,45 @@ class ConvertSample(unittest.TestCase):
         _, meta = self.run_sample(ev5=ev5_text(vehicle=veh))
         self.assertNotIn("static_crush_m", meta)
 
+    def test_field_tables_name_the_guide_fields(self):
+        # Field numbers (1-based) and names exactly as the table of contents of
+        # NHTSA Test Reference Guide Vol. I, Version 5 lists them, e.g. "11.
+        # VEHTWT -- Vehicle Test Weight", "48 - 53. DPD1 - DPD6 -- Damage
+        # Profile Distances", "57. CRHDST -- Maximum Crush Distance".
+        self.assertEqual(convert.TEST_FIELD, {"TITLE": 2, "CLSSPD": 15})
+        self.assertEqual(convert.VEHICLE_FIELD, {
+            "VEHNO": 1, "VEHTWT": 11, "VEHSPD": 42,
+            "DPD1": 48, "DPD2": 49, "DPD3": 50, "DPD4": 51, "DPD5": 52, "DPD6": 53,
+            "CRHDST": 57})
+        self.assertEqual(convert.INSTR_FIELD, {
+            "VEHNO": 1, "CURNO": 2, "SENTYP": 3, "SENATT": 5, "AXIS": 6, "XUNITS": 7,
+            "YUNITS": 8, "PREFIL": 9, "NFP": 15, "NLP": 16, "DELT": 17, "DASTAT": 18,
+            "INSCOM": 20})
+
+    def test_vehicle_speed_must_match_closing_speed(self):
+        # VEHSPD (field 42) and CLSSPD (TEST field 15) are the same speed in a
+        # vehicle-into-barrier test; a mismatch means the record is not laid
+        # out as the field table says, so nothing read from it is trusted.
+        veh = list(VEHICLE_FIELDS)
+        veh[41] = "48.0"
+        with self.assertRaises(convert.ConvertError):
+            self.run_sample(ev5=ev5_text(vehicle=veh))
+
+    def test_crush_profile_above_max_crush_refused(self):
+        # A DPD deeper than CRHDST (field 57, maximum crush) cannot be a crush
+        # profile point: the fields read are not the ones the table names.
+        veh = list(VEHICLE_FIELDS)
+        veh[49] = "301"  # DPD3; CRHDST is 300
+        with self.assertRaises(convert.ConvertError):
+            self.run_sample(ev5=ev5_text(vehicle=veh))
+
+    def test_delta_v_window(self):
+        rows, _ = self.run_sample()
+        # full record adds the three pre-zero intervals: 0.0001 * G * (0 - 0.05 + 0)
+        self.assertAlmostEqual(convert.delta_v(rows, t_from=None),
+                               0.0001 * G * (-3.75 - 0.05), places=12)
+        self.assertEqual(convert.delta_v(rows, t_from=0.0), convert.delta_v(rows))
+
     def test_title_without_ncap_prefix_refused(self):
         with self.assertRaises(convert.ConvertError):
             self.run_sample(ev5=ev5_text(title="SOME OTHER STUDY"))
@@ -220,29 +259,37 @@ class ConvertSample(unittest.TestCase):
         self.assertAlmostEqual(convert.delta_v(rows), 0.0001 * G * -3.75, places=12)
 
 
+def load_pulse(name):
+    with open(os.path.join(HERE, name + ".pulse.csv"), encoding="ascii") as f:
+        lines = f.read().splitlines()
+    if lines[0] != "t_s,accel_mps2":
+        raise AssertionError("%s.pulse.csv header is %r" % (name, lines[0]))
+    return [tuple(float(x) for x in ln.split(",")) for ln in lines[1:]]
+
+
+def delta_v_vs_speed(rows, meta, t_from=0.0):
+    """(delta-V in km/h, its deviation from the impact speed in %).
+
+    The one definition behind both the 10% criterion of done check 2 and the
+    README's recorded figures: trapezoid integral by convert.delta_v, by
+    default over t >= 0 (t_from=None: the full record, t < 0 included)."""
+    kmh = -convert.delta_v(rows, t_from=t_from) * 3.6
+    return kmh, (kmh / float(meta["speed_kmh"]) - 1.0) * 100.0
+
+
 class CommittedPulses(unittest.TestCase):
     """Done check 2 on the committed files: units, sign and time zero."""
 
     def test_reference_pulses(self):
         for name in ("test-a", "test-b"):
             with self.subTest(name=name):
-                with open(os.path.join(HERE, name + ".pulse.csv"), encoding="ascii") as f:
-                    lines = f.read().splitlines()
-                self.assertEqual(lines[0], "t_s,accel_mps2")
-                rows = [tuple(float(x) for x in ln.split(",")) for ln in lines[1:]]
+                rows = load_pulse(name)
                 self.assertLessEqual(rows[0][0], 0.0)
                 self.assertGreaterEqual(rows[-1][0], 0.2)
                 meta = convert.read_meta(os.path.join(HERE, name + ".meta"))
-                speed = float(meta["speed_kmh"]) / 3.6
-                dv = convert.delta_v(rows)
-                self.assertLess(dv, 0.0)
-                self.assertLessEqual(abs(-dv - speed) / speed, 0.10)
-
-
-def load_pulse(name):
-    with open(os.path.join(HERE, name + ".pulse.csv"), encoding="ascii") as f:
-        lines = f.read().splitlines()
-    return [tuple(float(x) for x in ln.split(",")) for ln in lines[1:]]
+                kmh, pct = delta_v_vs_speed(rows, meta)
+                self.assertGreater(kmh, 0.0)
+                self.assertLessEqual(abs(pct), 10.0)
 
 
 def readme_row(text, label):
@@ -280,17 +327,14 @@ class ReadmeFigures(unittest.TestCase):
         cells = readme_row(self.readme, "Delta-V, trapezoid over t >= 0")
         for i, n in enumerate(self.names):
             with self.subTest(name=n):
-                kmh = -convert.delta_v(self.rows[n]) * 3.6
-                pct = (kmh / float(self.meta[n]["speed_kmh"]) - 1.0) * 100.0
+                kmh, pct = delta_v_vs_speed(self.rows[n], self.meta[n])
                 self.assertEqual(cells[i], "%.2f km/h, %+.1f%% of impact speed" % (kmh, pct))
 
     def test_candidate_table_full_record(self):
         # "Why these two": delta-V of the full record (t < 0 included).
         for n in self.names:
             with self.subTest(name=n):
-                r = self.rows[n]
-                full = sum(0.5 * (a0 + a1) * (t1 - t0) for (t0, a0), (t1, a1) in zip(r, r[1:]))
-                pct = (-full * 3.6 / float(self.meta[n]["speed_kmh"]) - 1.0) * 100.0
+                _, pct = delta_v_vs_speed(self.rows[n], self.meta[n], t_from=None)
                 cells = readme_row(self.readme, self.meta[n]["test"])
                 self.assertEqual(cells[1], self.meta[n]["mass_kg"])
                 self.assertEqual(cells[2], "%+.1f%%" % pct)
