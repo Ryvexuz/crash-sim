@@ -1,0 +1,297 @@
+bsn 2
+material chassis stiffness 300000 damping 200 yield_strain 0.02
+node 0 -2 0.55 -0.9 mass 40
+node 1 -2 1.95 -0.9 mass 14
+node 2 -2 0.55 -0.75 mass 40
+node 3 -2 1.95 -0.75 mass 14
+node 4 -2 0.55 0.75 mass 40
+node 5 -2 1.95 0.75 mass 14
+node 6 -2 0.55 0.9 mass 40
+node 7 -2 1.95 0.9 mass 14
+node 8 -1.25 0.55 -0.9 mass 40
+node 9 -1.25 1.95 -0.9 mass 14
+node 10 -1.25 0.55 -0.75 mass 40
+node 11 -1.25 1.95 -0.75 mass 14
+node 12 -1.25 0.55 0.75 mass 40
+node 13 -1.25 1.95 0.75 mass 14
+node 14 -1.25 0.55 0.9 mass 40
+node 15 -1.25 1.95 0.9 mass 14
+node 16 0 0.55 -0.9 mass 40
+node 17 0 1.95 -0.9 mass 14
+node 18 0 0.55 -0.75 mass 40
+node 19 0 1.95 -0.75 mass 14
+node 20 0 0.55 0.75 mass 40
+node 21 0 1.95 0.75 mass 14
+node 22 0 0.55 0.9 mass 40
+node 23 0 1.95 0.9 mass 14
+node 24 1.25 0.55 -0.9 mass 40
+node 25 1.25 1.95 -0.9 mass 14
+node 26 1.25 0.55 -0.75 mass 40
+node 27 1.25 1.95 -0.75 mass 14
+node 28 1.25 0.55 0.75 mass 40
+node 29 1.25 1.95 0.75 mass 14
+node 30 1.25 0.55 0.9 mass 40
+node 31 1.25 1.95 0.9 mass 14
+node 32 2 0.55 -0.9 mass 40
+node 33 2 1.95 -0.9 mass 14
+node 34 2 0.55 -0.75 mass 40
+node 35 2 1.95 -0.75 mass 14
+node 36 2 0.55 0.75 mass 40
+node 37 2 1.95 0.75 mass 14
+node 38 2 0.55 0.9 mass 40
+node 39 2 1.95 0.9 mass 14
+beam 0 1 chassis
+beam 0 2 chassis
+beam 0 3 chassis
+beam 0 8 chassis
+beam 0 9 chassis
+beam 0 10 chassis
+beam 0 11 chassis
+beam 1 2 chassis
+beam 1 3 chassis
+beam 1 8 chassis
+beam 1 9 chassis
+beam 1 10 chassis
+beam 1 11 chassis
+beam 2 3 chassis
+beam 2 4 chassis
+beam 2 5 chassis
+beam 2 8 chassis
+beam 2 9 chassis
+beam 2 10 chassis
+beam 2 11 chassis
+beam 2 12 chassis
+beam 2 13 chassis
+beam 3 4 chassis
+beam 3 5 chassis
+beam 3 8 chassis
+beam 3 9 chassis
+beam 3 10 chassis
+beam 3 11 chassis
+beam 3 12 chassis
+beam 3 13 chassis
+beam 4 5 chassis
+beam 4 6 chassis
+beam 4 7 chassis
+beam 4 10 chassis
+beam 4 11 chassis
+beam 4 12 chassis
+beam 4 13 chassis
+beam 4 14 chassis
+beam 4 15 chassis
+beam 5 6 chassis
+beam 5 7 chassis
+beam 5 10 chassis
+beam 5 11 chassis
+beam 5 12 chassis
+beam 5 13 chassis
+beam 5 14 chassis
+beam 5 15 chassis
+beam 6 7 chassis
+beam 6 12 chassis
+beam 6 13 chassis
+beam 6 14 chassis
+beam 6 15 chassis
+beam 7 12 chassis
+beam 7 13 chassis
+beam 7 14 chassis
+beam 7 15 chassis
+beam 8 9 chassis
+beam 8 10 chassis
+beam 8 11 chassis
+beam 8 16 chassis
+beam 8 17 chassis
+beam 8 18 chassis
+beam 8 19 chassis
+beam 9 10 chassis
+beam 9 11 chassis
+beam 9 16 chassis
+beam 9 17 chassis
+beam 9 18 chassis
+beam 9 19 chassis
+beam 10 11 chassis
+beam 10 12 chassis
+beam 10 13 chassis
+beam 10 16 chassis
+beam 10 17 chassis
+beam 10 18 chassis
+beam 10 19 chassis
+beam 10 20 chassis
+beam 10 21 chassis
+beam 11 12 chassis
+beam 11 13 chassis
+beam 11 16 chassis
+beam 11 17 chassis
+beam 11 18 chassis
+beam 11 19 chassis
+beam 11 20 chassis
+beam 11 21 chassis
+beam 12 13 chassis
+beam 12 14 chassis
+beam 12 15 chassis
+beam 12 18 chassis
+beam 12 19 chassis
+beam 12 20 chassis
+beam 12 21 chassis
+beam 12 22 chassis
+beam 12 23 chassis
+beam 13 14 chassis
+beam 13 15 chassis
+beam 13 18 chassis
+beam 13 19 chassis
+beam 13 20 chassis
+beam 13 21 chassis
+beam 13 22 chassis
+beam 13 23 chassis
+beam 14 15 chassis
+beam 14 20 chassis
+beam 14 21 chassis
+beam 14 22 chassis
+beam 14 23 chassis
+beam 15 20 chassis
+beam 15 21 chassis
+beam 15 22 chassis
+beam 15 23 chassis
+beam 16 17 chassis
+beam 16 18 chassis
+beam 16 19 chassis
+beam 16 24 chassis
+beam 16 25 chassis
+beam 16 26 chassis
+beam 16 27 chassis
+beam 17 18 chassis
+beam 17 19 chassis
+beam 17 24 chassis
+beam 17 25 chassis
+beam 17 26 chassis
+beam 17 27 chassis
+beam 18 19 chassis
+beam 18 20 chassis
+beam 18 21 chassis
+beam 18 24 chassis
+beam 18 25 chassis
+beam 18 26 chassis
+beam 18 27 chassis
+beam 18 28 chassis
+beam 18 29 chassis
+beam 19 20 chassis
+beam 19 21 chassis
+beam 19 24 chassis
+beam 19 25 chassis
+beam 19 26 chassis
+beam 19 27 chassis
+beam 19 28 chassis
+beam 19 29 chassis
+beam 20 21 chassis
+beam 20 22 chassis
+beam 20 23 chassis
+beam 20 26 chassis
+beam 20 27 chassis
+beam 20 28 chassis
+beam 20 29 chassis
+beam 20 30 chassis
+beam 20 31 chassis
+beam 21 22 chassis
+beam 21 23 chassis
+beam 21 26 chassis
+beam 21 27 chassis
+beam 21 28 chassis
+beam 21 29 chassis
+beam 21 30 chassis
+beam 21 31 chassis
+beam 22 23 chassis
+beam 22 28 chassis
+beam 22 29 chassis
+beam 22 30 chassis
+beam 22 31 chassis
+beam 23 28 chassis
+beam 23 29 chassis
+beam 23 30 chassis
+beam 23 31 chassis
+beam 24 25 chassis
+beam 24 26 chassis
+beam 24 27 chassis
+beam 24 32 chassis
+beam 24 33 chassis
+beam 24 34 chassis
+beam 24 35 chassis
+beam 25 26 chassis
+beam 25 27 chassis
+beam 25 32 chassis
+beam 25 33 chassis
+beam 25 34 chassis
+beam 25 35 chassis
+beam 26 27 chassis
+beam 26 28 chassis
+beam 26 29 chassis
+beam 26 32 chassis
+beam 26 33 chassis
+beam 26 34 chassis
+beam 26 35 chassis
+beam 26 36 chassis
+beam 26 37 chassis
+beam 27 28 chassis
+beam 27 29 chassis
+beam 27 32 chassis
+beam 27 33 chassis
+beam 27 34 chassis
+beam 27 35 chassis
+beam 27 36 chassis
+beam 27 37 chassis
+beam 28 29 chassis
+beam 28 30 chassis
+beam 28 31 chassis
+beam 28 34 chassis
+beam 28 35 chassis
+beam 28 36 chassis
+beam 28 37 chassis
+beam 28 38 chassis
+beam 28 39 chassis
+beam 29 30 chassis
+beam 29 31 chassis
+beam 29 34 chassis
+beam 29 35 chassis
+beam 29 36 chassis
+beam 29 37 chassis
+beam 29 38 chassis
+beam 29 39 chassis
+beam 30 31 chassis
+beam 30 36 chassis
+beam 30 37 chassis
+beam 30 38 chassis
+beam 30 39 chassis
+beam 31 36 chassis
+beam 31 37 chassis
+beam 31 38 chassis
+beam 31 39 chassis
+beam 32 33 chassis
+beam 32 34 chassis
+beam 32 35 chassis
+beam 33 34 chassis
+beam 33 35 chassis
+beam 34 35 chassis
+beam 34 36 chassis
+beam 34 37 chassis
+beam 35 36 chassis
+beam 35 37 chassis
+beam 36 37 chassis
+beam 36 38 chassis
+beam 36 39 chassis
+beam 37 38 chassis
+beam 37 39 chassis
+beam 38 39 chassis
+group front 32 33 34 35 36 37 38 39
+group rear 0 1 2 3 4 5 6 7
+wheel fl mount 27 radius 0.3175 width 0.195 mass 30 inertia 1.512 steerable yes driven no braked yes
+wheel fr mount 29 radius 0.3175 width 0.195 mass 30 inertia 1.512 steerable yes driven no braked yes
+wheel rl mount 11 radius 0.3175 width 0.195 mass 30 inertia 1.512 steerable no driven yes braked yes
+wheel rr mount 13 radius 0.3175 width 0.195 mass 30 inertia 1.512 steerable no driven yes braked yes
+suspension fl spring 16655 damper 1272 rest 1.4325 travel 1.1825 1.5325
+suspension fr spring 16655 damper 1272 rest 1.4325 travel 1.1825 1.5325
+suspension rl spring 16655 damper 1272 rest 1.4325 travel 1.1825 1.5325
+suspension rr spring 16655 damper 1272 rest 1.4325 travel 1.1825 1.5325
+tyre fl mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
+tyre fr mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
+tyre rl mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
+tyre rr mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
+controls max_steer_deg 30 max_drive_torque 2000 max_brake_torque 5000
