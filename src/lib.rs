@@ -3,6 +3,7 @@
 //! Simple on purpose: spring-damper beams, symplectic Euler, y = 0 ground with
 //! restitution and friction. Std only, deterministic (no RNG, fixed step order).
 
+pub mod collide;
 pub mod format;
 pub mod settle;
 pub mod solver;
@@ -11,6 +12,7 @@ pub mod vec3;
 
 pub use format::{Body, ParseError};
 
+use collide::Plane;
 use solver::{Solver, State, SymplecticEuler};
 use vec3::Vec3;
 
@@ -235,6 +237,9 @@ pub struct Sim {
     /// ground (0.0 if the cube starts there); None until then. Set inside the substep
     /// loop, so it cannot miss a contact that starts and ends between two output samples.
     pub first_contact_s: Option<f64>,
+    /// Collider planes: the ground first, then the body's own, in file order. `integrate`
+    /// applies them with `collide::apply` after every solver step.
+    pub planes: Vec<Plane>,
     /// Per beam: the strain beyond which it yields (its rest length moves, see
     /// `apply_yield`), or None for an elastic beam. One entry per beam, same order.
     pub yield_strain: Vec<Option<f64>>,
@@ -299,11 +304,12 @@ impl Sim {
     /// A cube sim advanced by the given solver.
     pub fn with_solver(cfg: Config, solver: Box<dyn Solver>) -> Sim {
         let (pos, beams, mass) = build_cube(&cfg);
-        let first_contact_s = if pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
+        let planes = vec![Plane::ground()];
+        let first_contact_s = if collide::any_at_or_behind(&pos, &planes) { Some(0.0) } else { None };
         let n = pos.len();
         let yield_strain = vec![None; beams.len()];
         let n_beams = beams.len();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), solver, step: 0 }
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), solver, step: 0 }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -313,12 +319,14 @@ impl Sim {
 
     /// A sim of a body loaded from a `.bsn` file, advanced by the given solver. Refused (Err)
     /// when the config is invalid, the step is not below the body's stability bound, or the
-    /// body has collider planes (the sim has only the y = 0 ground until nb-36 wires planes).
+    /// body has a collider plane that is not valid (zero or non-finite normal). The sim's planes
+    /// are the y = 0 ground, then the body's planes in file order.
     /// Positions, start velocities, masses and per-beam stiffness and damping come from the
     /// body; a material's `yield_strain` makes its beams plastic (`apply_yield`).
     pub fn from_body_with_solver(cfg: Config, body: &Body, solver: Box<dyn Solver>) -> Result<Sim, String> {
-        if !body.planes.is_empty() {
-            return Err(format!("the body has {} collider plane(s): the sim only has the y = 0 ground for now", body.planes.len()));
+        let mut planes = vec![Plane::ground()];
+        for p in &body.planes {
+            planes.push(Plane::from_format(p)?);
         }
         let built = body.build();
         cfg.validate_body(&built.beams, &built.mass)?;
@@ -340,7 +348,7 @@ impl Sim {
             }
         }
         let n_beams = built.beams.len();
-        let first_contact_s = if built.pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
+        let first_contact_s = if collide::any_at_or_behind(&built.pos, &planes) { Some(0.0) } else { None };
         Ok(Sim {
             cfg,
             pos: built.pos,
@@ -348,6 +356,7 @@ impl Sim {
             beams: built.beams,
             mass: built.mass,
             first_contact_s,
+            planes,
             yield_strain,
             yield_refused: Vec::new(),
             break_strain,
@@ -371,6 +380,7 @@ impl Sim {
             &live
         };
         self.solver.step(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: self.cfg.gravity }, h);
+        collide::apply(&mut self.pos, &mut self.vel, &self.planes, h);
     }
 
     /// The beams that have not broken, in index order.
@@ -480,7 +490,7 @@ impl Sim {
         let h = self.cfg.dt / self.cfg.substeps as f64;
         for k in 0..self.cfg.substeps {
             self.substep(k + 1, h);
-            if self.first_contact_s.is_none() && self.pos.iter().any(|p| p.y <= 0.0) {
+            if self.first_contact_s.is_none() && collide::any_at_or_behind(&self.pos, &self.planes) {
                 self.first_contact_s = Some(self.step as f64 * self.cfg.dt + (k + 1) as f64 * h);
             }
         }

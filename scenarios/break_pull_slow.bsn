@@ -1,0 +1,9 @@
+bsn 1
+material pull_beam stiffness 20000 damping 20 break_strain 0.01
+node 0 0 2 0 mass 1
+node 1 1 2 0 mass 1
+beam 0 1 pull_beam
+group left 0
+group right 1
+velocity left -0.75 0 0
+velocity right 0.75 0 0

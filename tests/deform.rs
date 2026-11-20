@@ -176,11 +176,17 @@ group left 0\ngroup right 1\nvelocity left -3 0 0\nvelocity right 3 0 0\n";
 }
 
 #[test]
-fn a_body_with_a_collider_plane_is_refused() {
-    let text = "bsn 1\nmaterial m stiffness 20000 damping 20\nnode 0 0 1 0 mass 1\nplane 0 0 0 0 1 0\n";
+fn a_body_with_a_collider_plane_gets_it_after_the_ground() {
+    // nb-36: planes are wired. The sim's planes are the ground, then the body's, in file order.
+    let text = "bsn 1
+material m stiffness 20000 damping 20
+node 0 0 1 0 mass 1
+plane 5 0 0 -1 0 0
+";
     let body = parse(text).unwrap();
-    let e = Sim::from_body(Config::default(), &body).err().unwrap();
-    assert!(e.contains("collider plane"), "{e}");
+    let sim = Sim::from_body(Config::default(), &body).unwrap();
+    assert_eq!(sim.planes.len(), 2);
+    assert_eq!(sim.planes[1].normal, crash_sim::vec3::Vec3::new(-1.0, 0.0, 0.0));
 }
 
 #[test]
@@ -243,7 +249,6 @@ fn body_flag_errors_exit_2_with_empty_stdout() {
         vec!["--body"],
         vec!["--body", cube.as_str(), "--no-tilt"],
         vec!["--body", cube.as_str(), "--drop-height", "1"],
-        vec!["--body", cube.as_str(), "--settle-report", "--settle-by", "1", "--settle-hold", "1", "--settle-speed", "1", "--energy-rise", "1", "--energy-gain", "1"],
     ];
     for args in cases {
         let o = run(&args);

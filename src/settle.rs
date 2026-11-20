@@ -7,8 +7,9 @@
 //! There are no default thresholds here: every limit is a field of `SettleParams` that the
 //! caller must give.
 
+use crate::collide;
 use crate::vec3::Vec3;
-use crate::{max_strain, Beam, Config, Sim};
+use crate::{max_strain_unbroken, Beam, Body, Config, Sim};
 
 /// Total energy in joules: kinetic plus gravitational (potential measured from y = 0) plus
 /// elastic beam energy.
@@ -16,8 +17,9 @@ use crate::{max_strain, Beam, Config, Sim};
 ///   E = sum over nodes of (1/2) m_i |v_i|^2 + m_i g y_i
 ///       + sum over beams of (1/2) k_b (len_b - rest_b)^2
 ///
-/// Beams use their own `stiffness` and current `rest` length. (Broken beams, nb-34, and wheels,
-/// nb-39, add their terms here when those exist.)
+/// Beams use their own `stiffness` and current `rest` length. The caller passes only the beams
+/// that have not broken (`Sim::live_beams`): a broken beam stores no energy. (Wheels, nb-39,
+/// add their terms here when they exist.)
 pub fn total_energy(pos: &[Vec3], vel: &[Vec3], beams: &[Beam], mass: &[f64], gravity: f64) -> f64 {
     let mut e = 0.0;
     for i in 0..pos.len() {
@@ -31,11 +33,11 @@ pub fn total_energy(pos: &[Vec3], vel: &[Vec3], beams: &[Beam], mass: &[f64], gr
     e
 }
 
-/// An impact happened in the substep that just ended: a node sits exactly on the ground plane
-/// and moves up. The contact rule only leaves a node at y = 0 moving up when it reversed a
-/// contact faster than `REST_SPEED` (a slower contact is set to vy = 0).
+/// An impact happened in the substep that just ended: a node sits on a collider plane (the
+/// ground or a wall, `collide::impact_this_substep`) and moves away from it. The contact rule
+/// only leaves a node on a plane moving away when it reversed a contact faster than `REST_SPEED`.
 fn impact_this_substep(sim: &Sim) -> bool {
-    sim.pos.iter().zip(sim.vel.iter()).any(|(p, v)| p.y == 0.0 && v.y > 0.0)
+    collide::impact_this_substep(&sim.pos, &sim.vel, &sim.planes)
 }
 
 /// The five thresholds of `--settle-report`. No defaults.
@@ -138,12 +140,28 @@ pub fn measure(cfg: &Config, p: &SettleParams) -> SettleReport {
     measure_with(cfg, p, |_, _| {})
 }
 
+/// Like `measure`, for a body loaded from a `.bsn` file (`None`: the built-in cube).
+pub fn measure_body(cfg: &Config, body: Option<&Body>, p: &SettleParams) -> SettleReport {
+    measure_body_with(cfg, body, p, |_, _| {})
+}
+
 /// Like `measure`, with a hook called after every substep (and before it is measured) with the
 /// sim and the 1-based substep number. For tests that plant a fault (an energy injection, a
 /// NaN) to prove the report can say FAIL; the production path passes a no-op.
-pub fn measure_with(cfg: &Config, p: &SettleParams, mut hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
-    if let Err(e) = cfg.validate().and_then(|_| p.validate()) {
+pub fn measure_with(cfg: &Config, p: &SettleParams, hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+    measure_body_with(cfg, None, p, hook)
+}
+
+/// `measure_with` for a cube (`body` None) or a body loaded from a `.bsn` file. A refused body
+/// or config comes back as an aborted report (the sim's own validation runs for a body).
+pub fn measure_body_with(cfg: &Config, body: Option<&Body>, p: &SettleParams, mut hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+    if let Err(e) = p.validate() {
         return aborted(e);
+    }
+    if body.is_none() {
+        if let Err(e) = cfg.validate() {
+            return aborted(e);
+        }
     }
     let h = cfg.dt / cfg.substeps as f64;
     let outer = (cfg.duration / cfg.dt).round() as u64;
@@ -153,9 +171,15 @@ pub fn measure_with(cfg: &Config, p: &SettleParams, mut hook: impl FnMut(&mut Si
     let mut one = cfg.clone();
     one.dt = h;
     one.substeps = 1;
-    let mut sim = Sim::new(one);
+    let mut sim = match body {
+        None => Sim::new(one),
+        Some(b) => match Sim::from_body(one, b) {
+            Ok(s) => s,
+            Err(e) => return aborted(e),
+        },
+    };
     let g = cfg.gravity;
-    let energy = |s: &Sim| total_energy(&s.pos, &s.vel, &s.beams, &s.mass, g);
+    let energy = |s: &Sim| total_energy(&s.pos, &s.vel, &s.live_beams(), &s.mass, g);
 
     let e0 = energy(&sim);
     if !(e0.is_finite() && e0 > 0.0) {
@@ -174,7 +198,7 @@ pub fn measure_with(cfg: &Config, p: &SettleParams, mut hook: impl FnMut(&mut Si
     let mut min_e_after = if p.by - tol <= 0.0 { e0 } else { f64::INFINITY };
     let mut rise_after = 0.0_f64;
     let mut gain = 0.0_f64;
-    let mut peak = max_strain(&sim.beams, &sim.pos);
+    let mut peak = max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken);
     let mut first_speed_fail: Option<(f64, f64)> = None; // (speed, t) of the first substep at or after T
     for i in 1..=total {
         sim.advance();
@@ -194,7 +218,7 @@ pub fn measure_with(cfg: &Config, p: &SettleParams, mut hook: impl FnMut(&mut Si
         if !e.is_finite() {
             return aborted(format!("unstable at t = {t:.4} s: total energy is not finite"));
         }
-        peak = peak.max(max_strain(&sim.beams, &sim.pos));
+        peak = peak.max(max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken));
         gain = gain.max((e - e0) / e0);
         if t >= p.by - tol {
             max_speed_after = max_speed_after.max(speed);

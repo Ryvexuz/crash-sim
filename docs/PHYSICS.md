@@ -73,6 +73,37 @@ The ground is the plane y = 0. After a node's position is updated, if `y < 0`:
 
 Contact only triggers when a node ends a substep below the ground. Beams are never in contact with the ground, only nodes.
 
+## Plane contact (the ground and walls)
+
+The ground is one of a list of collider planes (`src/collide.rs`). A plane is a point and a unit normal; the side the normal points to is free space. A node with signed distance `d = (pos - point) . n < 0` after the position update is behind the plane, and the rule above is applied along the normal:
+
+1. `pos += n * (-d)` (put back on the plane);
+2. the normal velocity `vn = vel . n`: if `vn < 0` and `-vn > REST_SPEED`, it becomes `-vn * RESTITUTION`; if `vn < 0` and slower, 0; if `vn >= 0` it is kept;
+3. the velocity along the plane is multiplied by `max(0, 1 - FRICTION_RATE * h)`.
+
+For the ground (point 0, normal (0, 1, 0)) this is the rule above operation for operation, and a test (`ground_plane_collider_keeps_cube_output`) compares it bit for bit with a copy of the old in-solver code over the whole default run. The rule is applied by `Sim` after every solver step, for every node and every plane in order (the ground first, then the body's `plane` lines in file order); it is not part of a solver, so every solver gets the same contact. It uses only that node's own state, so applying it after the solver's whole loop gives the same numbers as applying it inside the loop. A wall drags a node sliding along it with the same loss rate as the ground. Planes are infinite, and only nodes touch them.
+
+Limits of the rule (known, not fixed): the planes are infinite, so no node can tunnel through one, but a node that ends a substep deep behind a plane is moved straight along the normal onto it, whatever path it took (no sweep test; 10 m/s at 1 ms is 1 cm per substep). Two planes that meet at a corner are applied one after the other in list order, so a node in a corner can be corrected by both in the same substep, the later plane last.
+
+Impacts (settle report): `collide::impact_this_substep` is the plane version of "a node sits on the surface and moves away"; `settle.rs` still uses its own ground-only test, so `last_impact_s` in the settle report counts ground impacts only.
+
+## The box_wall material
+
+`scenarios/box_wall.bsn` (milestone 2, `docs/STAGE6.md`) uses the nb-33 box (12 nodes of 1 kg, 50 beams) with one material, `box_beam`:
+
+| Number | Value | Source or reason |
+|---|---|---|
+| `stiffness` | 20000 N/m | The cube's `BEAM_STIFFNESS`, so the step-limit reasoning (the cube: 1 ms against 4.1 ms) carries over. The box's most loaded node has 11 beams, so Gershgorin gives omega_max <= sqrt(2 * 11 * 20000 / 1) = 663 rad/s and a limit of 3.0 ms, again against 1 ms. Not a real material's stiffness: a lumped beam stands for a whole panel. |
+| `damping` | 20 N s/m | The cube's `BEAM_DAMPING`, same reason; it takes out impact ringing within the 10 s run. |
+| `yield_strain` | 0.02 | A choice made before any run, not measured and not tuned. Real structural steel yields at about 0.2% (250 MPa / 210 GPa), but a lumped beam here stands for a whole panel whose crush force is set by buckling, so the material value does not apply. 0.02 gives a crush force per 1 m beam of `k * strain * length` = 20000 * 0.02 * 1 = 400 N. The box has 600 J of kinetic energy at 10 m/s; the four front nodes lose about 150 J at the wall's restitution (their 50 J becomes 12.5 J each), so about 450 J is left for the plastic work. With roughly 12 beams' worth of force along x at 400 N (about 5 kN), that is a crush of about 450 / 5000 = 0.09 m, an estimate good to a factor of about 2, inside the 0.02 to 1.0 m the check allows by a factor of 4 on one side and 10 on the other. |
+| `break_strain` | none | The box crumples without breaking in this check (breaking is gated by check 2.9 on its own scenario). |
+
+The speed 10 m/s is 50 J/kg, half of the 96 J/kg of a car at 50 km/h (`docs/STAGE6.md`). If a measured value breaks a limit of `docs/STAGE6.md`, the limit is not loosened: report it.
+
+### Sensitivity runs (to fill in by the run, not before)
+
+Check 2.5 (`box_wall_soft`, `box_wall_stiff`, `box_wall_slow`) runs with the same flags as 2.3. The `crumple_delta_m` of each goes here, with the nominal value, and the sentence that says how it moved. Not yet run: the staged patch could not build or run anything.
+
 ## Integrator: symplectic Euler with substeps
 
 One output step of `dt` (default 0.01 s) is split into `substeps` (default 10) physics substeps of `h = dt / substeps` (default 1 ms). In each substep:
@@ -80,7 +111,7 @@ One output step of `dt` (default 0.01 s) is split into `substeps` (default 10) p
 1. Compute all forces (gravity and beams) from the current state.
 2. `vel += force * (h / NODE_MASS)`.
 3. `pos += vel * h`, using the new velocity (this ordering is what "symplectic" or semi-implicit means; it keeps oscillation energy from growing the way plain Euler does).
-4. Apply ground contact as above.
+4. Apply plane contact (the ground and any walls) as above; `Sim` does this after the solver's step.
 
 ### Why the step limit is what it is
 

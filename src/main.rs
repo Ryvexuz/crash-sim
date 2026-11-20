@@ -2,7 +2,7 @@ use crash_sim::{events_text, run_body_report, run_checked_with_contact, to_csv, 
 use std::io::Write;
 use std::process::exit;
 
-use crash_sim::settle;
+use crash_sim::{collide, settle};
 
 /// Write `text` and flush. The only path any stdout output takes, so a closed pipe or a full
 /// disk is an error value, never a panic and never silently dropped.
@@ -30,6 +30,7 @@ fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
+    eprintln!("       crash-sim --body <file.bsn> ... --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
     exit(2)
 }
 
@@ -49,6 +50,9 @@ fn main() {
     let mut events = false;
     let mut settle_report = false;
     let mut body_path: Option<String> = None;
+    let mut crumple_report = false;
+    let mut crumple_groups: Option<(String, String)> = None;
+    let (mut cmin, mut cmax, mut cdrift): (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
     let mut cube_only = false;
     let (mut by, mut hold, mut speed, mut rise, mut gain): (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>) =
         (None, None, None, None, None);
@@ -82,6 +86,20 @@ fn main() {
             "--settle-speed" => speed = Some(num(&mut args, "--settle-speed")),
             "--energy-rise" => rise = Some(num(&mut args, "--energy-rise")),
             "--energy-gain" => gain = Some(num(&mut args, "--energy-gain")),
+            "--crumple-report" => crumple_report = true,
+            "--crumple-groups" => {
+                let v = args.next().unwrap_or_default();
+                match v.split_once(',') {
+                    Some((a, b)) if !a.is_empty() && !b.is_empty() && !b.contains(',') => crumple_groups = Some((a.to_string(), b.to_string())),
+                    _ => {
+                        eprintln!("--crumple-groups needs <from>,<to>");
+                        usage()
+                    }
+                }
+            }
+            "--crumple-min" => cmin = Some(num(&mut args, "--crumple-min")),
+            "--crumple-max" => cmax = Some(num(&mut args, "--crumple-max")),
+            "--crumple-drift" => cdrift = Some(num(&mut args, "--crumple-drift")),
             _ => usage(),
         }
     }
@@ -89,10 +107,6 @@ fn main() {
         Some(path) => {
             if cube_only {
                 eprintln!("--drop-height and --no-tilt set up the built-in cube and cannot be used with --body (the file gives the positions)");
-                usage()
-            }
-            if settle_report {
-                eprintln!("--settle-report does not work with --body yet (it builds the cube itself)");
                 usage()
             }
             let text = match std::fs::read_to_string(path) {
@@ -112,6 +126,15 @@ fn main() {
         }
         None => None,
     };
+    let any_crumple = crumple_groups.is_some() || cmin.is_some() || cmax.is_some() || cdrift.is_some();
+    if (crumple_report || any_crumple) && !settle_report {
+        eprintln!("--crumple-report and its flags need --settle-report (and its five thresholds)");
+        usage()
+    }
+    if any_crumple && !crumple_report {
+        eprintln!("--crumple-groups, --crumple-min, --crumple-max and --crumple-drift need --crumple-report");
+        usage()
+    }
     let any_threshold = by.is_some() || hold.is_some() || speed.is_some() || rise.is_some() || gain.is_some();
     if settle_report {
         // No defaults: all five thresholds are required, and --summary is a different output.
@@ -128,7 +151,31 @@ fn main() {
             eprintln!("{e}");
             usage()
         }
-        let report = settle::measure(&cfg, &params);
+        if crumple_report {
+            // No defaults: the groups and the three thresholds are all required.
+            let (Some((from, to)), Some(min), Some(max), Some(drift)) = (crumple_groups, cmin, cmax, cdrift) else {
+                eprintln!("--crumple-report needs --crumple-groups, --crumple-min, --crumple-max and --crumple-drift");
+                usage()
+            };
+            let cp = collide::CrumpleParams { from, to, min, max, drift };
+            let (report, crumple) = match collide::measure_crumple(&cfg, body.as_ref(), &params, &cp) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{e}");
+                    usage()
+                }
+            };
+            let mut out = report.render();
+            if let Some(c) = &crumple {
+                out.push_str(&c.render());
+            }
+            emit(&out);
+            if !report.is_ok() || crumple.as_ref().map_or(false, |c| !c.is_ok()) {
+                exit(1);
+            }
+            return;
+        }
+        let report = settle::measure_body(&cfg, body.as_ref(), &params);
         emit(&report.render());
         if !report.is_ok() {
             exit(1);

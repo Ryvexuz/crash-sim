@@ -3,7 +3,7 @@
 //! in maths and order of operations (docs/PHYSICS.md, "Integrator").
 
 use crate::vec3::Vec3;
-use crate::{Beam, FRICTION_RATE, REST_SPEED, RESTITUTION};
+use crate::Beam;
 
 /// The state a solver advances: node positions and velocities (mutable), and the beams and
 /// per-node masses it reads, plus the gravitational acceleration. Beams carry their own
@@ -24,7 +24,8 @@ pub trait Solver {
     fn step(&mut self, state: State<'_>, h: f64);
 }
 
-/// Semi-implicit (symplectic) Euler with the y = 0 ground contact rule.
+/// Semi-implicit (symplectic) Euler. Contact with the ground and the walls is not here:
+/// `Sim` applies `collide::apply` after every solver step.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SymplecticEuler;
 
@@ -49,16 +50,6 @@ impl Solver for SymplecticEuler {
             // semi-implicit Euler: velocity first, then position with the new velocity
             vel[i] += force[i] * (h / mass[i]);
             pos[i] += vel[i] * h;
-            if pos[i].y < 0.0 {
-                pos[i].y = 0.0;
-                if vel[i].y < 0.0 {
-                    let vy = vel[i].y;
-                    vel[i].y = if -vy > REST_SPEED { -vy * RESTITUTION } else { 0.0 };
-                }
-                let keep = (1.0 - FRICTION_RATE * h).max(0.0);
-                vel[i].x *= keep;
-                vel[i].z *= keep;
-            }
         }
     }
 }

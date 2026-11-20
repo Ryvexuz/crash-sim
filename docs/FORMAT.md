@@ -23,8 +23,8 @@ plane <px> <py> <pz> <nx> <ny> <nz>
 - `node`: any finite position (m); `mass` (kg) > 0. At least one node is required (an empty body is refused). A body with nodes but no beams is allowed.
 - `beam`: both nodes must be declared above the beam, differ, and be at different positions (a zero-length beam is refused even when `rest` is given); the material must exist; a pair of nodes has at most one beam (either order). The rest length is the distance between the two nodes unless `rest <r>` gives it (`r` > 0).
 - `group`: at least one node, each declared, none twice.
-- `velocity`: sets the start velocity (m/s) of every node of an existing group; one line per group; two groups that both have a velocity must not share a node. Nodes in no such group start at rest.
-- `plane`: a collider plane through a point with a normal (not zero by components; it is stored as written, not normalised, so a consumer must scale by the largest component before taking a length); the side the normal points to is free space. Wiring planes and velocities into the sim is nb-34 and nb-36's job; the format only holds them.
+- `velocity`: sets the start velocity (m/s) of every node of an existing group (the sim starts the nodes with it); one line per group; two groups that both have a velocity must not share a node. Nodes in no such group start at rest.
+- `plane`: a collider plane through a point with a normal (not zero by components; it is stored as written, not normalised, so a consumer must scale by the largest component before taking a length); the side the normal points to is free space. The sim loads it with `--body`: the ground plane (y = 0) is always a collider, and each `plane` line adds one (normalised as `collide::Plane::new` does, scaling by the largest component first); contact is the rule in `docs/PHYSICS.md`, "Plane contact".
 
 ## Canonical form
 
@@ -42,6 +42,8 @@ The first line names the version. This parser reads version 1 only and refuses a
 
 - `scenarios/cube.bsn`: today's cube for `Config::default()` (tilted 5 degrees, lowest corner 2 m up): 8 nodes of 1 kg, all 28 pairs as beams of one material (`cube_beam`, 20000 N/m, 20 N s/m), positions printed to the last digit. `cube_bsn_matches_default_cube` compares it bit for bit with `Sim::new(Config::default())`. It is generated from the sim's own arrays, so a change to the cube constants means regenerating it (the test then fails until you do).
 - `scenarios/box.bsn`: the box for milestone 2: 2 x 1 x 1 m, 3 x 2 x 2 nodes at x in {0, 1, 2}, y and z in {0, 1} (long axis x, resting on y = 0), 1 kg each, node id = 4 ix + 2 iy + iz. Beams are all 28 pairs inside each of the two unit cells (edges, face and body diagonals; the 6 shared-face pairs once), 50 in all, of material `box_beam` (the cube's 20000 N/m and 20 N s/m, elastic). Groups `back` (nodes 0 to 3, x = 0) and `front` (nodes 8 to 11, x = 2).
+- `scenarios/box_wall.bsn`: the box of `box.bsn` for the m2 done check: material `box_beam` (20000 N/m, 20 N s/m, `yield_strain 0.02`; the numbers and why are in `docs/PHYSICS.md`, "The box_wall material"), an extra group `all` (the 12 nodes), `velocity all 10 0 0` and `plane 2.1 0.5 0.5 -1 0 0`: a wall 0.10 m beyond the front face (x = 2), free space at smaller x. Four variants, each differing in exactly one number or one line (`box_wall_variants_differ_in_one_number` checks it): `box_wall_elastic.bsn` (no `yield_strain`), `box_wall_soft.bsn` (stiffness 10000), `box_wall_stiff.bsn` (stiffness 40000), `box_wall_slow.bsn` (`velocity all 7.07 0 0`).
+- `scenarios/break_pull.bsn` and `break_pull_slow.bsn`: two 1 kg nodes 1 m apart at y = 2 m, one beam (material `pull_beam`, 20000 N/m, 20 N s/m, `break_strain 0.01`), groups `left` and `right` with opposite x velocities, 2.5 m/s (fast) or 0.75 m/s (slow). The test material for the breaking rule of `docs/STAGE6.md` check 2.9.
 
 ## Line endings in a Windows checkout
 
