@@ -165,18 +165,37 @@ a missing feature, not part of the ice feel; it goes to the orchestrator for `ID
      ratio under full throttle near the 0.0587 saturation value instead of 2.692. Check 3.5 (its
      launch and full-lock tests in `tests/drive.rs`), check 3.6 (the lap) and the skidpad must be
      re-run, because they use this car.
-   - Before/after test: a new scripted input (open loop, so the same file means the same
-     inputs): hold a steady circle at throttle 0 and steer 0.47 as pad_lap does, then step to
-     throttle 1. Before the fix, measure with `drive_feel` that |beta| passes 30 deg and both rear
-     tyres reach u = 1.00; after it, assert |beta| stays under a stated bound (for example 15 deg,
-     an estimate) and the mean driven slip ratio stays under a stated bound. Replaying Lazlo's own
-     file after a fix is a weaker check, because his inputs were a reaction to the old car.
+   - Before/after test for 1a (a viewer change): a raw input file replayed through `drive_feel`
+     never passes through the viewer, so it cannot show a viewer fix. Record the inputs through
+     the viewer instead: run the old viewer and the new viewer with the same key script,
+     `drive --sim-exe <crash-sim.exe> --body scenarios/pad_and_wall.bsn --script <seconds>
+     --no-window --save-input <file>` (the keys come from the viewer's built-in `scripted_keys`,
+     the same keys per tick in both runs), then replay each saved file through `drive_feel` and
+     compare the full-throttle bin, `spin_moments` and the full-lock line. Because a throttle cap
+     changes the value sent, the new recording's throttle-on rows land in `throttle_part`, not
+     `throttle_full`: compare the old `throttle_full` line with the new `throttle_part` line (all
+     rows with the throttle key held), and the rows at the same times (same tick, same keys). If
+     the built-in key script holds throttle in a corner too briefly to spin the old car (check
+     that in the old recording first), the fix task adds a key script that does, to `drive.rs`.
+   - Before/after test for 1b (a car or model change): here the inputs do not change, so a raw
+     scripted input replayed through `drive_feel` is enough: a new open-loop file that holds a
+     steady circle at throttle 0 and steer 0.47 as pad_lap does, then steps to throttle 1. Before
+     the fix, measure that |beta| passes 30 deg and both rear tyres reach u = 1.00; after it,
+     assert |beta| stays under a stated bound (for example 15 deg, an estimate) and the mean
+     driven slip ratio stays under a stated bound. Replaying Lazlo's own file after a fix is a
+     weaker check, because his inputs were a reaction to the old car.
 2. **Full lock at speed.** `projects/render/examples/drive.rs`: scale the steer the viewer sends
    down with speed (speed-sensitive steering), so that the front slip angle at full key stays a
    few degrees above the 5.03 deg saturation angle, and return to centre faster than
    `STEER_RATE`. Estimate: `full_lock_at_or_above_5mps mean_steered_abs_alpha_deg` from 18.7 to
-   under 10. Before/after test: the same `drive_feel` summary line on a scripted full-key turn at
-   10 m/s, before and after.
+   under 10. Before/after test: as for 1a, record through the viewer, not a raw file: old and new
+   viewer, the same key script, `--script <seconds> --no-window --save-input <file>`, then
+   `drive_feel` on each saved file, comparing `full_lock_at_or_above_5mps`, the full-throttle bin
+   and `spin_moments`. Speed-sensitive steering sends less than 1 at speed, so the new
+   recording's full-lock line may have no rows; compare instead the rows at the same times as the
+   old recording's full-lock rows (same tick, same keys held), where the front slip angle should
+   drop. The key script must include a full-key turn above 5 m/s; if the built-in
+   `scripted_keys` has none in the old recording, the fix task adds one to `drive.rs`.
 3. **No rolling resistance or drag.** `src/vehicle.rs` plus the `.bsn` format (`src/format.rs`
    and docs/FORMAT.md): a rolling resistance force per tyre (a coefficient times its load,
    against the rolling direction) and an aero drag on the body (a coefficient times speed
