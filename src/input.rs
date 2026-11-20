@@ -2,15 +2,16 @@
 //! checks 3.4 to 3.8), and the report of such a drive.
 //!
 //! The script is a text file of lines `t throttle brake steer`: from time `t` (seconds of
-//! simulation) the three values hold, until the next line. Throttle and brake are 0 to 1,
-//! steer is -1 to 1 (positive turns toward the car's right, +z of a car that faces +x); they are
+//! simulation) the three values hold, until the next line. Brake is 0 to 1, throttle is -1 to 1
+//! (negative is reverse, see `vehicle::REVERSE_MAX_FORWARD_SPEED`), steer is -1 to 1 (positive
+//! turns toward the car's right, +z of a car that faces +x); they are
 //! fractions of the car file's `controls` (maximum drive torque, brake torque and steer angle).
 //! The file rules, each broken one an error that names the line:
 //!
 //! - only `\n` line ends (a `\r` is an error, because a replay must read what the writer wrote);
 //! - blank lines (spaces only) are skipped, and every other line has exactly four finite numbers;
 //! - the first line is at t = 0 (nothing is defined before it) and times strictly increase;
-//! - throttle and brake in 0..=1, steer in -1..=1;
+//! - throttle in -1..=1, brake in 0..=1, steer in -1..=1;
 //! - a file with no line is an error.
 //!
 //! A line takes effect at the first substep that starts at or after its time, so the same file
@@ -92,9 +93,9 @@ impl LineParser {
             }
             _ => {}
         }
-        if !(0.0..=1.0).contains(&throttle) {
+        if !(-1.0..=1.0).contains(&throttle) {
             return Err(format!(
-                "input line {number}: throttle {throttle} must be from 0 to 1"
+                "input line {number}: throttle {throttle} must be from -1 to 1"
             ));
         }
         if !(0.0..=1.0).contains(&brake) {

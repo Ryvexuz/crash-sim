@@ -32,6 +32,15 @@ pub const TYRE_DAMPING_TIME: f64 = 0.01;
 /// unverified); at 20 x 16655 = 333 kN/m a corner load of one extra g past the stop
 /// (2943 N) goes 9 mm into it, and the car stays inside the 1 ms step limit.
 pub const STOP_STIFFNESS_FACTOR: f64 = 20.0;
+/// The highest forward speed (m/s) at which a negative throttle (reverse) still gives drive
+/// torque: reverse torque applies while the car's centre of mass moves forward slower than this,
+/// or backward at any speed. Above it a negative throttle gives no drive torque at all (the
+/// wheels coast, the brake is the control that slows the car): this model has one engine torque
+/// and no gearbox, so a reverse torque at speed would be a hard engine-brake plus a push the
+/// wrong way, not a controllable car, and there is no "reverse gear at 50 km/h". *Starting
+/// value, reasoned:* 1 m/s (3.6 km/h) is a walking pace, so a car that has just been stopped
+/// by the brake can be put into reverse without waiting for exact zero.
+pub const REVERSE_MAX_FORWARD_SPEED: f64 = 1.0;
 
 /// The numbers of one wheel, from its `wheel`, `suspension` and `tyre` lines.
 #[derive(Clone, Debug, PartialEq)]
@@ -143,7 +152,9 @@ impl PartialEq for StepScratch {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Car {
     pub wheels: Vec<Wheel>,
-    /// Throttle 0..=1: every driven wheel gets an equal share of `max_drive_torque x throttle`.
+    /// Throttle -1..=1: every driven wheel gets an equal share of `max_drive_torque x throttle`;
+    /// a negative value is reverse torque, applied only under the rule of
+    /// `REVERSE_MAX_FORWARD_SPEED`.
     pub throttle: f64,
     /// Brake 0..=1: every braked wheel gets an equal share of `max_brake_torque x brake`.
     pub brake: f64,
@@ -493,13 +504,13 @@ impl Car {
         (masses, el)
     }
 
-    /// Set the controls (throttle 0..=1, brake 0..=1, steer -1..=1). A value outside its range,
+    /// Set the controls (throttle -1..=1, brake 0..=1, steer -1..=1). A value outside its range,
     /// or not finite, is refused and nothing changes; so is throttle on a car with no driven
     /// wheel, brake on one with no braked wheel and steer on one with no steerable wheel (the
     /// input would silently do nothing).
     pub fn set_controls(&mut self, throttle: f64, brake: f64, steer: f64) -> Result<(), String> {
-        if !(throttle.is_finite() && (0.0..=1.0).contains(&throttle)) {
-            return Err(format!("throttle {throttle} must be a number from 0 to 1"));
+        if !(throttle.is_finite() && (-1.0..=1.0).contains(&throttle)) {
+            return Err(format!("throttle {throttle} must be a number from -1 to 1"));
         }
         if !(brake.is_finite() && (0.0..=1.0).contains(&brake)) {
             return Err(format!("brake {brake} must be a number from 0 to 1"));
@@ -507,7 +518,7 @@ impl Car {
         if !(steer.is_finite() && (-1.0..=1.0).contains(&steer)) {
             return Err(format!("steer {steer} must be a number from -1 to 1"));
         }
-        if throttle > 0.0 && !self.wheels.iter().any(|w| w.p.driven) {
+        if throttle != 0.0 && !self.wheels.iter().any(|w| w.p.driven) {
             return Err("throttle needs a driven wheel, and the car has none".into());
         }
         if brake > 0.0 && !self.wheels.iter().any(|w| w.p.braked) {
@@ -533,10 +544,30 @@ impl Car {
         }
     }
 
+    /// The forward speed (m/s) of the chassis' centre of mass along the frame of the last force
+    /// pass; negative when the car moves backwards.
+    fn forward_speed(&self, vel: &[Vec3], mass: &[f64]) -> f64 {
+        let mut p = Vec3::ZERO;
+        let mut m = 0.0;
+        for (v, &mi) in vel.iter().zip(mass) {
+            p += *v * mi;
+            m += mi;
+        }
+        if m > 0.0 {
+            (p * (1.0 / m)).dot(self.frame.forward)
+        } else {
+            0.0
+        }
+    }
+
     /// The drive torque on wheel `w` now (N m): an equal share of `max_drive_torque x throttle`
-    /// for each driven wheel.
-    fn drive_torque(&self, w: &Wheel) -> f64 {
+    /// for each driven wheel. A negative throttle (reverse) gives its torque only while
+    /// `forward_speed` is at most `REVERSE_MAX_FORWARD_SPEED`; above that it gives none.
+    fn drive_torque(&self, w: &Wheel, forward_speed: f64) -> f64 {
         let n = self.wheels.iter().filter(|w| w.p.driven).count();
+        if self.throttle < 0.0 && forward_speed > REVERSE_MAX_FORWARD_SPEED {
+            return 0.0;
+        }
         if w.p.driven && n > 0 {
             self.max_drive_torque * self.throttle / n as f64
         } else {
@@ -587,9 +618,15 @@ impl Car {
         scratch.brake.clear();
         scratch.drive.clear();
         scratch.axles.clear();
+        // Only a reverse throttle needs the speed; for throttle >= 0 it is never read.
+        let forward_speed = if self.throttle < 0.0 {
+            self.forward_speed(vel, mass)
+        } else {
+            0.0
+        };
         for w in &self.wheels {
             scratch.brake.push(self.brake_torque(w));
-            scratch.drive.push(self.drive_torque(w));
+            scratch.drive.push(self.drive_torque(w, forward_speed));
         }
         let old = self.frame;
         match self.fit_frame(pos) {
@@ -781,7 +818,7 @@ impl Car {
             return Some(e.clone());
         }
         if !(self.throttle.is_finite()
-            && (0.0..=1.0).contains(&self.throttle)
+            && (-1.0..=1.0).contains(&self.throttle)
             && self.brake.is_finite()
             && (0.0..=1.0).contains(&self.brake)
             && self.steer.is_finite()
