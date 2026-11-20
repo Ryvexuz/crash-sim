@@ -141,6 +141,11 @@ fn main() {
         Some(b) => run_body_checked_with_contact(&cfg, b),
         None => run_checked_with_contact(&cfg),
     };
+    // The run's own error is reported first, before any output write, so a failed write
+    // (which exits 1 at once) can never hide it.
+    if let Err(e) = &result {
+        eprintln!("crash-sim: {e}");
+    }
     if summary {
         if result.is_ok() {
             if let (Some(last), true) = (samples.last(), !samples.is_empty()) {
@@ -160,8 +165,7 @@ fn main() {
     } else if !samples.is_empty() {
         emit(&to_csv(&samples));
     }
-    if let Err(e) = result {
-        eprintln!("crash-sim: {e}");
+    if result.is_err() {
         exit(1);
     }
 }

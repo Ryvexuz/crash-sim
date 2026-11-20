@@ -47,3 +47,20 @@ fn closed_pipe_summary_exits_nonzero_without_panic() {
     assert!(err.contains("cannot write output"), "stderr: {err}");
     assert!(!err.contains("panicked"), "stderr: {err}");
 }
+
+/// A run that goes unstable after writing samples (a very high drop) AND a closed stdout:
+/// the run's own error must still reach stderr, and the exit code is 1.
+#[test]
+fn closed_pipe_after_failed_run_still_reports_the_run_error() {
+    let (code, err) = run_with_closed_stdout(&["--drop-height", "1000", "--duration", "20"]);
+    assert_eq!(code, Some(1), "stderr: {err}");
+    assert!(err.contains("crash-sim: unstable at t ="), "stderr: {err}");
+    assert!(!err.contains("panicked"), "stderr: {err}");
+}
+
+#[test]
+fn closed_pipe_summary_after_failed_run_reports_the_run_error() {
+    let (code, err) = run_with_closed_stdout(&["--drop-height", "1000", "--duration", "20", "--summary"]);
+    assert_eq!(code, Some(1), "stderr: {err}");
+    assert!(err.contains("crash-sim: unstable at t ="), "stderr: {err}");
+}
