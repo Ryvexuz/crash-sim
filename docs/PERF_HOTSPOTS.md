@@ -64,6 +64,12 @@ The timer calls cost about 6% (timed loop 359.71 ms against 339.81 ms for the re
 and 8 phases), so the smallest phases (script.apply, extra-force setup, collide::apply) carry the largest relative error. The sum of the phase medians (360.94 ms) is not the median of the timed loop (359.71 ms) because a median of
 sums is not a sum of medians.
 
+A second run of the same command, after the last edit of the example (`scratch/pf-run2.txt`), with `status` printing
+`cpu:  72% over 1s` just afterwards, gave the same order: solver 33.9%, first-contact + check 20.9%, apply_yield 17.5%,
+pre_step 15.9%, post_step 6.7%, collide 2.8%; sum of phases 247.81 ms (0.003442 ms per step) against 242.10 ms for the
+real loop. The shares moved by at most 2.1 points while the total fell by 31%, which is why shares are the figure to use.
+The table above is the run made at 96% to 98% CPU.
+
 ## Check against the bench
 
 Done check 1 asks for the table's total per step to be within 25% of the `bench --runs 10` settle median. The bench
