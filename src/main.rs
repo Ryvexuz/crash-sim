@@ -8,6 +8,9 @@ use crash_sim::input::{self, DriveParams, DriveRun, Script};
 use crash_sim::settle::{self, CarSetup, SettleParams};
 use crash_sim::{collide, Body};
 
+/// Five optional numeric flags parsed together.
+type FiveOpt = (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+
 /// Write `text` and flush. The only path any stdout output takes, so a closed pipe or a full
 /// disk is an error value, never a panic and never silently dropped.
 fn write_all_flush(out: &mut impl Write, text: &str) -> std::io::Result<()> {
@@ -96,13 +99,7 @@ fn main() {
     let mut slope_grip: Option<f64> = None;
     let mut slope_report = false;
     let (mut slope_from, mut slope_to): (Option<f64>, Option<f64>) = (None, None);
-    let (mut by, mut hold, mut speed, mut rise, mut gain): (
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-    ) = (None, None, None, None, None);
+    let (mut by, mut hold, mut speed, mut rise, mut gain): FiveOpt = (None, None, None, None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -695,7 +692,7 @@ mod tests {
             Ok(b.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
-            Err(Error::new(ErrorKind::Other, "disk full"))
+            Err(Error::other("disk full"))
         }
     }
 

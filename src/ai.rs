@@ -204,7 +204,9 @@ impl Driver {
     /// Advance the PI integrator by `dt` seconds (anti-windup clamped), then control.
     /// Invalid input or a non-positive `dt` leaves the integrator alone.
     pub fn update(&mut self, state: &CarState, path: &[(f64, f64)], target_speed: &[f64], dt: f64) -> Controls {
-        if !self.valid(state, path, target_speed) || !(dt > 0.0) || !dt.is_finite() {
+        // dt_ok is false for NaN (both tests are false), so NaN dt leaves the integrator alone.
+        let dt_ok = dt > 0.0 && dt.is_finite();
+        if !self.valid(state, path, target_speed) || !dt_ok {
             return self.control(state, path, target_speed);
         }
         let err = self.speed_error(state, path, target_speed);
@@ -214,5 +216,27 @@ impl Driver {
             self.integral = next;
         }
         self.controls(state, path, target_speed, self.integral)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// NaN, infinite, zero and negative `dt` must leave the integrator alone; a good `dt` moves it.
+    #[test]
+    fn update_ignores_bad_dt_including_nan() {
+        let params = DriverParams { lookahead_k: 0.5, lookahead_min: 2.0, lookahead_max: 10.0, kp: 1.0, ki: 1.0, integral_max: 5.0 };
+        let state = CarState { x: 0.0, z: 0.0, heading: 0.0, speed: 0.0, wheelbase: 2.5, max_steer: 0.5 };
+        let path = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let target = [10.0; 4];
+        for dt in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.1] {
+            let mut d = Driver::new(params);
+            d.update(&state, &path, &target, dt);
+            assert_eq!(d.integral(), 0.0, "dt {dt} must leave the integrator alone");
+        }
+        let mut d = Driver::new(params);
+        d.update(&state, &path, &target, 0.1);
+        assert!(d.integral() > 0.0, "a good dt must move the integrator");
     }
 }

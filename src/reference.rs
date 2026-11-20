@@ -1,8 +1,8 @@
 //! Strict reader for validation reference pulses (`<name>.pulse.csv` and `<name>.meta`), linear
 //! resampling, and a per-metric error table for comparing a sim pulse with a reference.
 //!
-//! Self-contained and std only. Not registered in `lib.rs` here; a later task does that. Tests
-//! include it with `#[path]`. The metric functions are passed in by the caller (n20-09 passes
+//! Self-contained and std only. Registered in `lib.rs` as `pub mod reference`; tests use it as
+//! `crash_sim::reference`. The metric functions are passed in by the caller (n20-09 passes
 //! n20-03's `pulse.rs` functions), so this file does not depend on that one.
 //!
 //! File formats (fixed by n20-02):

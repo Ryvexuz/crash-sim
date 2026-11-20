@@ -594,7 +594,9 @@ impl Sim {
             }
             let len = (self.pos[bm.a] - self.pos[bm.b]).length();
             let strain = (len - bm.rest) / bm.rest;
-            if !(strain.abs() > y + YIELD_EPS) {
+            // exceeds is false for NaN (strain or y), so NaN skips the beam as before.
+            let exceeds = strain.abs() > y + YIELD_EPS;
+            if !exceeds {
                 continue;
             }
             let new_rest = if strain > 0.0 { len / (1.0 + y) } else { len / (1.0 - y) };

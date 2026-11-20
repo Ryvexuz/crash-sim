@@ -56,7 +56,7 @@ fn beam_squeezed_past_yield_keeps_a_shorter_rest() {
     release_from(&mut sim, 0.8);
     let rest = sim.beams[0].rest;
     assert!(rest < 0.95, "rest length {rest} did not shrink past the 0.95 m that 5% strain allows");
-    assert!(rest >= 0.8 / 0.95 - 1e-12 && rest > 0.0);
+    assert!(rest >= 0.8 / 0.95 - 1e-12);
     assert!((len(&sim) - rest).abs() < 1e-6);
 }
 
@@ -276,4 +276,13 @@ fn crash_sim_bin() -> std::path::PathBuf {
         bin.display()
     );
     bin
+}
+
+#[test]
+fn nan_strain_beam_is_skipped_not_refused() {
+    let mut sim = pair(" yield_strain 0.05");
+    sim.pos[1].x = f64::NAN;
+    assert_eq!(sim.apply_yield(), 0);
+    assert!(sim.yield_refused.is_empty(), "a NaN strain must skip the beam, not refuse it");
+    assert_eq!(sim.beams[0].rest, 1.0);
 }

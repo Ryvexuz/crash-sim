@@ -2,7 +2,7 @@
 //!
 //! Self-contained and std only: every function takes plain slices of uniformly sampled
 //! acceleration (m/s^2, a deceleration is negative) and a sample step `dt` in seconds.
-//! Not registered in `lib.rs` here; a later task does that. Tests include it with `#[path]`.
+//! Registered in `lib.rs` as `pub mod pulse`; tests use it as `crash_sim::pulse`.
 
 use std::fmt;
 

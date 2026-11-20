@@ -383,7 +383,7 @@ fn last_t(text: &str) -> f64 {
     text.lines()
         .filter(|l| !l.starts_with("break,"))
         .filter_map(|l| l.split(',').next()?.parse::<f64>().ok())
-        .last()
+        .next_back()
         .unwrap()
 }
 

@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-// Explicit path: the test crate includes this file by #[path], which would otherwise look for src/session.rs.
+// Explicit path to the session file under src/net/. The tests reach it as `crash_sim::net::session`.
 #[path = "net/session.rs"]
 pub mod session;
 
