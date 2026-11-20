@@ -1,19 +1,23 @@
 //! Timing harness for the sim's hot paths. Std only. See docs/BENCH.md.
 //!
-//! usage: bench [--runs <n>] [--case box|cube|settle]
+//! usage: bench [--runs <n>] [--case box|cube|settle|car]
 //! One JSON line per case: name, runs, median_ms, min_ms, max_ms, mad_ms.
-use crash_sim::settle::{self, SettleParams};
+use crash_sim::input::{self, Script};
+use crash_sim::settle::{self, CarSetup, SettleParams};
 use crash_sim::{format, Config, Sim};
 use std::process::exit;
 use std::time::Instant;
 
 /// Solver steps (output steps of `Sim::advance`) per timed run of the box and cube cases.
 const STEPS: u64 = 500;
-const CASES: [&str; 3] = ["box", "cube", "settle"];
+/// Seconds of the scripted lap the car case runs: 10 s took about 50 ms per run, over the 30 ms
+/// budget of a gate case, so it runs the first 5 s.
+const CAR_SECONDS: f64 = 5.0;
+const CASES: [&str; 4] = ["box", "cube", "settle", "car"];
 
 fn fail(msg: &str) -> ! {
     eprintln!("bench: {msg}");
-    eprintln!("usage: bench [--runs <n>] [--case box|cube|settle]");
+    eprintln!("usage: bench [--runs <n>] [--case box|cube|settle|car]");
     exit(2)
 }
 
@@ -92,6 +96,36 @@ fn settle_case(runs: usize) {
     run_case("settle", runs, &mut f);
 }
 
+/// The first `CAR_SECONDS` of the pad lap, driven the way `crash-sim --input` drives it
+/// (`input::drive` on a `CarSetup` with the parsed script and an explicit duration). Paths come
+/// from the crate root, not the current directory.
+fn car_case(runs: usize) {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let body = load_body(&format!("{root}/scenarios/pad_and_wall.bsn"));
+    let input_path = format!("{root}/scenarios/pad_lap.input");
+    let text = std::fs::read_to_string(&input_path)
+        .unwrap_or_else(|e| fail(&format!("{input_path}: {e}")));
+    let script = Script::parse(&text).unwrap_or_else(|e| fail(&format!("{input_path}: {e}")));
+    let cfg = Config {
+        duration: CAR_SECONDS,
+        ..Config::default()
+    };
+    let setup = CarSetup {
+        script: Some(script),
+        until_script_end: false,
+        grip_frac: None,
+    };
+    let mut f = || {
+        let run = input::drive(&cfg, &body, &setup, f64::INFINITY)
+            .unwrap_or_else(|e| fail(&format!("car: {e}")));
+        // A blown-up run would time garbage: fail instead of reporting it.
+        if let Some(e) = run.abort {
+            fail(&format!("car: {e}"));
+        }
+    };
+    run_case("car", runs, &mut f);
+}
+
 fn main() {
     let mut runs: usize = 10;
     let mut only: Option<String> = None;
@@ -106,8 +140,10 @@ fn main() {
             }
             "--case" => match args.next() {
                 Some(c) if CASES.contains(&c.as_str()) => only = Some(c),
-                Some(c) => fail(&format!("unknown case '{c}' (cases: box, cube, settle)")),
-                None => fail("--case needs a name (box, cube, settle)"),
+                Some(c) => fail(&format!(
+                    "unknown case '{c}' (cases: box, cube, settle, car)"
+                )),
+                None => fail("--case needs a name (box, cube, settle, car)"),
             },
             other => fail(&format!("unknown argument '{other}'")),
         }
@@ -121,5 +157,8 @@ fn main() {
     }
     if want("settle") {
         settle_case(runs);
+    }
+    if want("car") {
+        car_case(runs);
     }
 }
