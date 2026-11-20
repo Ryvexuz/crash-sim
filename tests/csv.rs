@@ -74,3 +74,48 @@ fn crash_sim_bin() -> std::path::PathBuf {
     );
     bin
 }
+
+fn time_column(csv: &str) -> Vec<f64> {
+    csv.lines().skip(1).map(|l| l.split(',').next().unwrap().parse().unwrap()).collect()
+}
+
+/// A duration that is not a whole number of steps must not print a row after it.
+#[test]
+fn last_time_never_exceeds_duration() {
+    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim"))
+        .args(["--duration", "0.016", "--dt", "0.01"])
+        .output()
+        .expect("run binary");
+    assert!(out.status.success(), "binary failed: {:?}", out.status);
+    let ts = time_column(&String::from_utf8(out.stdout).expect("utf8 stdout"));
+    assert_eq!(ts, vec![0.0, 0.01], "rows: {ts:?}");
+}
+
+/// 5.0 / 0.01 is 500 up to rounding, so the default run keeps its 501 rows, and a duration that is a whole number
+/// of steps in decimal ends exactly there.
+#[test]
+fn whole_number_of_steps_is_not_cut_short() {
+    assert_eq!(run(&Config::default()).len(), 501);
+    let cfg = Config { duration: 0.3, dt: 0.01, ..Config::default() };
+    let ts = time_column(&to_csv(&run(&cfg)));
+    assert_eq!(ts.len(), 31, "0.3 / 0.01 is 30 steps (it is 29.999999999999996 in f64): {ts:?}");
+    assert_eq!(*ts.last().unwrap(), 0.3);
+}
+
+/// A dt too small for the 4-decimal time column is refused with a clear error and an empty stdout; the smallest
+/// accepted dt prints strictly increasing times.
+#[test]
+fn dt_too_small_for_the_time_column_is_refused() {
+    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim"))
+        .args(["--dt", "0.00001", "--duration", "0.0001"])
+        .output()
+        .expect("run binary");
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(out.stdout.is_empty(), "stdout must be empty, got {:?}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("4 decimals"), "stderr: {err}");
+    let cfg = Config { dt: 1e-4, substeps: 1, duration: 0.002, ..Config::default() };
+    let ts = time_column(&to_csv(&run(&cfg)));
+    assert!(ts.len() > 10);
+    assert!(ts.windows(2).all(|w| w[1] > w[0]), "t not strictly increasing: {ts:?}");
+}

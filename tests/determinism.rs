@@ -1,6 +1,6 @@
 //! Determinism and run-length checks, using only crash_sim's public API.
 
-use crash_sim::{run, Config, Sample, Sim};
+use crash_sim::{run, step_count, Config, Sample, Sim};
 
 fn moon() -> Config {
     Config { gravity: 1.62, tilt: false, ..Config::default() }
@@ -32,9 +32,9 @@ fn by_hand(cfg: &Config, steps: usize) -> Vec<Sample> {
     out
 }
 
-/// The rule in lib.rs: steps = round(duration / dt), samples = steps + 1.
+/// The rule in lib.rs: steps = floor(duration / dt) with a 1e-9 relative epsilon (`step_count`), samples = steps + 1.
 fn expected_samples(cfg: &Config) -> usize {
-    (cfg.duration / cfg.dt).round() as usize + 1
+    step_count(cfg) as usize + 1
 }
 
 #[test]

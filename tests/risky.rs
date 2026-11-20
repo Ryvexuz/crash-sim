@@ -27,7 +27,7 @@ fn total(sim: &Sim) -> f64 {
 #[test]
 fn energy_never_rises_after_impact() {
     let cfg = Config { dt: 0.001, substeps: 1, duration: 5.0, ..Config::default() };
-    let steps = (cfg.duration / cfg.dt).round() as u64;
+    let steps = step_count(&cfg);
     let mut sim = Sim::new(cfg);
     let mut at_impact: Option<f64> = None;
     let mut worst_rise = f64::MIN;
@@ -54,7 +54,7 @@ fn energy_never_rises_after_impact() {
 fn step_just_inside_stiffness_limit_runs_a_full_default_duration() {
     let cfg = Config { dt: max_stable_step() * 0.99, substeps: 1, ..Config::default() };
     cfg.validate().expect("a step inside the limit must be accepted");
-    let steps = (cfg.duration / cfg.dt).round() as u64;
+    let steps = step_count(&cfg);
     let mut sim = Sim::new(cfg);
     for i in 0..steps {
         sim.advance();
@@ -73,7 +73,7 @@ fn step_just_inside_stiffness_limit_runs_a_full_default_duration() {
 fn mid_run_abort_is_reached_for_a_config_validate_accepts() {
     let cfg = Config { gravity: 5000.0, ..Config::default() };
     cfg.validate().expect("validate must accept this config");
-    let full = (cfg.duration / cfg.dt).round() as usize + 1;
+    let full = step_count(&cfg) as usize + 1;
     let (samples, res) = run_checked(&cfg);
     let err = res.expect_err("the run must abort");
     assert!(err.starts_with("unstable at t = "), "{err}");

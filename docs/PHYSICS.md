@@ -148,7 +148,7 @@ Damping lowers the stable step, and `validate()` enforces the combined condition
 
 ## CSV output
 
-`run` returns one sample at t = 0 and one after each output step. The step count is `round(duration / dt)`, so the last row can differ from `duration` by up to `dt / 2`. `to_csv` writes the header `t,min_y,center_y,max_beam_strain` (`CSV_HEADER`) and one row per sample:
+`run` returns one sample at t = 0 and one after each output step. The step count is `step_count` = `floor(duration / dt)` with a relative epsilon of 1e-9 (so 5.0 / 0.01 stays 500), so the last row never lies after `duration` and can lie up to `dt` before it. A `dt` below `MIN_DT` = 0.0001 s is refused, because the time column has 4 decimals and its rows would repeat. `to_csv` writes the header `t,min_y,center_y,max_beam_strain` (`CSV_HEADER`) and one row per sample:
 
 | Column | Meaning | Decimals |
 |---|---|---|

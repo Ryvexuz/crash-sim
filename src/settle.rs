@@ -165,7 +165,7 @@ pub fn measure_body_with(cfg: &Config, body: Option<&Body>, p: &SettleParams, mu
         return aborted(e);
     }
     let h = cfg.dt / cfg.substeps as f64;
-    let outer = (cfg.duration / cfg.dt).round() as u64;
+    let outer = crate::step_count(cfg);
     let total = outer * cfg.substeps as u64;
     // One `advance` of this config is exactly one substep, so the substep loop is here, where
     // it can be observed. Same h, same order of operations as the real run.

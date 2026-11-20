@@ -179,6 +179,12 @@ impl Config {
         {
             return Err("dt must be > 0, duration >= 0, substeps >= 1, drop-height >= 0, gravity > 0 (all finite)".into());
         }
+        if self.dt < MIN_DT {
+            return Err(format!(
+                "dt = {} s is below {MIN_DT} s: the CSV time column has 4 decimals, so rows would repeat or merge; raise --dt",
+                self.dt
+            ));
+        }
         Ok(())
     }
 
@@ -526,10 +532,21 @@ pub struct Report {
     pub result: Result<(), String>,
 }
 
+/// Smallest dt the run accepts: the CSV time column has 4 decimals, so a smaller dt would
+/// print repeated or merged t values.
+pub const MIN_DT: f64 = 1e-4;
+
+/// Output steps of a run: `floor(duration / dt)`, with a relative epsilon of 1e-9 so that a
+/// duration that is a whole number of steps up to rounding (5.0 / 0.01, 0.3 / 0.01) is not
+/// cut short. The last row therefore never lies after `duration` (it can lie up to dt before it).
+pub fn step_count(cfg: &Config) -> u64 {
+    (cfg.duration / cfg.dt * (1.0 + 1e-9)).floor() as u64
+}
+
 /// Run the sim. Returns the samples of all good steps (t = 0, dt, 2dt, ...) and,
 /// if the config was refused or the state blew up, the reason (with the time).
-/// The step count is `round(duration / dt)`, so the last row can differ from
-/// `duration` by up to dt/2 when dt does not divide it.
+/// The step count is `step_count(cfg)`: `floor(duration / dt)` with a tiny relative epsilon,
+/// so the last row never lies after `duration`.
 pub fn run_checked(cfg: &Config) -> (Vec<Sample>, Result<(), String>) {
     let (samples, _, res) = run_checked_with_contact(cfg);
     (samples, res)
@@ -563,7 +580,7 @@ pub fn run_body_report(cfg: &Config, body: &Body) -> Report {
 /// The run loop shared by both entry points, on a sim whose config is already validated.
 fn run_sim(mut sim: Sim) -> Report {
     let cfg = sim.cfg.clone();
-    let steps = (cfg.duration / cfg.dt).round() as u64;
+    let steps = step_count(&cfg);
     let mut out = Vec::with_capacity(steps as usize + 1);
     out.push(sim.sample());
     for _ in 0..steps {

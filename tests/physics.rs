@@ -201,10 +201,10 @@ fn binary_fails_loudly_on_harsh_flags() {
 }
 
 #[test]
-fn non_dividing_dt_ends_at_nearest_whole_step() {
+fn non_dividing_dt_ends_at_the_last_whole_step_not_after_duration() {
     let s = run(&Config { dt: 0.006, ..Config::default() });
     let last = s.last().unwrap().t;
-    assert!((last - 5.0).abs() <= 0.003 + 1e-9, "last t {last}");
+    assert!(last <= 5.0 && 5.0 - last < 0.006, "last t {last}");
 }
 
 #[test]
