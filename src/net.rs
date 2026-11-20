@@ -7,6 +7,10 @@
 
 use std::fmt;
 
+// Explicit path: the test crate includes this file by #[path], which would otherwise look for src/session.rs.
+#[path = "net/session.rs"]
+pub mod session;
+
 /// Wire protocol version carried by `hello`.
 pub const VERSION: u32 = 1;
 /// Throttle and brake range 0..=INPUT_SCALE; steer ranges -INPUT_SCALE..=INPUT_SCALE.
