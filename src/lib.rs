@@ -278,6 +278,9 @@ pub struct Sim {
     gravity_tilt: f64,
     solver: Box<dyn Solver>,
     step: u64,
+    /// The per-node extra force of the tilted-gravity and car path of `integrate`, kept between
+    /// substeps so the path does not allocate one Vec per substep (like `vehicle::StepScratch`).
+    extra_scratch: Vec<Vec3>,
 }
 
 /// The cube's start positions, beams and node masses for `cfg`.
@@ -331,7 +334,7 @@ impl Sim {
         let n = pos.len();
         let yield_strain = vec![None; beams.len()];
         let n_beams = beams.len();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0 }
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0, extra_scratch: Vec::new() }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -448,6 +451,7 @@ impl Sim {
             gravity_tilt: 0.0,
             solver,
             step: 0,
+            extra_scratch: Vec::new(),
         })
     }
 
@@ -525,11 +529,12 @@ impl Sim {
         // Tilted gravity: its y part goes to the solver as `gravity`, its x part as an extra
         // force on every node. The wheels add their suspension reactions on the mount nodes.
         let gv = self.gravity_vector();
-        let mut extra: Vec<Vec3> = self
-            .mass
-            .iter()
-            .map(|&m| Vec3::new(m * gv.x, 0.0, 0.0))
-            .collect();
+        // The buffer is taken out of `self` for the substep and put back at the end, so it is
+        // refilled in place (same values, same order as the Vec it replaces) and only grows on
+        // the first substep.
+        let mut extra = std::mem::take(&mut self.extra_scratch);
+        extra.clear();
+        extra.extend(self.mass.iter().map(|&m| Vec3::new(m * gv.x, 0.0, 0.0)));
         if let Some(car) = self.car.as_mut() {
             let step = vehicle::Substep { gravity: gv, h };
             let (pos, vel, mass) = (&self.pos, &self.vel, &self.mass);
@@ -547,6 +552,7 @@ impl Sim {
             car.post_step(&mut self.pos, &mut self.vel, &self.mass, &self.planes, h);
         }
         collide::apply(&mut self.pos, &mut self.vel, &self.planes, h);
+        self.extra_scratch = extra;
     }
 
     /// The beams that have not broken, in index order.
@@ -592,7 +598,14 @@ impl Sim {
             if self.broken[i] {
                 continue;
             }
-            let len = (self.pos[bm.a] - self.pos[bm.b]).length();
+            let d = self.pos[bm.a] - self.pos[bm.b];
+            // Cheap exit with no sqrt: a beam whose squared length is clearly inside the yield
+            // band cannot exceed it (see `clearly_within`). Anything else, NaN included, takes
+            // the exact path below, which is the code as it was.
+            if clearly_within(d.dot(d), bm.rest, y + YIELD_EPS) {
+                continue;
+            }
+            let len = d.length();
             let strain = (len - bm.rest) / bm.rest;
             // exceeds is false for NaN (strain or y), so NaN skips the beam as before.
             let exceeds = strain.abs() > y + YIELD_EPS;
@@ -641,9 +654,20 @@ impl Sim {
                 "beam {i} would yield to a rest length of zero or negative (its nodes are at the same place)"
             ));
         }
-        let strain = max_strain_unbroken(&self.beams, &self.pos, &self.broken);
-        if strain.is_nan() || strain > MAX_STRAIN_LIMIT {
-            return Err(format!("max beam strain {strain} exceeds limit {MAX_STRAIN_LIMIT}"));
+        // Strain: when every unbroken beam is clearly inside the limit by its squared length (no
+        // sqrt, see `clearly_within`) the result is Ok. Otherwise (a beam near or past the
+        // limit, or NaN anywhere) the exact fold below decides and words the error, as before.
+        let all_clear = self.beams.iter().zip(&self.broken).all(|(bm, &broken)| {
+            broken || {
+                let d = self.pos[bm.a] - self.pos[bm.b];
+                clearly_within(d.dot(d), bm.rest, MAX_STRAIN_LIMIT)
+            }
+        });
+        if !all_clear {
+            let strain = max_strain_unbroken(&self.beams, &self.pos, &self.broken);
+            if strain.is_nan() || strain > MAX_STRAIN_LIMIT {
+                return Err(format!("max beam strain {strain} exceeds limit {MAX_STRAIN_LIMIT}"));
+            }
         }
         if let Some(e) = self.car.as_ref().and_then(|c| c.check()) {
             return Err(e);
@@ -672,6 +696,35 @@ impl Sim {
         }
         self.step += 1;
     }
+}
+
+/// Relative safety margin of `clearly_within` on the squared bounds.
+const CLEAR_MARGIN: f64 = 1e-9;
+
+/// True only if a beam of squared length `d2` and rest length `rest` is certainly inside the
+/// strain band, |len - rest| / rest <= `t`, as the float arithmetic `((len - rest) / rest).abs()
+/// <= t` with len = sqrt(d2) would judge it. It never takes a sqrt, and false means "unknown":
+/// the caller then runs the exact original arithmetic, so no result changes.
+///
+/// Derivation. For rest > 0 and 0 <= t < 1 the band is rest (1 - t) <= len <= rest (1 + t), and
+/// since len >= 0 that is the same as rest^2 (1 - t)^2 <= d2 <= rest^2 (1 + t)^2. Float rounding
+/// (d2, the sqrt, the subtraction and the division are each within a few 1e-16 relative) means
+/// the squared form is not exactly the same test at the boundary, so the bounds are pulled in by
+/// a relative `CLEAR_MARGIN` = 1e-9, which is at least 1e5 times the rounding error: a d2 strictly
+/// between the pulled-in bounds has a computed strain at least about 4e-10 inside the band, so
+/// the original test is false there. Everything near the boundary (inside the margin) returns
+/// false and takes the sqrt. `t <= 0.9` keeps the lower margin, 5e-10 (1 - t), well above the
+/// rounding error. `rest` in [1e-100, 1e100] keeps the squares far from overflow and underflow.
+/// NaN in d2, rest or t, rest outside that range, and t outside [0, 0.9] make a comparison
+/// false, so they return false and the caller's exact path keeps its NaN semantics (`!(a > b)`
+/// is true for NaN there).
+fn clearly_within(d2: f64, rest: f64, t: f64) -> bool {
+    if !((1e-100..=1e100).contains(&rest) && (0.0..=0.9).contains(&t)) {
+        return false;
+    }
+    let hi = rest * (1.0 + t);
+    let lo = rest * (1.0 - t);
+    d2 < hi * hi * (1.0 - CLEAR_MARGIN) && d2 > lo * lo * (1.0 + CLEAR_MARGIN)
 }
 
 /// Largest |length - rest| / rest. NaN-propagating: a blown-up state never reads as 0.
