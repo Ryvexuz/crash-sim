@@ -5,6 +5,7 @@
 
 pub mod collide;
 pub mod format;
+pub mod input;
 pub mod settle;
 pub mod solver;
 pub mod trajectory;

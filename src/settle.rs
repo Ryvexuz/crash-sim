@@ -8,6 +8,7 @@
 //! caller must give.
 
 use crate::collide;
+use crate::input::Script;
 use crate::vec3::Vec3;
 use crate::{max_strain_unbroken, vehicle, Beam, Body, Config, Sim};
 
@@ -59,8 +60,16 @@ pub struct SettleParams {
 impl SettleParams {
     pub fn validate(&self) -> Result<(), String> {
         let f = |x: f64| x.is_finite();
-        if f(self.by) && self.by >= 0.0 && f(self.hold) && self.hold >= 0.0 && f(self.speed) && self.speed > 0.0
-            && f(self.energy_rise) && self.energy_rise >= 0.0 && f(self.energy_gain) && self.energy_gain >= 0.0
+        if f(self.by)
+            && self.by >= 0.0
+            && f(self.hold)
+            && self.hold >= 0.0
+            && f(self.speed)
+            && self.speed > 0.0
+            && f(self.energy_rise)
+            && self.energy_rise >= 0.0
+            && f(self.energy_gain)
+            && self.energy_gain >= 0.0
         {
             Ok(())
         } else {
@@ -136,75 +145,58 @@ fn aborted(reason: String) -> SettleReport {
     }
 }
 
-/// How a body with wheels is set up for a run (`Sim::from_car`): which controls are on and
-/// whether gravity is tilted into a slope. The default is a free-rolling car on flat ground.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// How a body with wheels is set up for a run (`Sim::from_car`): the input script that drives it
+/// and whether gravity is tilted into a slope. The default is a free-rolling car on flat ground
+/// with no throttle, brake or steering.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CarSetup {
-    /// Full brake from t = 0 (the one input nb-39 simulates; throttle and steering are nb-40).
-    pub brake: bool,
+    /// `--input`: the controls over time (`input::Script`); None leaves throttle, brake and
+    /// steer at 0 for the whole run.
+    pub script: Option<Script>,
+    /// A run with a script and no `--duration` ends at the script's last line
+    /// (docs/STAGE6.md, "The files"): see `run_substeps`.
+    pub until_script_end: bool,
     /// `--slope-grip-frac f`: tilt gravity so that tan theta = f x mu (`vehicle::slope_angle`).
     pub grip_frac: Option<f64>,
 }
 
-/// The one `--input` file nb-39 can run: a single line `0 0 <brake> 0` (t = 0, no throttle,
-/// brake 0 or 1, no steering), which is what `scenarios/full_brake.input` holds. Returns the
-/// brake flag. Anything else is refused by name, never read as something near it: timed
-/// scripts, throttle and steering belong to nb-40.
-pub fn parse_brake_input(text: &str) -> Result<bool, String> {
-    if text.contains('\r') {
-        return Err("input: carriage returns are not allowed (use \\n line ends)".into());
-    }
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    let [line] = lines.as_slice() else {
-        return Err(format!(
-            "input: this run reads exactly one line `0 0 <brake> 0`, found {} (timed input scripts are not simulated yet)",
-            lines.len()
-        ));
-    };
-    let f: Vec<&str> = line.split_whitespace().collect();
-    if f.len() != 4 {
-        return Err(format!("input: a line is `t throttle brake steer`, found {} fields in `{line}`", f.len()));
-    }
-    let mut v = [0.0_f64; 4];
-    for (i, x) in f.iter().enumerate() {
-        v[i] = x
-            .parse::<f64>()
-            .ok()
-            .filter(|n| n.is_finite())
-            .ok_or_else(|| format!("input: `{x}` is not a finite number"))?;
-    }
-    if v[0] != 0.0 {
-        return Err(format!("input: the line must start at t = 0, found t = {}", v[0]));
-    }
-    if v[1] != 0.0 || v[3] != 0.0 {
-        return Err("input: throttle and steer must be 0 (they are not simulated yet)".into());
-    }
-    if v[2] == 0.0 {
-        Ok(false)
-    } else if v[2] == 1.0 {
-        Ok(true)
-    } else {
-        Err(format!("input: brake must be 0 or 1 (a partial brake is not simulated yet), found {}", v[2]))
+/// How many substeps (of `cfg.dt / cfg.substeps`) a car run takes: `step_count(cfg)` output steps
+/// of `cfg.substeps`, or, when `setup` ends at its script's last line, the whole substeps up to
+/// that line's time (with the same relative epsilon as `step_count`).
+pub fn run_substeps(cfg: &Config, setup: &CarSetup) -> u64 {
+    match (&setup.script, setup.until_script_end) {
+        (Some(s), true) => {
+            let h = cfg.dt / cfg.substeps as f64;
+            (s.t_last() / h * (1.0 + 1e-9)).floor() as u64
+        }
+        _ => crate::step_count(cfg) * cfg.substeps as u64,
     }
 }
 
-/// The car's sim for `body`: `Sim::from_car`, the slope tilt and the brake flag. One place for
-/// every run of a car (settle report, slope report), so none can skip a refusal.
+/// The car's sim for `body`: `Sim::from_car`, the slope tilt and the script's first line. One
+/// place for every run of a car (settle report, slope report, drive), so none can skip a
+/// refusal; every line of the script is checked against the car here.
 pub fn car_sim(cfg: Config, body: &Body, setup: &CarSetup) -> Result<Sim, String> {
     if body.wheels.is_empty() {
-        return Err("the body has no wheels: a slope or an input only applies to a body with wheels".into());
+        return Err(
+            "the body has no wheels: a slope or an input only applies to a body with wheels".into(),
+        );
     }
     let tilt = match setup.grip_frac {
         Some(f) => Some(vehicle::slope_angle(body, f)?),
         None => None,
     };
+    let h = cfg.dt / cfg.substeps as f64;
     let mut sim = Sim::from_car(cfg, body)?;
     if let Some(theta) = tilt {
         sim.set_gravity_tilt(theta)?;
     }
-    match sim.car.as_mut() {
-        Some(car) => car.brake = setup.brake,
-        None => return Err("internal: Sim::from_car built no car for a body with wheels".into()),
+    let Some(car) = sim.car.as_ref() else {
+        return Err("internal: Sim::from_car built no car for a body with wheels".into());
+    };
+    if let Some(script) = &setup.script {
+        script.check_for(car)?;
+        script.apply(&mut sim, 0.0, h * 1e-6)?;
     }
     Ok(sim)
 }
@@ -234,15 +226,28 @@ impl SlopeReport {
 /// Chassis centre-of-mass velocity along +x (nodes only, as the check defines u).
 fn chassis_com_vx(sim: &Sim) -> f64 {
     let m: f64 = sim.mass.iter().sum();
-    sim.vel.iter().zip(&sim.mass).map(|(v, w)| v.x * w).sum::<f64>() / m
+    sim.vel
+        .iter()
+        .zip(&sim.mass)
+        .map(|(v, w)| v.x * w)
+        .sum::<f64>()
+        / m
 }
 
 /// Run the car of `body` on the slope `setup` gives, for `to` seconds of substeps (`cfg.dt /
 /// cfg.substeps` each), and report the slide acceleration between `from` and `to`. Both times
 /// must be whole substeps with 0 <= from < to, and the slope is required.
-pub fn measure_slope(cfg: &Config, body: &Body, setup: &CarSetup, from: f64, to: f64) -> Result<SlopeReport, String> {
+pub fn measure_slope(
+    cfg: &Config,
+    body: &Body,
+    setup: &CarSetup,
+    from: f64,
+    to: f64,
+) -> Result<SlopeReport, String> {
     cfg.validate_numbers()?;
-    let grip_frac = setup.grip_frac.ok_or("a slope report needs a slope (--slope-grip-frac)")?;
+    let grip_frac = setup
+        .grip_frac
+        .ok_or("a slope report needs a slope (--slope-grip-frac)")?;
     let h = cfg.dt / cfg.substeps as f64;
     let steps_of = |t: f64, what: &str| -> Result<u64, String> {
         if !(t.is_finite() && t >= 0.0) {
@@ -250,7 +255,9 @@ pub fn measure_slope(cfg: &Config, body: &Body, setup: &CarSetup, from: f64, to:
         }
         let n = (t / h).round();
         if (t / h - n).abs() > 1e-6 {
-            return Err(format!("{what} = {t} s is not a whole number of {h} s substeps"));
+            return Err(format!(
+                "{what} = {t} s is not a whole number of {h} s substeps"
+            ));
         }
         Ok(n as u64)
     };
@@ -266,9 +273,14 @@ pub fn measure_slope(cfg: &Config, body: &Body, setup: &CarSetup, from: f64, to:
     if n_from == 0 {
         u_from = Some(chassis_com_vx(&sim));
     }
+    let tol = h * 1e-6;
     for i in 1..=n_to {
+        if let Some(script) = &setup.script {
+            script.apply(&mut sim, (i - 1) as f64 * h, tol)?;
+        }
         sim.advance();
-        sim.check().map_err(|e| format!("unstable at t = {:.4} s: {e}", i as f64 * h))?;
+        sim.check()
+            .map_err(|e| format!("unstable at t = {:.4} s: {e}", i as f64 * h))?;
         if i == n_from {
             u_from = Some(chassis_com_vx(&sim));
         }
@@ -285,7 +297,12 @@ pub fn measure_slope(cfg: &Config, body: &Body, setup: &CarSetup, from: f64, to:
     }
     let theta = vehicle::slope_angle(body, grip_frac)?;
     let mu = body.tyres[0].mu;
-    Ok(SlopeReport { mu, tan: theta.tan(), accel, predicted: cfg.gravity * (theta.sin() - mu * theta.cos()) })
+    Ok(SlopeReport {
+        mu,
+        tan: theta.tan(),
+        accel,
+        predicted: cfg.gravity * (theta.sin() - mu * theta.cos()),
+    })
 }
 
 /// Run `cfg` and measure the settle report at every substep.
@@ -301,7 +318,11 @@ pub fn measure_body(cfg: &Config, body: Option<&Body>, p: &SettleParams) -> Sett
 /// Like `measure`, with a hook called after every substep (and before it is measured) with the
 /// sim and the 1-based substep number. For tests that plant a fault (an energy injection, a
 /// NaN) to prove the report can say FAIL; the production path passes a no-op.
-pub fn measure_with(cfg: &Config, p: &SettleParams, hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+pub fn measure_with(
+    cfg: &Config,
+    p: &SettleParams,
+    hook: impl FnMut(&mut Sim, u64),
+) -> SettleReport {
     measure_body_with(cfg, None, p, hook)
 }
 
@@ -309,7 +330,12 @@ pub fn measure_with(cfg: &Config, p: &SettleParams, hook: impl FnMut(&mut Sim, u
 /// or config comes back as an aborted report (the sim's own validation runs for a body). A body
 /// with wheels is refused here (`Sim::from_body`): wheels are simulated only by `measure_car`,
 /// so every other caller of this function (the crumple report) still refuses them.
-pub fn measure_body_with(cfg: &Config, body: Option<&Body>, p: &SettleParams, hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+pub fn measure_body_with(
+    cfg: &Config,
+    body: Option<&Body>,
+    p: &SettleParams,
+    hook: impl FnMut(&mut Sim, u64),
+) -> SettleReport {
     measure_inner(cfg, body, None, p, hook)
 }
 
@@ -320,23 +346,41 @@ pub fn measure_car(cfg: &Config, body: &Body, setup: &CarSetup, p: &SettleParams
 }
 
 /// `measure_car` with a per-substep hook, as `measure_with`.
-pub fn measure_car_with(cfg: &Config, body: &Body, setup: &CarSetup, p: &SettleParams, hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+pub fn measure_car_with(
+    cfg: &Config,
+    body: &Body,
+    setup: &CarSetup,
+    p: &SettleParams,
+    hook: impl FnMut(&mut Sim, u64),
+) -> SettleReport {
     measure_inner(cfg, Some(body), Some(setup), p, hook)
 }
 
-fn measure_inner(cfg: &Config, body: Option<&Body>, car: Option<&CarSetup>, p: &SettleParams, mut hook: impl FnMut(&mut Sim, u64)) -> SettleReport {
+fn measure_inner(
+    cfg: &Config,
+    body: Option<&Body>,
+    car: Option<&CarSetup>,
+    p: &SettleParams,
+    mut hook: impl FnMut(&mut Sim, u64),
+) -> SettleReport {
     if let Err(e) = p.validate() {
         return aborted(e);
     }
     // The cube gets the full check; a body gets the finite-number rules on the original dt and
     // substeps here (its step limit is checked by `Sim::from_body` on h, which is the same h).
-    let checked = if body.is_none() { cfg.validate() } else { cfg.validate_numbers() };
+    let checked = if body.is_none() {
+        cfg.validate()
+    } else {
+        cfg.validate_numbers()
+    };
     if let Err(e) = checked {
         return aborted(e);
     }
     let h = cfg.dt / cfg.substeps as f64;
-    let outer = crate::step_count(cfg);
-    let total = outer * cfg.substeps as u64;
+    let total = match car {
+        Some(setup) => run_substeps(cfg, setup),
+        None => crate::step_count(cfg) * cfg.substeps as u64,
+    };
     // One `advance` of this config is exactly one substep, so the substep loop is here, where
     // it can be observed. Same h, same order of operations as the real run.
     let mut one = cfg.clone();
@@ -355,11 +399,19 @@ fn measure_inner(cfg: &Config, body: Option<&Body>, car: Option<&CarSetup>, p: &
     };
     let g = cfg.gravity;
     let is_car = car.is_some();
-    let energy = |s: &Sim| if is_car { s.total_energy() } else { total_energy(&s.pos, &s.vel, &s.live_beams(), &s.mass, g) };
+    let energy = |s: &Sim| {
+        if is_car {
+            s.total_energy()
+        } else {
+            total_energy(&s.pos, &s.vel, &s.live_beams(), &s.mass, g)
+        }
+    };
 
     let e0 = energy(&sim);
     if !(e0.is_finite() && e0 > 0.0) {
-        return aborted(format!("energy at t = 0 is {e0}, not a positive finite number"));
+        return aborted(format!(
+            "energy at t = 0 is {e0}, not a positive finite number"
+        ));
     }
     // Compare times with a tolerance far below one substep: t = i * h is not exact.
     let tol = h * 1e-6;
@@ -377,6 +429,11 @@ fn measure_inner(cfg: &Config, body: Option<&Body>, car: Option<&CarSetup>, p: &
     let mut peak = max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken);
     let mut first_speed_fail: Option<(f64, f64)> = None; // (speed, t) of the first substep at or after T
     for i in 1..=total {
+        if let Some(script) = car.and_then(|c| c.script.as_ref()) {
+            if let Err(e) = script.apply(&mut sim, (i - 1) as f64 * h, tol) {
+                return aborted(e);
+            }
+        }
         sim.advance();
         hook(&mut sim, i);
         let t = time(i);
@@ -392,10 +449,21 @@ fn measure_inner(cfg: &Config, body: Option<&Body>, car: Option<&CarSetup>, p: &
         }
         let e = energy(&sim);
         if !e.is_finite() {
-            return aborted(format!("unstable at t = {t:.4} s: total energy is not finite"));
+            return aborted(format!(
+                "unstable at t = {t:.4} s: total energy is not finite"
+            ));
         }
         peak = peak.max(max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken));
-        gain = gain.max((e - e0) / e0);
+        // The engine adds energy (docs/STAGE6.md, settle rule 4): the rule is
+        // (E - E0 - W) / (E0 + W) <= G, with W the work the drive torque has done so far.
+        let w = sim.car.as_ref().map_or(0.0, |c| c.drive_work);
+        let denominator = e0 + w;
+        if denominator.is_nan() || denominator <= 0.0 {
+            return aborted(format!(
+                "at t = {t:.4} s the drive work {w} J has used up the starting energy {e0} J"
+            ));
+        }
+        gain = gain.max((e - e0 - w) / denominator);
         if t >= p.by - tol {
             max_speed_after = max_speed_after.max(speed);
             if speed >= p.speed && first_speed_fail.is_none() {
@@ -415,13 +483,22 @@ fn measure_inner(cfg: &Config, body: Option<&Body>, car: Option<&CarSetup>, p: &
     };
 
     let verdict = if end_s + tol < p.by + p.hold {
-        Err(format!("hold: the run ends at t={end_s:.4} s, before settle-by + settle-hold = {:.4} s", p.by + p.hold))
+        Err(format!(
+            "hold: the run ends at t={end_s:.4} s, before settle-by + settle-hold = {:.4} s",
+            p.by + p.hold
+        ))
     } else if let Some((s, t)) = first_speed_fail {
         Err(format!("speed {s:.4} m/s >= {} at t={t:.4}", p.speed))
     } else if rise_after > p.energy_rise {
-        Err(format!("energy rise {rise_after:.3e} J > {} J after t={:.4}", p.energy_rise, p.by))
+        Err(format!(
+            "energy rise {rise_after:.3e} J > {} J after t={:.4}",
+            p.energy_rise, p.by
+        ))
     } else if gain > p.energy_gain {
-        Err(format!("energy gain {gain:.3e} > {} of E(0) = {e0:.3} J", p.energy_gain))
+        Err(format!(
+            "energy gain {gain:.3e} > {} of E(0) = {e0:.3} J",
+            p.energy_gain
+        ))
     } else {
         Ok(())
     };

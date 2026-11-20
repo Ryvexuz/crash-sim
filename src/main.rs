@@ -1,8 +1,12 @@
-use crash_sim::{events_text, run_body_report, run_checked_with_contact, to_csv, to_csv_with_broken, Config};
+use crash_sim::{
+    events_text, run_body_report, run_checked_with_contact, to_csv, to_csv_with_broken, Config,
+};
 use std::io::Write;
 use std::process::exit;
 
-use crash_sim::{collide, settle};
+use crash_sim::input::{self, DriveParams, DriveRun, Script};
+use crash_sim::settle::{self, CarSetup, SettleParams};
+use crash_sim::{collide, Body};
 
 /// Write `text` and flush. The only path any stdout output takes, so a closed pipe or a full
 /// disk is an error value, never a panic and never silently dropped.
@@ -30,7 +34,9 @@ fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
+    eprintln!("       crash-sim --body <car.bsn> --input <file> [--duration <s>] [--slope-grip-frac <f>]   (per-step rows and a final line)");
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
+    eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
     eprintln!("       crash-sim --body <file.bsn> ... --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
     exit(2)
 }
@@ -53,18 +59,32 @@ fn main() {
     let mut body_path: Option<String> = None;
     let mut crumple_report = false;
     let mut crumple_groups: Option<(String, String)> = None;
-    let (mut cmin, mut cmax, mut cdrift): (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
+    let (mut cmin, mut cmax, mut cdrift): (Option<f64>, Option<f64>, Option<f64>) =
+        (None, None, None);
     let mut cube_only = false;
     let mut input_path: Option<String> = None;
+    let mut duration_given = false;
+    let mut drive_report = false;
+    let (mut lap_heading, mut lap_path, mut lap_close): (Option<f64>, Option<f64>, Option<f64>) =
+        (None, None, None);
+    let (mut imp_min, mut imp_max): (Option<f64>, Option<f64>) = (None, None);
     let mut slope_grip: Option<f64> = None;
     let mut slope_report = false;
     let (mut slope_from, mut slope_to): (Option<f64>, Option<f64>) = (None, None);
-    let (mut by, mut hold, mut speed, mut rise, mut gain): (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>) =
-        (None, None, None, None, None);
+    let (mut by, mut hold, mut speed, mut rise, mut gain): (
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+    ) = (None, None, None, None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--duration" => cfg.duration = num(&mut args, "--duration"),
+            "--duration" => {
+                duration_given = true;
+                cfg.duration = num(&mut args, "--duration")
+            }
             "--dt" => cfg.dt = num(&mut args, "--dt"),
             "--substeps" => cfg.substeps = num(&mut args, "--substeps"),
             "--drop-height" => {
@@ -85,6 +105,12 @@ fn main() {
                     usage()
                 }
             },
+            "--drive-report" => drive_report = true,
+            "--lap-min-heading" => lap_heading = Some(num(&mut args, "--lap-min-heading")),
+            "--lap-min-path" => lap_path = Some(num(&mut args, "--lap-min-path")),
+            "--lap-close" => lap_close = Some(num(&mut args, "--lap-close")),
+            "--impact-min-kmh" => imp_min = Some(num(&mut args, "--impact-min-kmh")),
+            "--impact-max-kmh" => imp_max = Some(num(&mut args, "--impact-max-kmh")),
             "--slope-grip-frac" => slope_grip = Some(num(&mut args, "--slope-grip-frac")),
             "--slope-report" => slope_report = true,
             "--slope-from" => slope_from = Some(num(&mut args, "--slope-from")),
@@ -106,7 +132,9 @@ fn main() {
             "--crumple-groups" => {
                 let v = args.next().unwrap_or_default();
                 match v.split_once(',') {
-                    Some((a, b)) if !a.is_empty() && !b.is_empty() && !b.contains(',') => crumple_groups = Some((a.to_string(), b.to_string())),
+                    Some((a, b)) if !a.is_empty() && !b.is_empty() && !b.contains(',') => {
+                        crumple_groups = Some((a.to_string(), b.to_string()))
+                    }
                     _ => {
                         eprintln!("--crumple-groups needs <from>,<to>");
                         usage()
@@ -142,7 +170,8 @@ fn main() {
         }
         None => None,
     };
-    let any_crumple = crumple_groups.is_some() || cmin.is_some() || cmax.is_some() || cdrift.is_some();
+    let any_crumple =
+        crumple_groups.is_some() || cmin.is_some() || cmax.is_some() || cdrift.is_some();
     if (crumple_report || any_crumple) && !settle_report {
         eprintln!("--crumple-report and its flags need --settle-report (and its five thresholds)");
         usage()
@@ -151,29 +180,51 @@ fn main() {
         eprintln!("--crumple-groups, --crumple-min, --crumple-max and --crumple-drift need --crumple-report");
         usage()
     }
-    // The car flags: they set up a car (Sim::from_car), so they need a body with wheels, and a
-    // report to print (settle or slope). A plain run still refuses a body with wheels.
+    // The car flags: they set up a car (Sim::from_car), so they need a body with wheels, and
+    // something to print: a report, or the per-step rows of an --input drive. A plain run still
+    // refuses a body with wheels.
     let has_wheels = body.as_ref().is_some_and(|b| !b.wheels.is_empty());
-    let car_flags = input_path.is_some() || slope_grip.is_some() || slope_report || slope_from.is_some() || slope_to.is_some();
+    let any_lap = lap_heading.is_some()
+        || lap_path.is_some()
+        || lap_close.is_some()
+        || imp_min.is_some()
+        || imp_max.is_some();
+    let car_flags = input_path.is_some()
+        || slope_grip.is_some()
+        || slope_report
+        || slope_from.is_some()
+        || slope_to.is_some()
+        || drive_report
+        || any_lap;
     if car_flags {
         if !has_wheels {
-            eprintln!("--input, --slope-grip-frac and --slope-report need --body with a body that has wheels");
+            eprintln!("--input, --slope-grip-frac, --slope-report and --drive-report need --body with a body that has wheels");
             usage()
         }
-        if !settle_report && !slope_report {
-            eprintln!("--input and --slope-grip-frac need --settle-report or --slope-report (the per-step output of a car is not available yet)");
+        if input_path.is_none() && !settle_report && !slope_report {
+            eprintln!("--slope-grip-frac needs --settle-report or --slope-report, or an --input drive to run");
             usage()
         }
         if crumple_report {
-            eprintln!("--crumple-report cannot be used with --input, --slope-grip-frac or --slope-report");
+            eprintln!("--crumple-report cannot be used with --input, --slope-grip-frac, --slope-report or --drive-report");
             usage()
         }
         if summary {
-            eprintln!("--summary cannot be used with --input, --slope-grip-frac or --slope-report");
+            eprintln!("--summary cannot be used with --input, --slope-grip-frac, --slope-report or --drive-report");
+            usage()
+        }
+        if (drive_report || any_lap) && input_path.is_none() {
+            eprintln!("--drive-report and its flags need --input");
+            usage()
+        }
+        if any_lap && !drive_report {
+            eprintln!("--lap-min-heading, --lap-min-path, --lap-close, --impact-min-kmh and --impact-max-kmh need --drive-report");
             usage()
         }
     }
-    if slope_report != (slope_from.is_some() && slope_to.is_some()) || (slope_from.is_some() != slope_to.is_some()) {
+    if slope_report != (slope_from.is_some() && slope_to.is_some())
+        || (slope_from.is_some() != slope_to.is_some())
+    {
         eprintln!("--slope-report needs --slope-from and --slope-to, and they need --slope-report");
         usage()
     }
@@ -181,35 +232,105 @@ fn main() {
         eprintln!("--slope-report needs --slope-grip-frac");
         usage()
     }
-    let car_setup = match (&input_path, &body) {
-        (_, None) => settle::CarSetup::default(),
-        (input, Some(_)) => {
-            let brake = match input {
-                None => false,
-                Some(path) => {
-                    let text = match std::fs::read_to_string(path) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            eprintln!("crash-sim: --input {path}: {e}");
-                            exit(2)
-                        }
-                    };
-                    match settle::parse_brake_input(&text) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            eprintln!("crash-sim: {path}: {e}");
-                            exit(2)
-                        }
-                    }
+    let script = match (&input_path, car_flags) {
+        (Some(path), true) => {
+            let text = match std::fs::read_to_string(path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("crash-sim: --input {path}: {e}");
+                    exit(2)
                 }
             };
-            settle::CarSetup { brake, grip_frac: slope_grip }
+            match Script::parse(&text) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("crash-sim: {path}: {e}");
+                    exit(2)
+                }
+            }
         }
+        _ => None,
     };
-    let any_threshold = by.is_some() || hold.is_some() || speed.is_some() || rise.is_some() || gain.is_some();
+    let any_threshold =
+        by.is_some() || hold.is_some() || speed.is_some() || rise.is_some() || gain.is_some();
+    if car_flags {
+        // A car run: its own path, which prints every report it was asked for.
+        let Some(b) = &body else { usage() };
+        let settle_params = if settle_report {
+            // No defaults: all five thresholds are required.
+            let (Some(by), Some(hold), Some(speed), Some(rise), Some(gain)) =
+                (by, hold, speed, rise, gain)
+            else {
+                eprintln!("--settle-report needs --settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain");
+                usage()
+            };
+            let params = SettleParams {
+                by,
+                hold,
+                speed,
+                energy_rise: rise,
+                energy_gain: gain,
+            };
+            if let Err(e) = params.validate() {
+                eprintln!("{e}");
+                usage()
+            }
+            Some(params)
+        } else {
+            if any_threshold {
+                eprintln!("--settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain need --settle-report");
+                usage()
+            }
+            None
+        };
+        let drive_params = if drive_report {
+            // No defaults: all five thresholds are required.
+            let (
+                Some(lap_min_heading),
+                Some(lap_min_path),
+                Some(lap_close),
+                Some(impact_min_kmh),
+                Some(impact_max_kmh),
+            ) = (lap_heading, lap_path, lap_close, imp_min, imp_max)
+            else {
+                eprintln!("--drive-report needs --lap-min-heading, --lap-min-path, --lap-close, --impact-min-kmh and --impact-max-kmh");
+                usage()
+            };
+            let p = DriveParams {
+                lap_min_heading,
+                lap_min_path,
+                lap_close,
+                impact_min_kmh,
+                impact_max_kmh,
+            };
+            if let Err(e) = p.validate() {
+                eprintln!("{e}");
+                usage()
+            }
+            Some(p)
+        } else {
+            None
+        };
+        let setup = CarSetup {
+            script,
+            until_script_end: !duration_given,
+            grip_frac: slope_grip,
+        };
+        let args = CarArgs {
+            cfg: &cfg,
+            body: b,
+            setup,
+            settle: settle_params,
+            slope: slope_from.zip(slope_to).filter(|_| slope_report),
+            drive: drive_params,
+        };
+        exit(run_car(&args));
+    }
     if settle_report {
         // No defaults: all five thresholds are required, and --summary is a different output.
-        let (Some(by), Some(hold), Some(speed), Some(rise), Some(gain)) = (by, hold, speed, rise, gain) else {
+        let (Some(by), Some(hold), Some(speed), Some(rise), Some(gain)) =
+            (by, hold, speed, rise, gain)
+        else {
             eprintln!("--settle-report needs --settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain");
             usage()
         };
@@ -217,25 +338,40 @@ fn main() {
             eprintln!("--settle-report and --summary cannot be used together");
             usage()
         }
-        let params = settle::SettleParams { by, hold, speed, energy_rise: rise, energy_gain: gain };
+        let params = SettleParams {
+            by,
+            hold,
+            speed,
+            energy_rise: rise,
+            energy_gain: gain,
+        };
         if let Err(e) = params.validate() {
             eprintln!("{e}");
             usage()
         }
         if crumple_report {
             // No defaults: the groups and the three thresholds are all required.
-            let (Some((from, to)), Some(min), Some(max), Some(drift)) = (crumple_groups, cmin, cmax, cdrift) else {
+            let (Some((from, to)), Some(min), Some(max), Some(drift)) =
+                (crumple_groups, cmin, cmax, cdrift)
+            else {
                 eprintln!("--crumple-report needs --crumple-groups, --crumple-min, --crumple-max and --crumple-drift");
                 usage()
             };
-            let cp = collide::CrumpleParams { from, to, min, max, drift };
-            let (report, crumple) = match collide::measure_crumple(&cfg, body.as_ref(), &params, &cp) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("{e}");
-                    usage()
-                }
+            let cp = collide::CrumpleParams {
+                from,
+                to,
+                min,
+                max,
+                drift,
             };
+            let (report, crumple) =
+                match collide::measure_crumple(&cfg, body.as_ref(), &params, &cp) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        usage()
+                    }
+                };
             let mut out = report.render();
             if let Some(c) = &crumple {
                 out.push_str(&c.render());
@@ -247,22 +383,11 @@ fn main() {
             return;
         }
         let report = match &body {
-            Some(b) if has_wheels => settle::measure_car(&cfg, b, &car_setup, &params),
+            Some(b) if has_wheels => settle::measure_car(&cfg, b, &CarSetup::default(), &params),
             _ => settle::measure_body(&cfg, body.as_ref(), &params),
         };
-        let mut out = report.render();
-        let mut slope_failed = false;
-        if let (true, Some(b), Some(from), Some(to)) = (slope_report, &body, slope_from, slope_to) {
-            match settle::measure_slope(&cfg, b, &car_setup, from, to) {
-                Ok(r) => out.push_str(&r.render()),
-                Err(e) => {
-                    eprintln!("crash-sim: {e}");
-                    slope_failed = true;
-                }
-            }
-        }
-        emit(&out);
-        if !report.is_ok() || slope_failed {
+        emit(&report.render());
+        if !report.is_ok() {
             exit(1);
         }
         return;
@@ -270,16 +395,6 @@ fn main() {
     if any_threshold {
         eprintln!("--settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain need --settle-report");
         usage()
-    }
-    if let (true, Some(b), Some(from), Some(to)) = (slope_report, &body, slope_from, slope_to) {
-        match settle::measure_slope(&cfg, b, &car_setup, from, to) {
-            Ok(r) => emit(&r.render()),
-            Err(e) => {
-                eprintln!("crash-sim: {e}");
-                exit(1);
-            }
-        }
-        return;
     }
     let (samples, first_contact, breaks, result) = match &body {
         Some(b) => {
@@ -305,7 +420,10 @@ fn main() {
                     Some(t) => format!("{t:.4}"),
                     None => "none".to_string(),
                 };
-                let peak = samples.iter().map(|s| s.max_beam_strain).fold(f64::MIN, f64::max);
+                let peak = samples
+                    .iter()
+                    .map(|s| s.max_beam_strain)
+                    .fold(f64::MIN, f64::max);
                 emit(&format!(
                     "first_contact_s={contact},peak_strain={peak:.6},final_center_y={:.4}\n",
                     last.center_y
@@ -314,7 +432,11 @@ fn main() {
         }
     } else if !samples.is_empty() {
         // The broken_beams column is for --body runs only: the cube's CSV stays as it was.
-        emit(&if body.is_some() { to_csv_with_broken(&samples) } else { to_csv(&samples) });
+        emit(&if body.is_some() {
+            to_csv_with_broken(&samples)
+        } else {
+            to_csv(&samples)
+        });
     }
     if events && !breaks.is_empty() {
         emit(&events_text(&breaks));
@@ -322,6 +444,84 @@ fn main() {
     if result.is_err() {
         exit(1);
     }
+}
+
+/// Everything a car run needs, already validated.
+struct CarArgs<'a> {
+    cfg: &'a Config,
+    body: &'a Body,
+    setup: CarSetup,
+    settle: Option<SettleParams>,
+    /// `--slope-from`, `--slope-to` when `--slope-report` is on.
+    slope: Option<(f64, f64)>,
+    drive: Option<DriveParams>,
+}
+
+/// A car run: the drive (when there is a script), then the settle and slope reports, printed
+/// in this order: the drive report (which holds the `final` line), the settle report, the slope
+/// report; a run with a script and no drive report ends with the `final` line; a run with a
+/// script and no report prints the per-step rows then the `final` line. Returns the exit code:
+/// 0 ok, 1 a FAIL or an abort, 2 a refused input (the script does not suit the car, the body has
+/// no `front` or `rear` group).
+fn run_car(a: &CarArgs) -> i32 {
+    let mut out = String::new();
+    let mut failed = false;
+    // The drive run feeds the rows, the drive report and the `final` line. It runs first, so a
+    // refusal is reported before anything is printed.
+    let run: Option<DriveRun> = match &a.setup.script {
+        Some(_) => match input::drive(
+            a.cfg,
+            a.body,
+            &a.setup,
+            a.drive.map_or(f64::INFINITY, |p| p.lap_min_heading),
+        ) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("crash-sim: {e}");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    let reports = a.settle.is_some() || a.slope.is_some() || a.drive.is_some();
+    if let Some(r) = &run {
+        if let Some(e) = &r.abort {
+            if a.drive.is_some() {
+                out.push_str(&format!("drive: FAIL {e}\n"));
+            } else {
+                eprintln!("crash-sim: {e}");
+            }
+            failed = true;
+        }
+        if !reports {
+            out.push_str(&input::render_rows(&r.rows));
+        }
+        if let (Some(dp), None) = (&a.drive, &r.abort) {
+            out.push_str(&r.measure.render(dp, &r.final_state));
+            failed |= r.measure.verdict(dp).is_err();
+        }
+    }
+    if let Some(params) = &a.settle {
+        let report = settle::measure_car(a.cfg, a.body, &a.setup, params);
+        out.push_str(&report.render());
+        failed |= !report.is_ok();
+    }
+    if let Some((from, to)) = a.slope {
+        match settle::measure_slope(a.cfg, a.body, &a.setup, from, to) {
+            Ok(r) => out.push_str(&r.render()),
+            Err(e) => {
+                eprintln!("crash-sim: {e}");
+                failed = true;
+            }
+        }
+    }
+    if let Some(r) = &run {
+        if a.drive.is_none() && r.abort.is_none() {
+            out.push_str(&r.final_state.render());
+        }
+    }
+    emit(&out);
+    i32::from(failed)
 }
 
 #[cfg(test)]

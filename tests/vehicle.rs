@@ -7,6 +7,11 @@ use crash_sim::vec3::Vec3;
 use crash_sim::{settle, solver, vehicle, Config, Sim};
 use std::process::Command;
 
+/// The input of `scenarios/full_brake.input`: full brake from t = 0.
+fn full_brake() -> crash_sim::input::Script {
+    crash_sim::input::Script::parse(&scenario("full_brake.input")).unwrap()
+}
+
 fn scenario(name: &str) -> String {
     let path = format!("{}/scenarios/{name}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
@@ -225,7 +230,11 @@ fn braked_on_slope(grip_frac: f64, seconds: u64) -> Run {
     let mut sim = Sim::from_car(substep_cfg(seconds as f64), &body).unwrap();
     sim.set_gravity_tilt(vehicle::slope_angle(&body, grip_frac).unwrap())
         .unwrap();
-    sim.car.as_mut().unwrap().brake = true;
+    sim.car
+        .as_mut()
+        .unwrap()
+        .set_controls(0.0, 1.0, 0.0)
+        .unwrap();
     run(sim, seconds, 8.0)
 }
 
@@ -714,16 +723,22 @@ fn cli_slope_report_matches_friction() {
     assert!((report_value(&out, "slope_tan") - theta.tan()).abs() < 1e-6);
     // the same numbers from the library entry point
     let setup = settle::CarSetup {
-        brake: true,
+        script: Some(full_brake()),
+        until_script_end: false,
         grip_frac: Some(1.2),
     };
     let r = settle::measure_slope(&substep_cfg(4.0), &body, &setup, 2.0, 4.0).unwrap();
     assert!((r.accel - accel).abs() < 1e-3, "{} vs {accel}", r.accel);
     assert!((r.predicted - pred).abs() < 1e-3);
+    // the four slope lines, then the `final` line every --input run ends with
     assert_eq!(
         out.lines().count(),
-        4,
-        "exactly the four slope lines: {out}"
+        5,
+        "the four slope lines and the final line: {out}"
+    );
+    assert!(
+        out.lines().last().unwrap().starts_with("final t=4.0000 "),
+        "{out}"
     );
 }
 
@@ -749,8 +764,7 @@ fn slope_and_input_flags_are_refused_without_wheels_or_a_report() {
     cases.push(vec!["--body", &cube, "--input", &input, "--settle-report"]);
     // no body at all
     cases.push(slope.to_vec());
-    // a car with no report to print
-    cases.push(vec!["--body", &path, "--input", &input]);
+    // a slope with nothing to run or print (--input alone is a drive now: tests/drive.rs)
     cases.push(vec!["--body", &path, "--slope-grip-frac", "0.8"]);
     // the report's own flags
     cases.push(vec![
@@ -823,12 +837,14 @@ fn slope_and_input_flags_are_refused_without_wheels_or_a_report() {
     // below the command line: a body without wheels is refused by the car entry points
     let bare = parse(&scenario("box.bsn")).unwrap();
     let setup = settle::CarSetup {
-        brake: true,
+        script: Some(full_brake()),
+        until_script_end: false,
         grip_frac: None,
     };
     assert!(settle::car_sim(substep_cfg(1.0), &bare, &setup).is_err());
     let sloped = settle::CarSetup {
-        brake: true,
+        script: Some(full_brake()),
+        until_script_end: false,
         grip_frac: Some(1.0),
     };
     assert!(settle::measure_slope(&substep_cfg(1.0), &bare, &sloped, 0.0, 1.0).is_err());
@@ -841,38 +857,12 @@ fn slope_and_input_flags_are_refused_without_wheels_or_a_report() {
         energy_gain: 0.01,
     };
     let nan = settle::CarSetup {
-        brake: true,
+        script: Some(full_brake()),
+        until_script_end: false,
         grip_frac: Some(f64::NAN),
     };
     let r = settle::measure_car(&substep_cfg(12.0), &car(), &nan, &params);
     assert!(r.aborted && !r.is_ok());
-}
-
-#[test]
-fn input_file_is_read_strictly() {
-    assert_eq!(settle::parse_brake_input("0 0 1 0\n"), Ok(true));
-    assert_eq!(settle::parse_brake_input("0 0 0 0"), Ok(false));
-    for bad in [
-        "",
-        "\n",
-        "0 0 1\n",
-        "0 0 1 0 0\n",
-        "0 0 2 0\n",
-        "0 0 0.5 0\n",
-        "0 1 1 0\n",
-        "0 0 1 0.3\n",
-        "1 0 1 0\n",
-        "0 0 NaN 0\n",
-        "0 0 inf 0\n",
-        "0 0 x 0\n",
-        "0 0 1 0\r\n",
-        "0 0 0 0\n10 0 1 0\n",
-    ] {
-        assert!(
-            settle::parse_brake_input(bad).is_err(),
-            "{bad:?} must be refused"
-        );
-    }
 }
 
 /// The settle report of a car uses the car's energy (wheels included), not the nodes-only sum.

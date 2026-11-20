@@ -43,6 +43,10 @@ pub struct WheelParams {
     pub mass: f64,
     pub inertia: f64,
     pub braked: bool,
+    /// Gets a share of the drive torque (`Car::throttle`).
+    pub driven: bool,
+    /// Turns with the steering (`Car::steer`).
+    pub steerable: bool,
     pub spring: f64,
     pub damper: f64,
     pub rest: f64,
@@ -73,6 +77,9 @@ pub struct Wheel {
     /// force pass.
     pub length: f64,
     force: Vec3,
+    /// The axle of the last force pass: the chassis axle turned about the up axis by the steer
+    /// angle for a steerable wheel. Spin is about it and the tyre's rolling direction follows it.
+    axle: Vec3,
     /// The spin at the end of this substep, found in `pre_step` (tyre torque, then the brake).
     spin_next: f64,
 }
@@ -120,11 +127,24 @@ pub struct Substep {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Car {
     pub wheels: Vec<Wheel>,
-    /// Brake flag: when on, every braked wheel gets an equal share of `max_brake_torque`.
-    /// There is no throttle or steering yet (nb-40).
-    pub brake: bool,
+    /// Throttle 0..=1: every driven wheel gets an equal share of `max_drive_torque x throttle`.
+    pub throttle: f64,
+    /// Brake 0..=1: every braked wheel gets an equal share of `max_brake_torque x brake`.
+    pub brake: f64,
+    /// Steering -1..=1: every steerable wheel turns `steer x max_steer` about the up axis,
+    /// positive toward the car's right (+z of the chassis for the file's +x forward, +y up).
+    pub steer: f64,
+    /// Total drive torque at full throttle (N m), from `controls`.
+    pub max_drive_torque: f64,
     /// Total brake torque at full brake (N m), from `controls`.
     pub max_brake_torque: f64,
+    /// Road-wheel angle of a steerable wheel at full steer (rad), from `controls`.
+    pub max_steer: f64,
+    /// W(t), the work (J) the drive torque has done so far: per wheel and substep the torque
+    /// times the substep times the mean spin of the wheel relative to the chassis (the engine
+    /// pushes the wheel and the chassis the opposite way). The energy rule of docs/STAGE6.md
+    /// (settle rule 4) subtracts it.
+    pub drive_work: f64,
     /// The reference load of every tyre (N): the static load per wheel, total weight / wheel
     /// count. The patch spring has the fixed rate C x reference load / sigma (see `tyre_force`).
     pub reference_load: f64,
@@ -243,6 +263,8 @@ fn wheel_params(body: &Body) -> Result<Vec<WheelParams>, String> {
             mass: w.mass,
             inertia: w.inertia,
             braked: w.braked,
+            driven: w.driven,
+            steerable: w.steerable,
             spring: s.spring,
             damper: s.damper,
             rest: s.rest,
@@ -331,10 +353,30 @@ impl Car {
         let wz: Vec<f64> = pos.iter().map(|p| (*p - c0).dot(bz)).collect();
         let total_mass: f64 = mass.iter().sum::<f64>() + params.iter().map(|w| w.mass).sum::<f64>();
         let reference_load = total_mass * g / params.len() as f64;
+        if !(controls.max_drive_torque.is_finite() && controls.max_drive_torque > 0.0) {
+            return Err(format!(
+                "max_drive_torque {} must be a finite number > 0",
+                controls.max_drive_torque
+            ));
+        }
+        if !(controls.max_steer_deg.is_finite()
+            && controls.max_steer_deg > 0.0
+            && controls.max_steer_deg < 90.0)
+        {
+            return Err(format!(
+                "max_steer_deg {} must be a finite number between 0 and 90",
+                controls.max_steer_deg
+            ));
+        }
         let mut car = Car {
             wheels: Vec::new(),
-            brake: false,
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 0.0,
+            max_drive_torque: controls.max_drive_torque,
             max_brake_torque: controls.max_brake_torque,
+            max_steer: controls.max_steer_deg.to_radians(),
+            drive_work: 0.0,
             reference_load,
             wx,
             wz,
@@ -361,6 +403,7 @@ impl Car {
                 load: vec![0.0; n_planes],
                 length: p.rest,
                 force: Vec3::ZERO,
+                axle: car.frame.axle,
                 spin_next: spin,
                 p,
             });
@@ -431,15 +474,68 @@ impl Car {
         (masses, el)
     }
 
-    /// The brake torque on wheel `w` now (N m): an equal share of the total for each braked
-    /// wheel while the brake flag is on, else 0.
+    /// Set the controls (throttle 0..=1, brake 0..=1, steer -1..=1). A value outside its range,
+    /// or not finite, is refused and nothing changes; so is throttle on a car with no driven
+    /// wheel, brake on one with no braked wheel and steer on one with no steerable wheel (the
+    /// input would silently do nothing).
+    pub fn set_controls(&mut self, throttle: f64, brake: f64, steer: f64) -> Result<(), String> {
+        if !(throttle.is_finite() && (0.0..=1.0).contains(&throttle)) {
+            return Err(format!("throttle {throttle} must be a number from 0 to 1"));
+        }
+        if !(brake.is_finite() && (0.0..=1.0).contains(&brake)) {
+            return Err(format!("brake {brake} must be a number from 0 to 1"));
+        }
+        if !(steer.is_finite() && (-1.0..=1.0).contains(&steer)) {
+            return Err(format!("steer {steer} must be a number from -1 to 1"));
+        }
+        if throttle > 0.0 && !self.wheels.iter().any(|w| w.p.driven) {
+            return Err("throttle needs a driven wheel, and the car has none".into());
+        }
+        if brake > 0.0 && !self.wheels.iter().any(|w| w.p.braked) {
+            return Err("brake needs a braked wheel, and the car has none".into());
+        }
+        if steer != 0.0 && !self.wheels.iter().any(|w| w.p.steerable) {
+            return Err("steer needs a steerable wheel, and the car has none".into());
+        }
+        self.throttle = throttle;
+        self.brake = brake;
+        self.steer = steer;
+        Ok(())
+    }
+
+    /// The brake torque on wheel `w` now (N m): an equal share of `max_brake_torque x brake`
+    /// for each braked wheel.
     fn brake_torque(&self, w: &Wheel) -> f64 {
         let n = self.wheels.iter().filter(|w| w.p.braked).count();
-        if self.brake && w.p.braked && n > 0 {
-            self.max_brake_torque / n as f64
+        if w.p.braked && n > 0 {
+            self.max_brake_torque * self.brake / n as f64
         } else {
             0.0
         }
+    }
+
+    /// The drive torque on wheel `w` now (N m): an equal share of `max_drive_torque x throttle`
+    /// for each driven wheel.
+    fn drive_torque(&self, w: &Wheel) -> f64 {
+        let n = self.wheels.iter().filter(|w| w.p.driven).count();
+        if w.p.driven && n > 0 {
+            self.max_drive_torque * self.throttle / n as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// The axle of wheel `w` for frame `fr`: the chassis axle, turned about the up axis by
+    /// `steer x max_steer` (positive toward +z of the chassis, the car's right) when the wheel
+    /// is steerable. The wheel's rolling direction is up x axle.
+    fn wheel_axle(&self, w: &Wheel, fr: &Frame) -> Vec3 {
+        if !w.p.steerable || self.steer == 0.0 {
+            return fr.axle;
+        }
+        let (s, c) = (self.steer * self.max_steer).sin_cos();
+        let right = fr.forward.cross(fr.up);
+        let rolling = fr.forward * c + right * s;
+        fr.up.cross(rolling)
     }
 
     /// Before the solver's step of length `h`: the frame, then every wheel's suspension, tyre
@@ -467,6 +563,7 @@ impl Car {
         let Substep { gravity, h } = step;
         let mut chassis_torque = self.carrier_torque;
         let brake: Vec<f64> = self.wheels.iter().map(|w| self.brake_torque(w)).collect();
+        let drive: Vec<f64> = self.wheels.iter().map(|w| self.drive_torque(w)).collect();
         let old = self.frame;
         match self.fit_frame(pos) {
             Ok(f) => self.frame = f,
@@ -477,12 +574,19 @@ impl Car {
             }
         }
         let fr = self.frame;
+        let axles: Vec<Vec3> = self
+            .wheels
+            .iter()
+            .map(|w| self.wheel_axle(w, &fr))
+            .collect();
+        let mut drive_work = 0.0;
         // The chassis' rotation rate about the axle (rad/s), from how far its forward axis turned
         // since the last substep: d(forward)/dt = omega x forward, so omega . axle =
         // -(d forward/dt) . up. The brake acts on the wheel's spin relative to this.
         let chassis_spin = -((fr.forward - old.forward) * (1.0 / h)).dot(fr.up);
         let reference_load = self.reference_load;
-        for (w, tb) in self.wheels.iter_mut().zip(brake) {
+        for (((w, tb), td), wa) in self.wheels.iter_mut().zip(brake).zip(drive).zip(axles) {
+            w.axle = wa;
             let (c, vc) = centroid(&w.p.mount, pos, vel);
             let s = (c - w.pos).dot(fr.up);
             let s_dot = (vc - w.vel).dot(fr.up);
@@ -496,12 +600,12 @@ impl Car {
             let mut force = gravity * w.p.mass + fr.up * (-f_s);
             let mut torque = 0.0;
             for (k, pl) in planes.iter().enumerate() {
-                let (fz, ft) = tyre_force(w, k, pl, fr.axle, reference_load);
+                let (fz, ft) = tyre_force(w, k, pl, wa, reference_load);
                 w.load[k] = fz;
                 if fz > 0.0 {
                     let rc = pl.normal * (-w.p.radius);
                     force += pl.normal * fz + ft;
-                    torque += rc.cross(ft).dot(fr.axle);
+                    torque += rc.cross(ft).dot(wa);
                 }
             }
             // Across the axis the carrier takes the force: onto the mount nodes, with its moment.
@@ -511,19 +615,26 @@ impl Car {
             }
             chassis_torque += (w.pos - c).cross(across);
             w.force = force - across;
-            // Spin: tyre torque first, then the brake, which at most stops the wheel turning
-            // relative to the chassis (the caliper turns with the chassis).
-            let free = w.spin + torque * (h / w.p.inertia);
+            // Spin: tyre torque and drive torque first, then the brake, which at most stops the
+            // wheel turning relative to the chassis (the caliper turns with the chassis). The
+            // chassis' rate about this wheel's axle is its rate about the chassis axle, scaled
+            // by how far the steering turned the axle.
+            let cs = chassis_spin * wa.dot(fr.axle);
+            let free = w.spin + (torque + td) * (h / w.p.inertia);
             let stop = tb * h / w.p.inertia;
-            let rel = free - chassis_spin;
-            w.spin_next = chassis_spin
+            let rel = free - cs;
+            w.spin_next = cs
                 + if rel.abs() <= stop {
                     0.0
                 } else {
                     rel - rel.signum() * stop
                 };
-            chassis_torque += fr.axle * (-w.p.inertia * (w.spin_next - free) / h);
+            // The brake's reaction, and the engine's: the engine is on the chassis, so the
+            // chassis gets the drive torque back the other way about the axle.
+            chassis_torque += wa * (-w.p.inertia * (w.spin_next - free) / h - td);
+            drive_work += td * h * (0.5 * (w.spin + w.spin_next) - cs);
         }
+        self.drive_work += drive_work;
         add_torque(pos, mass, chassis_torque, extra);
     }
 
@@ -538,7 +649,6 @@ impl Car {
         planes: &[Plane],
         h: f64,
     ) {
-        let axle = self.frame.axle;
         // The axis after the solver's step, and how fast it turned: a point at distance s down
         // the axis moves with the mount centroid's velocity minus s du/dt.
         let up_old = self.frame.up;
@@ -590,12 +700,12 @@ impl Car {
                     continue;
                 }
                 let n = pl.normal;
-                let (vs, speed) = patch_slip(w.vel, w.spin, w.p.radius, n, axle);
+                let (vs, speed) = patch_slip(w.vel, w.spin, w.p.radius, n, w.axle);
                 let mut d =
                     (w.deflection[k] + vs * h) * (1.0 / (1.0 + h * speed / TYRE_RELAXATION_LENGTH));
                 d = d - n * d.dot(n);
                 // Sliding: the elastic force may not exceed the friction circle.
-                let (ft, lt) = patch_axes(n, axle);
+                let (ft, lt) = patch_axes(n, w.axle);
                 let kz = reference_load / TYRE_RELAXATION_LENGTH;
                 let fx = kz * w.p.long_stiffness * d.dot(ft);
                 let fy = kz * w.p.lat_stiffness * d.dot(lt);
@@ -622,6 +732,19 @@ impl Car {
     pub fn check(&self) -> Option<String> {
         if let Some(e) = &self.frame_error {
             return Some(e.clone());
+        }
+        if !(self.throttle.is_finite()
+            && (0.0..=1.0).contains(&self.throttle)
+            && self.brake.is_finite()
+            && (0.0..=1.0).contains(&self.brake)
+            && self.steer.is_finite()
+            && (-1.0..=1.0).contains(&self.steer)
+            && self.drive_work.is_finite())
+        {
+            return Some(format!(
+                "car controls out of range or not finite: throttle {}, brake {}, steer {}, drive work {}",
+                self.throttle, self.brake, self.steer, self.drive_work
+            ));
         }
         for w in &self.wheels {
             if !(finite3(w.pos)
@@ -662,7 +785,7 @@ impl Car {
                     e += 0.5 * p.radial_stiffness * pen * pen;
                 }
                 if w.load[k] > 0.0 {
-                    let (ft, lt) = patch_axes(pl.normal, self.frame.axle);
+                    let (ft, lt) = patch_axes(pl.normal, w.axle);
                     let kz = self.reference_load / TYRE_RELAXATION_LENGTH;
                     let (dx, dy) = (w.deflection[k].dot(ft), w.deflection[k].dot(lt));
                     e += 0.5 * kz * (p.long_stiffness * dx * dx + p.lat_stiffness * dy * dy);
