@@ -8,10 +8,11 @@
 //!
 //! `measure_crumple` is the `--crumple-report` of docs/STAGE6.md, milestone 2: it runs the
 //! settle report of `settle::measure_with` and measures, at every substep, how much shorter
-//! the body is between two named groups.
+//! the body is between two named groups. `measure_crumple_car` is the same report for a car
+//! run (milestone 3, check 3.6): the settle run of `settle::measure_car_with`, the same length.
 
 use crate::format::{self, Body};
-use crate::settle::{measure_body_with, SettleParams, SettleReport};
+use crate::settle::{measure_body_with, measure_car_with, CarSetup, SettleParams, SettleReport};
 use crate::vec3::Vec3;
 use crate::{Config, Sim, FRICTION_RATE, REST_SPEED, RESTITUTION};
 
@@ -197,14 +198,43 @@ impl CrumpleReport {
 /// the crumple at every substep. Returns the settle report and, unless the run aborted, the
 /// crumple report. `Err` is a usage problem (no body, a missing group, bad thresholds), not a
 /// FAIL verdict.
+///
+/// A body with wheels is refused here (its settle run aborts, as `measure_body_with` refuses
+/// wheels): a car is measured by `measure_crumple_car`.
 pub fn measure_crumple(
     cfg: &Config,
     body: Option<&Body>,
     sp: &SettleParams,
     cp: &CrumpleParams,
 ) -> Result<(SettleReport, Option<CrumpleReport>), String> {
+    let body = body.ok_or_else(|| {
+        "--crumple-report needs --body (the groups are named in the body file)".to_string()
+    })?;
+    crumple_inner(cfg, body, None, sp, cp)
+}
+
+/// The crumple report of a car (docs/STAGE6.md check 3.6): the run is the car run of `setup`
+/// (`settle::measure_car_with`: wheels, suspension, tyres, the input script), and the length is
+/// measured, as for any body, between the centroids of the two groups of chassis nodes. The
+/// wheels are not nodes and are in no group, so the crumple is the chassis crumple.
+pub fn measure_crumple_car(
+    cfg: &Config,
+    body: &Body,
+    setup: &CarSetup,
+    sp: &SettleParams,
+    cp: &CrumpleParams,
+) -> Result<(SettleReport, Option<CrumpleReport>), String> {
+    crumple_inner(cfg, body, Some(setup), sp, cp)
+}
+
+fn crumple_inner(
+    cfg: &Config,
+    body: &Body,
+    car: Option<&CarSetup>,
+    sp: &SettleParams,
+    cp: &CrumpleParams,
+) -> Result<(SettleReport, Option<CrumpleReport>), String> {
     cp.validate()?;
-    let body = body.ok_or_else(|| "--crumple-report needs --body (the groups are named in the body file)".to_string())?;
     let group = |name: &str| -> Result<Vec<usize>, String> {
         let g = body.groups.iter().find(|g| g.name == name).ok_or_else(|| format!("the body has no group `{name}`"))?;
         Ok(g.nodes.iter().map(|id| body.node_index(*id).expect("group names declared nodes")).collect())
@@ -227,7 +257,7 @@ pub fn measure_crumple(
     let mut delta_max = 0.0_f64;
     let mut min_after = f64::INFINITY;
     let mut max_after = f64::NEG_INFINITY;
-    let settle = measure_body_with(cfg, Some(body), sp, |sim: &mut Sim, i: u64| {
+    let hook = |sim: &mut Sim, i: u64| {
         let t = i as f64 * h;
         let l = length(&sim.pos);
         let d = start - l;
@@ -237,7 +267,11 @@ pub fn measure_crumple(
             min_after = min_after.min(d);
             max_after = max_after.max(d);
         }
-    });
+    };
+    let settle = match car {
+        Some(setup) => measure_car_with(cfg, body, setup, sp, hook),
+        None => measure_body_with(cfg, Some(body), sp, hook),
+    };
     if settle.aborted {
         return Ok((settle, None));
     }

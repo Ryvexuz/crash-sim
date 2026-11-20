@@ -38,7 +38,7 @@ fn usage() -> ! {
     eprintln!("       crash-sim --body <car.bsn> --live [--dt <s>] [--substeps <n>]   (input lines on stdin, rows on stdout: docs/STAGE6.md, \"The live protocol\")");
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
-    eprintln!("       crash-sim --body <file.bsn> ... --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
+    eprintln!("       crash-sim --body <file.bsn> [--input <file> [--drive-report ...]] --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
     exit(2)
 }
 
@@ -49,6 +49,27 @@ fn num<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, flag: &str
             eprintln!("{flag} needs a numeric value");
             usage()
         }
+    }
+}
+
+/// The crumple thresholds from their flags. No defaults: the groups and the three thresholds
+/// are all required, so a missing one is a usage error.
+fn crumple_params(
+    groups: Option<(String, String)>,
+    min: Option<f64>,
+    max: Option<f64>,
+    drift: Option<f64>,
+) -> collide::CrumpleParams {
+    let (Some((from, to)), Some(min), Some(max), Some(drift)) = (groups, min, max, drift) else {
+        eprintln!("--crumple-report needs --crumple-groups, --crumple-min, --crumple-max and --crumple-drift");
+        usage()
+    };
+    collide::CrumpleParams {
+        from,
+        to,
+        min,
+        max,
+        drift,
     }
 }
 
@@ -245,8 +266,8 @@ fn main() {
             eprintln!("--slope-grip-frac needs --settle-report or --slope-report, or an --input drive to run");
             usage()
         }
-        if crumple_report {
-            eprintln!("--crumple-report cannot be used with --input, --slope-grip-frac, --slope-report or --drive-report");
+        if crumple_report && (slope_grip.is_some() || slope_report) {
+            eprintln!("--crumple-report cannot be used with --slope-grip-frac or --slope-report");
             usage()
         }
         if summary {
@@ -355,6 +376,11 @@ fn main() {
         } else {
             None
         };
+        let crumple = if crumple_report {
+            Some(crumple_params(crumple_groups.clone(), cmin, cmax, cdrift))
+        } else {
+            None
+        };
         let setup = CarSetup {
             script,
             until_script_end: !duration_given,
@@ -367,6 +393,7 @@ fn main() {
             settle: settle_params,
             slope: slope_from.zip(slope_to).filter(|_| slope_report),
             drive: drive_params,
+            crumple,
         };
         exit(run_car(&args));
     }
@@ -394,20 +421,9 @@ fn main() {
             usage()
         }
         if crumple_report {
-            // No defaults: the groups and the three thresholds are all required.
-            let (Some((from, to)), Some(min), Some(max), Some(drift)) =
-                (crumple_groups, cmin, cmax, cdrift)
-            else {
-                eprintln!("--crumple-report needs --crumple-groups, --crumple-min, --crumple-max and --crumple-drift");
-                usage()
-            };
-            let cp = collide::CrumpleParams {
-                from,
-                to,
-                min,
-                max,
-                drift,
-            };
+            let cp = crumple_params(crumple_groups, cmin, cmax, cdrift);
+            // A body with wheels is refused here (its run aborts, as `measure_crumple` does not
+            // simulate wheels); a car's crumple is measured on its --input run (`run_car`).
             let (report, crumple) =
                 match collide::measure_crumple(&cfg, body.as_ref(), &params, &cp) {
                     Ok(r) => r,
@@ -526,14 +542,16 @@ struct CarArgs<'a> {
     /// `--slope-from`, `--slope-to` when `--slope-report` is on.
     slope: Option<(f64, f64)>,
     drive: Option<DriveParams>,
+    /// `--crumple-report` (only with `--settle-report`): measured on the settle run.
+    crumple: Option<collide::CrumpleParams>,
 }
 
-/// A car run: the drive (when there is a script), then the settle and slope reports, printed
-/// in this order: the drive report (which holds the `final` line), the settle report, the slope
-/// report; a run with a script and no drive report ends with the `final` line; a run with a
-/// script and no report prints the per-step rows then the `final` line. Returns the exit code:
-/// 0 ok, 1 a FAIL or an abort, 2 a refused input (the script does not suit the car, the body has
-/// no `front` or `rear` group).
+/// A car run: the drive (when there is a script), then the settle (and crumple) and slope
+/// reports, printed in this order: the drive report (which holds the `final` line), the settle
+/// report, the crumple report, the slope report; a run with a script and no drive report ends
+/// with the `final` line; a run with a script and no report prints the per-step rows then the
+/// `final` line. Returns the exit code: 0 ok, 1 a FAIL or an abort, 2 a refused input (the script
+/// does not suit the car, the body has no `front` or `rear` group or no crumple group).
 fn run_car(a: &CarArgs) -> i32 {
     let mut out = String::new();
     let mut failed = false;
@@ -587,9 +605,28 @@ fn run_car(a: &CarArgs) -> i32 {
         }
     }
     if let Some(params) = &a.settle {
-        let report = settle::measure_car(a.cfg, a.body, &a.setup, params);
-        out.push_str(&report.render());
-        failed |= !report.is_ok();
+        match &a.crumple {
+            Some(cp) => match collide::measure_crumple_car(a.cfg, a.body, &a.setup, params, cp) {
+                Ok((report, crumple)) => {
+                    out.push_str(&report.render());
+                    failed |= !report.is_ok();
+                    if let Some(c) = &crumple {
+                        out.push_str(&c.render());
+                        failed |= !c.is_ok();
+                    }
+                }
+                Err(e) => {
+                    // A usage problem (a missing group, bad thresholds), found before any output.
+                    eprintln!("crash-sim: {e}");
+                    return 2;
+                }
+            },
+            None => {
+                let report = settle::measure_car(a.cfg, a.body, &a.setup, params);
+                out.push_str(&report.render());
+                failed |= !report.is_ok();
+            }
+        }
     }
     if let Some((from, to)) = a.slope {
         match settle::measure_slope(a.cfg, a.body, &a.setup, from, to) {
