@@ -487,7 +487,14 @@ impl Sim {
             let v = self.vel[i];
             e += 0.5 * self.mass[i] * v.dot(v) - self.mass[i] * gv.dot(self.pos[i]);
         }
-        for b in self.live_beams() {
+        // The unbroken beams in index order, read in place (no copy: this runs every substep of
+        // a car's settle report).
+        for (b, _) in self
+            .beams
+            .iter()
+            .zip(&self.broken)
+            .filter(|(_, &broken)| !broken)
+        {
             let stretch = (self.pos[b.a] - self.pos[b.b]).length() - b.rest;
             e += 0.5 * b.stiffness * stretch * stretch;
         }
@@ -667,6 +674,12 @@ impl Sim {
 
 /// Largest |length - rest| / rest. NaN-propagating: a blown-up state never reads as 0.
 pub fn max_strain(beams: &[Beam], pos: &[Vec3]) -> f64 {
+    max_strain_of(beams.iter(), pos)
+}
+
+/// The one strain fold behind `max_strain` and `max_strain_unbroken`, over beams in the order
+/// given.
+fn max_strain_of<'a>(beams: impl Iterator<Item = &'a Beam>, pos: &[Vec3]) -> f64 {
     let mut m = 0.0_f64;
     for b in beams {
         let s = ((pos[b.a] - pos[b.b]).length() - b.rest).abs() / b.rest;
@@ -678,10 +691,18 @@ pub fn max_strain(beams: &[Beam], pos: &[Vec3]) -> f64 {
     m
 }
 
-/// `max_strain` over the beams not marked broken (`broken[i]` for `beams[i]`).
+/// `max_strain` over the beams not marked broken (`broken[i]` for `beams[i]`): the same
+/// arithmetic in the same beam order, with the broken beams skipped in place rather than
+/// copied out (`Sim::check` runs this every substep).
 pub fn max_strain_unbroken(beams: &[Beam], pos: &[Vec3], broken: &[bool]) -> f64 {
-    let live: Vec<Beam> = beams.iter().zip(broken).filter(|(_, &b)| !b).map(|(bm, _)| *bm).collect();
-    max_strain(&live, pos)
+    max_strain_of(
+        beams
+            .iter()
+            .zip(broken)
+            .filter(|(_, &br)| !br)
+            .map(|(b, _)| b),
+        pos,
+    )
 }
 
 /// Everything a body run produces: the samples of the good steps, the first contact time, every
