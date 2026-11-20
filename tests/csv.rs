@@ -82,7 +82,7 @@ fn time_column(csv: &str) -> Vec<f64> {
 /// A duration that is not a whole number of steps must not print a row after it.
 #[test]
 fn last_time_never_exceeds_duration() {
-    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim"))
+    let out = Command::new(crash_sim_bin())
         .args(["--duration", "0.016", "--dt", "0.01"])
         .output()
         .expect("run binary");
@@ -106,7 +106,7 @@ fn whole_number_of_steps_is_not_cut_short() {
 /// accepted dt prints strictly increasing times.
 #[test]
 fn dt_too_small_for_the_time_column_is_refused() {
-    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim"))
+    let out = Command::new(crash_sim_bin())
         .args(["--dt", "0.00001", "--duration", "0.0001"])
         .output()
         .expect("run binary");
