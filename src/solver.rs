@@ -150,7 +150,13 @@ pub struct LimitElement {
 /// element adds k |w_i| sum|w| / 2 to k_at[i] (and the same with c to c_at[i]), the lightest
 /// mass is taken over nodes and extra masses, and the condition is the same
 /// h^2 w2 + 2 h g < 4. With no extras the numbers are exactly those of `body_step_error`.
-pub fn step_error_with(h: f64, beams: &[Beam], mass: &[f64], extra_mass: &[f64], elements: &[LimitElement]) -> Option<String> {
+pub fn step_error_with(
+    h: f64,
+    beams: &[Beam],
+    mass: &[f64],
+    extra_mass: &[f64],
+    elements: &[LimitElement],
+) -> Option<String> {
     let n = mass.len() + extra_mass.len();
     let mut k_at = vec![0.0_f64; n];
     let mut c_at = vec![0.0_f64; n];
@@ -167,7 +173,11 @@ pub fn step_error_with(h: f64, beams: &[Beam], mass: &[f64], extra_mass: &[f64],
             c_at[i] += e.c * w.abs() * wsum / 2.0;
         }
     }
-    let m = mass.iter().chain(extra_mass).cloned().fold(f64::INFINITY, f64::min);
+    let m = mass
+        .iter()
+        .chain(extra_mass)
+        .cloned()
+        .fold(f64::INFINITY, f64::min);
     let w2 = 2.0 * k_at.iter().cloned().fold(0.0, f64::max) / m;
     let g = 2.0 * c_at.iter().cloned().fold(0.0, f64::max) / m;
     if h * h * w2 + 2.0 * h * g < 4.0 {

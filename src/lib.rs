@@ -359,11 +359,20 @@ impl Sim {
     }
 
     /// `from_car` with the given solver.
-    pub fn from_car_with_solver(cfg: Config, body: &Body, solver: Box<dyn Solver>) -> Result<Sim, String> {
+    pub fn from_car_with_solver(
+        cfg: Config,
+        body: &Body,
+        solver: Box<dyn Solver>,
+    ) -> Result<Sim, String> {
         Sim::build_from_body(cfg, body, solver, true)
     }
 
-    fn build_from_body(cfg: Config, body: &Body, solver: Box<dyn Solver>, with_wheels: bool) -> Result<Sim, String> {
+    fn build_from_body(
+        cfg: Config,
+        body: &Body,
+        solver: Box<dyn Solver>,
+        with_wheels: bool,
+    ) -> Result<Sim, String> {
         let mut planes = vec![Plane::ground()];
         for p in &body.planes {
             planes.push(Plane::from_format(p)?);
@@ -371,11 +380,21 @@ impl Sim {
         let built = body.build();
         let car = if with_wheels && !body.wheels.is_empty() {
             cfg.validate_numbers()?;
-            let car = vehicle::Car::new(body, &built.pos, &built.vel, &built.mass, planes.len(), cfg.gravity)?;
+            let car = vehicle::Car::new(
+                body,
+                &built.pos,
+                &built.vel,
+                &built.mass,
+                planes.len(),
+                cfg.gravity,
+            )?;
             let (extra_mass, elements) = car.limit_elements(built.mass.len());
             let h = cfg.dt / cfg.substeps as f64;
-            if let Some(e) = solver::step_error_with(h, &built.beams, &built.mass, &extra_mass, &elements) {
-                return Err(format!("{e} (the chassis with its wheels, suspension and tyres)"));
+            let (beams, mass) = (&built.beams, &built.mass);
+            if let Some(e) = solver::step_error_with(h, beams, mass, &extra_mass, &elements) {
+                return Err(format!(
+                    "{e} (the chassis with its wheels, suspension and tyres)"
+                ));
             }
             Some(car)
         } else {
@@ -427,7 +446,9 @@ impl Sim {
     /// finite and |theta| < pi/2.
     pub fn set_gravity_tilt(&mut self, theta: f64) -> Result<(), String> {
         if !(theta.is_finite() && theta.abs() < std::f64::consts::FRAC_PI_2) {
-            return Err(format!("gravity tilt {theta} rad must be finite and below pi/2 in size"));
+            return Err(format!(
+                "gravity tilt {theta} rad must be finite and below pi/2 in size"
+            ));
         }
         self.gravity_tilt = theta;
         Ok(())
@@ -486,11 +507,24 @@ impl Sim {
         // Tilted gravity: its y part goes to the solver as `gravity`, its x part as an extra
         // force on every node. The wheels add their suspension reactions on the mount nodes.
         let gv = self.gravity_vector();
-        let mut extra: Vec<Vec3> = self.mass.iter().map(|&m| Vec3::new(m * gv.x, 0.0, 0.0)).collect();
+        let mut extra: Vec<Vec3> = self
+            .mass
+            .iter()
+            .map(|&m| Vec3::new(m * gv.x, 0.0, 0.0))
+            .collect();
         if let Some(car) = self.car.as_mut() {
-            car.pre_step(&self.pos, &self.vel, &self.mass, &self.planes, vehicle::Substep { gravity: gv, h }, &mut extra);
+            let step = vehicle::Substep { gravity: gv, h };
+            let (pos, vel, mass) = (&self.pos, &self.vel, &self.mass);
+            car.pre_step(pos, vel, mass, &self.planes, step, &mut extra);
         }
-        self.solver.step_with_forces(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: -gv.y }, &extra, h);
+        let state = State {
+            pos: &mut self.pos,
+            vel: &mut self.vel,
+            beams,
+            mass: &self.mass,
+            gravity: -gv.y,
+        };
+        self.solver.step_with_forces(state, &extra, h);
         if let Some(car) = self.car.as_mut() {
             car.post_step(&mut self.pos, &mut self.vel, &self.mass, &self.planes, h);
         }

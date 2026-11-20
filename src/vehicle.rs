@@ -160,9 +160,21 @@ fn inverse3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     }
     let inv = 1.0 / det;
     Some([
-        [c00 * inv, (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv, (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv],
-        [c01 * inv, (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv, (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv],
-        [c02 * inv, (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv, (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv],
+        [
+            c00 * inv,
+            (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv,
+        ],
+        [
+            c01 * inv,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv,
+            (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv,
+        ],
+        [
+            c02 * inv,
+            (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv,
+        ],
     ])
 }
 
@@ -173,7 +185,9 @@ fn mount_indices(body: &Body, w: &crate::format::Wheel) -> Result<Vec<usize>, St
     }
     let mut out = Vec::new();
     for id in &w.mount {
-        let i = body.node_index(*id).ok_or_else(|| format!("wheel `{}` is mounted on missing node {id}", w.name))?;
+        let i = body
+            .node_index(*id)
+            .ok_or_else(|| format!("wheel `{}` is mounted on missing node {id}", w.name))?;
         if out.contains(&i) {
             return Err(format!("wheel `{}`: mount lists node {id} twice", w.name));
         }
@@ -190,8 +204,12 @@ fn wheel_params(body: &Body) -> Result<Vec<WheelParams>, String> {
         if out.iter().any(|p: &WheelParams| &p.name == name) {
             return Err(format!("duplicate wheel `{name}`"));
         }
-        let s = body.suspension(name).ok_or_else(|| format!("wheel `{name}` has no suspension"))?;
-        let t = body.tyre(name).ok_or_else(|| format!("wheel `{name}` has no tyre"))?;
+        let s = body
+            .suspension(name)
+            .ok_or_else(|| format!("wheel `{name}` has no suspension"))?;
+        let t = body
+            .tyre(name)
+            .ok_or_else(|| format!("wheel `{name}` has no tyre"))?;
         let pos = |x: f64| x.is_finite() && x > 0.0;
         let nonneg = |x: f64| x.is_finite() && x >= 0.0;
         let checks = [
@@ -200,7 +218,13 @@ fn wheel_params(body: &Body) -> Result<Vec<WheelParams>, String> {
             (pos(w.inertia), "inertia must be > 0"),
             (pos(s.spring), "spring rate must be > 0"),
             (nonneg(s.damper), "damper rate must be >= 0"),
-            (nonneg(s.travel_min) && s.travel_max.is_finite() && s.travel_min < s.rest && s.rest < s.travel_max, "suspension needs 0 <= travel min < rest < travel max"),
+            (
+                nonneg(s.travel_min)
+                    && s.travel_max.is_finite()
+                    && s.travel_min < s.rest
+                    && s.rest < s.travel_max,
+                "suspension needs 0 <= travel min < rest < travel max",
+            ),
             (pos(t.mu), "mu must be > 0"),
             (pos(t.radial_stiffness), "radial_stiffness must be > 0"),
             (nonneg(t.radial_damping), "radial_damping must be >= 0"),
@@ -239,11 +263,18 @@ fn wheel_params(body: &Body) -> Result<Vec<WheelParams>, String> {
 /// tyres, its tyres' mu differ, or f is not a finite number >= 0.
 pub fn slope_angle(body: &Body, grip_frac: f64) -> Result<f64, String> {
     if !(grip_frac.is_finite() && grip_frac >= 0.0) {
-        return Err(format!("slope grip fraction {grip_frac} must be a finite number >= 0"));
+        return Err(format!(
+            "slope grip fraction {grip_frac} must be a finite number >= 0"
+        ));
     }
-    let first = body.tyres.first().ok_or_else(|| "the body has no tyres, so a slope relative to tyre grip has no meaning".to_string())?;
+    let first = body.tyres.first().ok_or_else(|| {
+        "the body has no tyres, so a slope relative to tyre grip has no meaning".to_string()
+    })?;
     if let Some(t) = body.tyres.iter().find(|t| t.mu != first.mu) {
-        return Err(format!("the tyres' mu differ ({} on `{}`, {} on `{}`): the slope needs one grip coefficient", first.mu, first.wheel, t.mu, t.wheel));
+        return Err(format!(
+            "the tyres' mu differ ({} on `{}`, {} on `{}`): the slope needs one grip coefficient",
+            first.mu, first.wheel, t.mu, t.wheel
+        ));
     }
     Ok((grip_frac * first.mu).atan())
 }
@@ -253,14 +284,27 @@ impl Car {
     /// velocities `vel` and masses `mass`, `planes` collider planes and gravity `g` (m/s^2).
     /// Each wheel starts at `Body::wheel_start_center`, with the mean velocity of its mount
     /// nodes and the spin that rolls it without slip along the chassis' forward axis.
-    pub fn new(body: &Body, pos: &[Vec3], vel: &[Vec3], mass: &[f64], n_planes: usize, g: f64) -> Result<Car, String> {
+    pub fn new(
+        body: &Body,
+        pos: &[Vec3],
+        vel: &[Vec3],
+        mass: &[f64],
+        n_planes: usize,
+        g: f64,
+    ) -> Result<Car, String> {
         let params = wheel_params(body)?;
         if params.is_empty() {
             return Err("the body has no wheels".into());
         }
-        let controls = body.controls.as_ref().ok_or_else(|| "the body has wheels but no `controls`".to_string())?;
+        let controls = body
+            .controls
+            .as_ref()
+            .ok_or_else(|| "the body has wheels but no `controls`".to_string())?;
         if !(controls.max_brake_torque.is_finite() && controls.max_brake_torque > 0.0) {
-            return Err(format!("max_brake_torque {} must be a finite number > 0", controls.max_brake_torque));
+            return Err(format!(
+                "max_brake_torque {} must be a finite number > 0",
+                controls.max_brake_torque
+            ));
         }
         // The frame fit: r0 = start position minus start centroid, M0 = sum r0 r0^T.
         let n = pos.len() as f64;
@@ -294,11 +338,17 @@ impl Car {
             reference_load,
             wx,
             wz,
-            frame: Frame { up: Vec3::new(0.0, 1.0, 0.0), forward: Vec3::new(1.0, 0.0, 0.0), axle: Vec3::new(0.0, 0.0, -1.0) },
+            frame: Frame {
+                up: Vec3::new(0.0, 1.0, 0.0),
+                forward: Vec3::new(1.0, 0.0, 0.0),
+                axle: Vec3::new(0.0, 0.0, -1.0),
+            },
             frame_error: None,
             carrier_torque: Vec3::ZERO,
         };
-        car.frame = car.fit_frame(pos).map_err(|e| format!("at the start: {e}"))?;
+        car.frame = car
+            .fit_frame(pos)
+            .map_err(|e| format!("at the start: {e}"))?;
         for p in params {
             let (c, vc) = centroid(&p.mount, pos, vel);
             let start = Vec3::new(c.x, c.y - p.rest, c.z);
@@ -329,9 +379,17 @@ impl Car {
             ax += *p * self.wx[i];
             az += *p * self.wz[i];
         }
-        let up = az.cross(ax).normalized().ok_or_else(|| "the chassis frame collapsed (its up axis has no direction)".to_string())?;
-        let forward = (ax - up * ax.dot(up)).normalized().ok_or_else(|| "the chassis frame collapsed (its forward axis has no direction)".to_string())?;
-        Ok(Frame { up, forward, axle: up.cross(forward) })
+        let up = az.cross(ax).normalized().ok_or_else(|| {
+            "the chassis frame collapsed (its up axis has no direction)".to_string()
+        })?;
+        let forward = (ax - up * ax.dot(up)).normalized().ok_or_else(|| {
+            "the chassis frame collapsed (its forward axis has no direction)".to_string()
+        })?;
+        Ok(Frame {
+            up,
+            forward,
+            axle: up.cross(forward),
+        })
     }
 
     /// The step-limit elements and extra masses of the wheels, for `solver::step_error_with`:
@@ -352,10 +410,23 @@ impl Car {
             let share = 1.0 / p.mount.len() as f64;
             let mut ends: Vec<(usize, f64)> = p.mount.iter().map(|&i| (i, share)).collect();
             ends.push((iw, -1.0));
-            el.push(LimitElement { ends, k: p.spring * (1.0 + STOP_STIFFNESS_FACTOR), c: p.damper });
-            el.push(LimitElement { ends: vec![(iw, 1.0)], k: p.radial_stiffness, c: p.radial_damping });
-            let kt = p.long_stiffness.max(p.lat_stiffness) * self.reference_load / TYRE_RELAXATION_LENGTH;
-            el.push(LimitElement { ends: vec![(iw, 1.0), (is, -1.0)], k: kt, c: kt * TYRE_DAMPING_TIME });
+            el.push(LimitElement {
+                ends,
+                k: p.spring * (1.0 + STOP_STIFFNESS_FACTOR),
+                c: p.damper,
+            });
+            el.push(LimitElement {
+                ends: vec![(iw, 1.0)],
+                k: p.radial_stiffness,
+                c: p.radial_damping,
+            });
+            let kt = p.long_stiffness.max(p.lat_stiffness) * self.reference_load
+                / TYRE_RELAXATION_LENGTH;
+            el.push(LimitElement {
+                ends: vec![(iw, 1.0), (is, -1.0)],
+                k: kt,
+                c: kt * TYRE_DAMPING_TIME,
+            });
         }
         (masses, el)
     }
@@ -384,7 +455,15 @@ impl Car {
     ///
     /// The moments, and the last substep's `carrier_torque` (the moment of the axis constraint's
     /// residual impulse), go to `extra` as a rigid-body share over all chassis nodes.
-    pub fn pre_step(&mut self, pos: &[Vec3], vel: &[Vec3], mass: &[f64], planes: &[Plane], step: Substep, extra: &mut [Vec3]) {
+    pub fn pre_step(
+        &mut self,
+        pos: &[Vec3],
+        vel: &[Vec3],
+        mass: &[f64],
+        planes: &[Plane],
+        step: Substep,
+        extra: &mut [Vec3],
+    ) {
         let Substep { gravity, h } = step;
         let mut chassis_torque = self.carrier_torque;
         let brake: Vec<f64> = self.wheels.iter().map(|w| self.brake_torque(w)).collect();
@@ -437,7 +516,12 @@ impl Car {
             let free = w.spin + torque * (h / w.p.inertia);
             let stop = tb * h / w.p.inertia;
             let rel = free - chassis_spin;
-            w.spin_next = chassis_spin + if rel.abs() <= stop { 0.0 } else { rel - rel.signum() * stop };
+            w.spin_next = chassis_spin
+                + if rel.abs() <= stop {
+                    0.0
+                } else {
+                    rel - rel.signum() * stop
+                };
             chassis_torque += fr.axle * (-w.p.inertia * (w.spin_next - free) / h);
         }
         add_torque(pos, mass, chassis_torque, extra);
@@ -446,7 +530,14 @@ impl Car {
     /// After the solver's step: each wheel's velocity and centre (symplectic Euler, velocity
     /// first), its spin with the brake as a torque that can stop it but never reverse it within
     /// a substep, the constraint that puts the wheel back on its axis, and the patch deflections.
-    pub fn post_step(&mut self, pos: &mut [Vec3], vel: &mut [Vec3], mass: &[f64], planes: &[Plane], h: f64) {
+    pub fn post_step(
+        &mut self,
+        pos: &mut [Vec3],
+        vel: &mut [Vec3],
+        mass: &[f64],
+        planes: &[Plane],
+        h: f64,
+    ) {
         let axle = self.frame.axle;
         // The axis after the solver's step, and how fast it turned: a point at distance s down
         // the axis moves with the mount centroid's velocity minus s du/dt.
@@ -500,7 +591,8 @@ impl Car {
                 }
                 let n = pl.normal;
                 let (vs, speed) = patch_slip(w.vel, w.spin, w.p.radius, n, axle);
-                let mut d = (w.deflection[k] + vs * h) * (1.0 / (1.0 + h * speed / TYRE_RELAXATION_LENGTH));
+                let mut d =
+                    (w.deflection[k] + vs * h) * (1.0 / (1.0 + h * speed / TYRE_RELAXATION_LENGTH));
                 d = d - n * d.dot(n);
                 // Sliding: the elastic force may not exceed the friction circle.
                 let (ft, lt) = patch_axes(n, axle);
@@ -520,7 +612,10 @@ impl Car {
 
     /// Fastest wheel point: the larger of a wheel's centre speed and its rim speed |spin| r.
     pub fn max_speed(&self) -> f64 {
-        self.wheels.iter().map(|w| w.vel.length().max(w.spin.abs() * w.p.radius)).fold(0.0, f64::max)
+        self.wheels
+            .iter()
+            .map(|w| w.vel.length().max(w.spin.abs() * w.p.radius))
+            .fold(0.0, f64::max)
     }
 
     /// Error text when any wheel state is not finite or the frame was lost, else None.
@@ -529,7 +624,11 @@ impl Car {
             return Some(e.clone());
         }
         for w in &self.wheels {
-            if !(finite3(w.pos) && finite3(w.vel) && w.spin.is_finite() && w.deflection.iter().all(|d| finite3(*d))) {
+            if !(finite3(w.pos)
+                && finite3(w.vel)
+                && w.spin.is_finite()
+                && w.deflection.iter().all(|d| finite3(*d)))
+            {
                 return Some(format!("wheel `{}` state is not finite", w.p.name));
             }
         }
@@ -545,7 +644,8 @@ impl Car {
         let mut e = 0.0;
         for w in &self.wheels {
             let p = &w.p;
-            e += 0.5 * p.mass * w.vel.dot(w.vel) + 0.5 * p.inertia * w.spin * w.spin - p.mass * gravity.dot(w.pos);
+            e += 0.5 * p.mass * w.vel.dot(w.vel) + 0.5 * p.inertia * w.spin * w.spin
+                - p.mass * gravity.dot(w.pos);
             let ds = p.rest - w.length;
             e += 0.5 * p.spring * ds * ds;
             let over = if w.length < p.travel_min {
@@ -628,8 +728,14 @@ fn centroid(ix: &[usize], pos: &[Vec3], vel: &[Vec3]) -> (Vec3, Vec3) {
 /// axle is along the normal (the tyre's side face on a wall) any direction in the plane is used.
 fn patch_axes(n: Vec3, axle: Vec3) -> (Vec3, Vec3) {
     let ft = axle.cross(n).normalized().unwrap_or_else(|| {
-        let t = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
-        (t - n * t.dot(n)).normalized().expect("a unit normal has a perpendicular")
+        let t = if n.x.abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        (t - n * t.dot(n))
+            .normalized()
+            .expect("a unit normal has a perpendicular")
     });
     (ft, n.cross(ft))
 }
@@ -660,7 +766,8 @@ fn tyre_force(w: &Wheel, k: usize, pl: &Plane, axle: Vec3, reference_load: f64) 
     let (ft, lt) = patch_axes(n, axle);
     let kz = reference_load / TYRE_RELAXATION_LENGTH;
     let along = |a: Vec3| d.dot(a) + TYRE_DAMPING_TIME * d_rate.dot(a);
-    let mut f = -(ft * (kz * p.long_stiffness * along(ft)) + lt * (kz * p.lat_stiffness * along(lt)));
+    let mut f =
+        -(ft * (kz * p.long_stiffness * along(ft)) + lt * (kz * p.lat_stiffness * along(lt)));
     let mag = f.length();
     let cap = p.mu * fz;
     if mag > cap {

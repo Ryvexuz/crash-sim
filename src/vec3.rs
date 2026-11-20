@@ -22,7 +22,11 @@ impl Vec3 {
     }
     /// The cross product self x o (right-handed: x cross y = z).
     pub fn cross(self, o: Vec3) -> Vec3 {
-        Vec3::new(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+        Vec3::new(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
     }
     /// This vector scaled to length 1, or None when it is zero or has a non-finite component.
     /// It is divided by its largest component before the length is taken, so a huge or tiny
