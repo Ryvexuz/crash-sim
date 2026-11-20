@@ -100,9 +100,20 @@ Impacts (settle report): `collide::impact_this_substep` is the plane version of 
 
 The speed 10 m/s is 50 J/kg, half of the 96 J/kg of a car at 50 km/h (`docs/STAGE6.md`). If a measured value breaks a limit of `docs/STAGE6.md`, the limit is not loosened: report it.
 
-### Sensitivity runs (to fill in by the run, not before)
+### Sensitivity runs
 
-Check 2.5 (`box_wall_soft`, `box_wall_stiff`, `box_wall_slow`) runs with the same flags as 2.3. The `crumple_delta_m` of each goes here, with the nominal value, and the sentence that says how it moved. Not yet run: the staged patch could not build or run anything.
+Measured 2026-11-20 on the merged base (h = 1 ms, `--duration 10`, the STAGE6 2.3 flags). `yield_strain` stayed 0.02 in every file; only the one number named below changed.
+
+| file | what changed | `crumple_delta_m` (kept) | `crumple_delta_max_m` (deepest) | `crumple:` |
+|---|---|---|---|---|
+| `box_wall` (nominal) | none | 0.024905 | 0.095943 | ok |
+| `box_wall_soft` | stiffness x 0.5 | 0.067613 | 0.141399 | ok |
+| `box_wall_stiff` | stiffness x 2 | 0.012583 | 0.065681 | FAIL (below crumple-min, not gated) |
+| `box_wall_slow` | speed 10 -> 7.07 m/s (half the energy) | 0.011589 | 0.061272 | FAIL (below crumple-min, not gated) |
+| `box_wall_elastic` | no `yield_strain` | -0.000124 | 0.084893 | FAIL (check 2.4: the elastic box does not stay crumpled) |
+| `box_wall` at `--substeps 20` | h = 0.5 ms | 0.024095 | 0.094973 | ok (3.3% from nominal, check 2.6 allows 10%) |
+
+The result moves the way the physics says: a softer beam yields at a lower force, so the same energy crushes the box further (soft 0.0676 > nominal 0.0249 > stiff 0.0126); half the energy crushes it less (slow 0.0116 < nominal). The elastic box springs back to within 0.000124 m of its start length, so the permanent crumple comes from the plasticity and not from the metric. The nominal numbers were not changed after any run: `yield_strain` 0.02 and the estimate of about 0.09 m deepest crush were written before the first run, and the measured 0.0959 m agrees.
 
 ## Integrator: symplectic Euler with substeps
 

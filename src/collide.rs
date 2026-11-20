@@ -67,6 +67,7 @@ impl Plane {
 ///    in (vn < 0) faster than `REST_SPEED` (-vn > REST_SPEED), or set to 0 when it moves in
 ///    slower; a node moving out keeps its normal velocity;
 /// 3. has its velocity along the plane multiplied by max(0, 1 - FRICTION_RATE * h).
+///
 /// For the ground this is the old rule operation for operation; `tests/box_wall.rs` compares
 /// it bit for bit with a copy of the old in-solver code.
 pub fn apply(pos: &mut [Vec3], vel: &mut [Vec3], planes: &[Plane], h: f64) {
@@ -75,7 +76,7 @@ pub fn apply(pos: &mut [Vec3], vel: &mut [Vec3], planes: &[Plane], h: f64) {
         for pl in planes {
             let d = pl.distance(pos[i]);
             if d < 0.0 {
-                pos[i] = pos[i] + pl.normal * (-d);
+                pos[i] += pl.normal * (-d);
                 let vn = vel[i].dot(pl.normal);
                 let tangent = vel[i] - pl.normal * vn;
                 let new_vn = if vn < 0.0 {

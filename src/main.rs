@@ -170,7 +170,7 @@ fn main() {
                 out.push_str(&c.render());
             }
             emit(&out);
-            if !report.is_ok() || crumple.as_ref().map_or(false, |c| !c.is_ok()) {
+            if !report.is_ok() || crumple.as_ref().is_some_and(|c| !c.is_ok()) {
                 exit(1);
             }
             return;
