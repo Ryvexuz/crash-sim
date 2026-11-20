@@ -149,7 +149,7 @@ fn settle_holds_across_the_invariants_grid() {
 }
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_crash-sim")).args(args).output().unwrap()
+    Command::new(crash_sim_bin()).args(args).output().unwrap()
 }
 
 const FLAGS_13: [&str; 11] = [
@@ -199,4 +199,24 @@ fn cli_usage_errors_exit_2_with_empty_stdout() {
     let mut a = vec!["--summary"];
     a.extend(FLAGS_13);
     assert_eq!(run(&a).status.code(), Some(2));
+}
+
+/// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
+/// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
+fn crash_sim_bin() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!("CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder", exe.display())
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and the cargo layout path {} does not exist",
+        bin.display()
+    );
+    bin
 }

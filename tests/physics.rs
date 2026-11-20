@@ -184,8 +184,8 @@ fn unstable_step_is_refused_up_front() {
 
 #[test]
 fn binary_fails_loudly_on_harsh_flags() {
-    let exe = env!("CARGO_BIN_EXE_crash-sim");
-    let out = Command::new(exe)
+    let exe = crash_sim_bin();
+    let out = Command::new(&exe)
         .args(["--drop-height", "10", "--substeps", "1", "--dt", "0.02"])
         .output()
         .unwrap();
@@ -196,7 +196,7 @@ fn binary_fails_loudly_on_harsh_flags() {
     assert!(!stdout.contains("NaN") && !stdout.contains("inf"));
 
     // Default flags still exit 0.
-    let ok = Command::new(exe).output().unwrap();
+    let ok = Command::new(&exe).output().unwrap();
     assert!(ok.status.success());
 }
 
@@ -231,4 +231,24 @@ fn lower_gravity_makes_the_cube_fall_more_slowly() {
     assert!((earth - (2.0 * 2.0 / 9.81f64).sqrt()).abs() < 0.03, "earth contact at {earth}");
     assert!((moon - (2.0 * 2.0 / 1.62f64).sqrt()).abs() < 0.05, "moon contact at {moon}");
     assert!(moon > 2.0 * earth, "moon contact {moon} should be well after earth contact {earth}");
+}
+
+/// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
+/// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
+fn crash_sim_bin() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!("CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder", exe.display())
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and the cargo layout path {} does not exist",
+        bin.display()
+    );
+    bin
 }

@@ -1,7 +1,7 @@
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_crash-sim")).args(args).output().unwrap()
+    Command::new(crash_sim_bin()).args(args).output().unwrap()
 }
 
 fn summary(args: &[&str]) -> String {
@@ -110,4 +110,24 @@ fn flat_drop_contact_time_matches_free_fall() {
     let (c, _, _) = parse(&summary(&["--duration", "2", "--drop-height", "3", "--no-tilt"]));
     let c: f64 = c.parse().unwrap();
     assert!((c - 0.7820).abs() < 0.002, "first contact {c}");
+}
+
+/// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
+/// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
+fn crash_sim_bin() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!("CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder", exe.display())
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and the cargo layout path {} does not exist",
+        bin.display()
+    );
+    bin
 }

@@ -39,7 +39,7 @@ fn csv_time_column_steps_by_dt() {
 
 #[test]
 fn binary_stdout_matches_library_csv() {
-    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim")).output().expect("run binary");
+    let out = Command::new(crash_sim_bin()).output().expect("run binary");
     assert!(out.status.success(), "binary failed: {:?}", out.status);
     let expected = to_csv(&run(&Config::default()));
     assert_eq!(String::from_utf8(out.stdout).expect("utf8 stdout"), expected);
@@ -47,10 +47,30 @@ fn binary_stdout_matches_library_csv() {
 
 #[test]
 fn binary_rejects_invalid_argument_with_empty_stdout() {
-    let out = Command::new(env!("CARGO_BIN_EXE_crash-sim"))
+    let out = Command::new(crash_sim_bin())
         .args(["--gravity", "0"])
         .output()
         .expect("run binary");
     assert!(!out.status.success(), "expected non-zero exit");
     assert!(out.stdout.is_empty(), "stdout must be empty, got {:?}", String::from_utf8_lossy(&out.stdout));
+}
+
+/// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
+/// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
+fn crash_sim_bin() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!("CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder", exe.display())
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and the cargo layout path {} does not exist",
+        bin.display()
+    );
+    bin
 }
