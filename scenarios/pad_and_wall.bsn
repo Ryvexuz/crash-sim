@@ -294,7 +294,7 @@ tyre fl mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat
 tyre fr mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
 tyre rl mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
 tyre rr mu 0.88 radial_stiffness 200000 radial_damping 500 long_stiffness 15 lat_stiffness 10
-controls max_steer_deg 30 max_drive_torque 2000 max_brake_torque 5000
+controls max_steer_deg 30 max_drive_torque 2000 max_brake_torque 5000 rolling_resistance 0.012 drag_area 0.65
 # pad_and_wall.bsn (docs/STAGE6.md milestone 3, check 3.6): every line above this comment is
 # car_basic.bsn byte for byte (test pad_and_wall_car_is_car_basic), so the car that crashes is
 # the car whose statics, grip, launch and steering are checked. The pad is the y = 0 ground.

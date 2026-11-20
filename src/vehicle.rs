@@ -41,6 +41,21 @@ pub const STOP_STIFFNESS_FACTOR: f64 = 20.0;
 /// value, reasoned:* 1 m/s (3.6 km/h) is a walking pace, so a car that has just been stopped
 /// by the brake can be put into reverse without waiting for exact zero.
 pub const REVERSE_MAX_FORWARD_SPEED: f64 = 1.0;
+/// Air density rho (kg/m^3) of the aero drag 0.5 rho CdA v^2 (`Car::drag_area`): the ISA
+/// (International Standard Atmosphere, ISO 2533) sea-level value at 15 degrees C, as the task
+/// brief names it (*from memory, unverified*: no copy of the standard was read).
+pub const AIR_DENSITY: f64 = 1.225;
+/// The rolling speed v0 (m/s) of the low-speed ramp of the rolling resistance: the moment on a
+/// wheel is c_rr N r tanh(|spin| r / v0), so it is exactly zero at standstill and grows smoothly
+/// (linearly below v0, like a small damper on the spin) to its full value c_rr N r, which it
+/// reaches to within 1e-8 above 10 v0. Without the ramp the moment would flip sign with the spin
+/// and a car at rest would jitter about zero spin. *Starting value, reasoned:* 0.1 m/s is a
+/// hundredth of the slowest speed the drive checks use (the 2 m/s circle of
+/// `full_lock_circle_matches_kinematic_radius` sees tanh(20) = 1 - 8e-18), so the ramp is felt
+/// only while a car is stopping or starting. Below v0 the moment is a damper of rate
+/// c_rr N r^2 / v0 on the spin; as it can only stop the spin within a substep, never reverse
+/// it (`Car::pre_step`), it is stable at any step size.
+pub const ROLLING_RESISTANCE_RAMP_SPEED: f64 = 0.1;
 
 /// The numbers of one wheel, from its `wheel`, `suspension` and `tyre` lines.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,6 +190,14 @@ pub struct Car {
     /// The reference load of every tyre (N): the static load per wheel, total weight / wheel
     /// count. The patch spring has the fixed rate C x reference load / sigma (see `tyre_force`).
     pub reference_load: f64,
+    /// Rolling resistance coefficient c_rr (1), from `controls`' `rolling_resistance` key (0
+    /// when the key is missing). Every wheel gets the moment c_rr N r against its spin, N its
+    /// normal load (see `ROLLING_RESISTANCE_RAMP_SPEED` and `pre_step`).
+    pub rolling_resistance: f64,
+    /// Aero drag area CdA (m^2), from `controls`' `drag_area` key (0 when the key is missing).
+    /// The chassis gets 0.5 `AIR_DENSITY` CdA |v| v against its centre-of-mass velocity v (see
+    /// `pre_step`).
+    pub drag_area: f64,
     /// Frame fit weights: forward = sum_i wx_i p_i, and the image of +z is sum_i wz_i p_i
     /// (the least-squares linear map from the start shape to the current one, applied to x and z).
     wx: Vec<f64>,
@@ -397,6 +420,17 @@ impl Car {
                 controls.max_steer_deg
             ));
         }
+        // A missing key means 0: the car behaves as before the keys existed.
+        let rolling_resistance = controls.rolling_resistance.unwrap_or(0.0);
+        let drag_area = controls.drag_area.unwrap_or(0.0);
+        for (v, what) in [
+            (rolling_resistance, "rolling_resistance"),
+            (drag_area, "drag_area"),
+        ] {
+            if !(v.is_finite() && v >= 0.0) {
+                return Err(format!("{what} {v} must be a finite number >= 0"));
+            }
+        }
         let mut car = Car {
             wheels: Vec::new(),
             throttle: 0.0,
@@ -407,6 +441,8 @@ impl Car {
             max_steer: controls.max_steer_deg.to_radians(),
             drive_work: 0.0,
             reference_load,
+            rolling_resistance,
+            drag_area,
             wx,
             wz,
             frame: Frame {
@@ -595,9 +631,11 @@ impl Car {
     /// - across the axis the wheel is carried by its rigid carrier, so that part of the wheel's
     ///   force goes to the mount nodes (equal shares) together with its moment about the mount
     ///   centroid (the force acts at the wheel centre, not at the mount);
-    /// - the spin gets the tyre's torque and then the brake, which can stop it but never reverse
-    ///   it within a substep; the brake caliper is on the chassis, so the chassis gets the brake
-    ///   torque back about the axle.
+    /// - the spin gets the tyre's torque, then the rolling resistance moment (when
+    ///   `rolling_resistance` > 0), then the brake; each of the last two can stop it but never
+    ///   reverse it within a substep; the brake caliper is on the chassis, so the chassis gets
+    ///   the brake torque back about the axle;
+    /// - when `drag_area` > 0, the chassis nodes get the aero drag (`add_drag`).
     ///
     /// The moments, and the last substep's `carrier_torque` (the moment of the axis constraint's
     /// residual impulse), go to `extra` as a rigid-body share over all chassis nodes.
@@ -651,6 +689,7 @@ impl Car {
         // -(d forward/dt) . up. The brake acts on the wheel's spin relative to this.
         let chassis_spin = -((fr.forward - old.forward) * (1.0 / h)).dot(fr.up);
         let reference_load = self.reference_load;
+        let c_rr = self.rolling_resistance;
         let per_wheel = scratch.brake.iter().zip(&scratch.drive).zip(&scratch.axles);
         for (w, ((&tb, &td), &wa)) in self.wheels.iter_mut().zip(per_wheel) {
             w.axle = wa;
@@ -688,6 +727,27 @@ impl Car {
             // by how far the steering turned the axle.
             let cs = chassis_spin * wa.dot(fr.axle);
             let free = w.spin + (torque + td) * (h / w.p.inertia);
+            // Rolling resistance: the normal load sits a little ahead of the axle in a rolling
+            // tyre, a moment c_rr N r against the spin, ramped to zero at standstill. Like the
+            // brake it can stop the spin within a substep but never reverse it. Its reaction is
+            // on the ground, not the chassis, so it is not in `chassis_torque` below. Through the
+            // tyre the car then feels a force c_rr N against its rolling direction. Skipped
+            // entirely at c_rr = 0, so a car without the key gives the same bytes as before.
+            let free = if c_rr > 0.0 {
+                let n: f64 = w.load.iter().sum();
+                let stop = rolling_resistance_moment(c_rr, n, w.p.radius, w.spin) * h / w.p.inertia;
+                // `stop` is NaN only as inf x 0 (a c_rr so large that c_rr N overflows, at zero
+                // spin): no rolling, so no moment, as for a stop of 0.
+                if stop.is_nan() || stop <= 0.0 {
+                    free
+                } else if free.abs() <= stop {
+                    0.0
+                } else {
+                    free - free.signum() * stop
+                }
+            } else {
+                free
+            };
             let stop = tb * h / w.p.inertia;
             let rel = free - cs;
             w.spin_next = cs
@@ -703,6 +763,9 @@ impl Car {
         }
         self.drive_work += drive_work;
         self.scratch = scratch;
+        if self.drag_area > 0.0 {
+            add_drag(vel, mass, self.drag_area, h, extra);
+        }
         add_torque(pos, mass, chassis_torque, extra);
     }
 
@@ -881,6 +944,53 @@ impl Car {
             }
         }
         e
+    }
+}
+
+/// The size (N m, >= 0) of the rolling resistance moment on a wheel of radius `radius` (m)
+/// spinning at `spin` (rad/s) under the normal load `load` (N), for the coefficient `c_rr`:
+/// c_rr load radius tanh(|spin| radius / `ROLLING_RESISTANCE_RAMP_SPEED`). It is 0 at zero
+/// spin, rises smoothly (slope c_rr load radius^2 / v0 per rad/s at zero spin) and is
+/// c_rr load radius once the rolling speed is well above v0. `Car::pre_step` applies it
+/// against the spin.
+pub fn rolling_resistance_moment(c_rr: f64, load: f64, radius: f64, spin: f64) -> f64 {
+    c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()
+}
+
+/// Add the aero drag of drag area `cda` (m^2) to `extra`: with v the chassis' centre-of-mass
+/// velocity (still air), the force F = -0.5 `AIR_DENSITY` cda |v| v, of size 0.5 rho CdA v^2,
+/// shared over the chassis nodes in proportion to their mass, node i getting F m_i / M. Why by
+/// mass: every node then gets the same deceleration F / M, so the drag slows the car's centre
+/// of mass and nothing else. It adds no torque about the centre of mass (sum of m_i (r_i - c)
+/// is zero) and stretches no beam. The real drag acts at the centre of pressure, usually a little
+/// above and ahead of the centre of mass, with a small pitch moment; this model leaves that
+/// out. A share by node count, or on the front face only, would add a moment and load the front
+/// beams with a force that depends on how the chassis is meshed, not on the air. The wheels
+/// are not in `vel` and get no drag of their own; they are carried across their axes by the
+/// chassis, so they slow with it.
+///
+/// The drag is explicit (from the velocity before the substep of length `h`), so it is capped
+/// like the brake: the rate k = 0.5 rho cda |v| / M (1/s) is at most 1 / h, so the drag can at
+/// most stop the centre of mass within one substep and never reverses it, whatever `cda` is.
+/// For `car_basic.bsn` (CdA 0.65 m^2, chassis M = 1080 kg, h = 1 ms) k h reaches 1 only at
+/// v = 1080 / (0.5 x 1.225 x 0.65 x 0.001) = 2.7e6 m/s, so
+/// the cap never binds in a drive; it only keeps an absurd drag area from blowing the run up.
+fn add_drag(vel: &[Vec3], mass: &[f64], cda: f64, h: f64, extra: &mut [Vec3]) {
+    let mut p = Vec3::ZERO;
+    let mut m = 0.0;
+    for (v, &mi) in vel.iter().zip(mass) {
+        p += *v * mi;
+        m += mi;
+    }
+    if m <= 0.0 {
+        return;
+    }
+    let v = p * (1.0 / m);
+    let k = (0.5 * AIR_DENSITY * cda * v.length() / m).min(1.0 / h);
+    // F / M, the deceleration every node gets.
+    let a = v * (-k);
+    for (e, &mi) in extra.iter_mut().zip(mass) {
+        *e += a * mi;
     }
 }
 

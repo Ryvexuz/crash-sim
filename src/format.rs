@@ -152,6 +152,14 @@ pub struct Controls {
     pub max_drive_torque: f64,
     /// Total brake torque at full brake (N m), > 0.
     pub max_brake_torque: f64,
+    /// Rolling resistance coefficient c_rr (1: newtons of rolling resistance per newton of
+    /// normal load), >= 0, from the optional `rolling_resistance` key. None when the line has
+    /// no such key, which the vehicle code reads as 0 (no rolling resistance, as before the key
+    /// existed).
+    pub rolling_resistance: Option<f64>,
+    /// Aero drag area CdA (m^2: drag coefficient times frontal area), >= 0, from the optional
+    /// `drag_area` key. None when the line has no such key, which the vehicle code reads as 0.
+    pub drag_area: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -721,7 +729,8 @@ fn parse_tyre(t: &mut Toks, body: &Body, car: &mut CarLines) -> Result<Tyre, Par
     Ok(Tyre { wheel: wheel.to_string(), mu, radial_stiffness, radial_damping, long_stiffness, lat_stiffness })
 }
 
-/// `controls max_steer_deg <a> max_drive_torque <t> max_brake_torque <t>`
+/// `controls max_steer_deg <a> max_drive_torque <t> max_brake_torque <t>
+/// [rolling_resistance <c_rr>] [drag_area <CdA>]`
 fn parse_controls(t: &mut Toks, body: &Body, kc: usize) -> Result<Controls, ParseError> {
     if body.controls.is_some() {
         return Err(t.err(Some(kc), "second `controls` line: a body has at most one".into()));
@@ -736,6 +745,17 @@ fn parse_controls(t: &mut Toks, body: &Body, kc: usize) -> Result<Controls, Pars
     }
     let (dc, max_drive_torque) = t.positive_field("max_drive_torque", "max_drive_torque")?;
     let (bc, max_brake_torque) = t.positive_field("max_brake_torque", "max_brake_torque")?;
+    // Optional, in this order. `number` refuses NaN and infinities by name, and
+    // `nonnegative_field` a value below 0.
+    let mut rolling_resistance = None;
+    let mut drag_area = None;
+    if t.peek().map(|p| p.1) == Some("rolling_resistance") {
+        let (_, v) = t.nonnegative_field("rolling_resistance", "rolling_resistance")?;
+        rolling_resistance = Some(v);
+    }
+    if t.peek().map(|p| p.1) == Some("drag_area") {
+        drag_area = Some(t.nonnegative_field("drag_area", "drag_area")?.1);
+    }
     t.done()?;
     for (c, what, any) in [
         (sc, "steerable", body.wheels.iter().any(|w| w.steerable)),
@@ -746,7 +766,13 @@ fn parse_controls(t: &mut Toks, body: &Body, kc: usize) -> Result<Controls, Pars
             return Err(t.err(Some(c), format!("no wheel is {what}, so this control would act on nothing")));
         }
     }
-    Ok(Controls { max_steer_deg, max_drive_torque, max_brake_torque })
+    Ok(Controls {
+        max_steer_deg,
+        max_drive_torque,
+        max_brake_torque,
+        rolling_resistance,
+        drag_area,
+    })
 }
 
 /// The version on line 1, 1 or 2.
@@ -847,9 +873,16 @@ pub fn write(body: &Body) -> String {
     }
     if let Some(c) = &body.controls {
         s.push_str(&format!(
-            "controls max_steer_deg {} max_drive_torque {} max_brake_torque {}\n",
+            "controls max_steer_deg {} max_drive_torque {} max_brake_torque {}",
             c.max_steer_deg, c.max_drive_torque, c.max_brake_torque
         ));
+        if let Some(v) = c.rolling_resistance {
+            s.push_str(&format!(" rolling_resistance {v}"));
+        }
+        if let Some(v) = c.drag_area {
+            s.push_str(&format!(" drag_area {v}"));
+        }
+        s.push('\n');
     }
     for p in &body.planes {
         s.push_str(&format!(

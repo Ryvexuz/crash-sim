@@ -16,19 +16,32 @@
 //! acceleration at full throttle 5.00 m/s^2 (torque-limited, check 3.5), so a throttle u gives
 //! about 5.00 u m/s^2 below the grip limit.
 //! - `0 0 0 0` to 2 s: the car drops 0.2 m onto its tyres and the body motion dies down.
-//! - `2 0.25 0 0.47`: steer 0.47 is 14.1 degrees, a kinematic radius L / tan(14.1 deg) = 9.96 m
+//! - `2 0.274 0 0.47`: steer 0.47 is 14.1 degrees, a kinematic radius L / tan(14.1 deg) = 9.96 m
 //!   (10 m chosen: a 63 m circle, above the 50 m path floor, at under 0.25 g); throttle 0.25 gives
-//!   1.25 m/s^2, so about 5 m/s after 4 s. Accelerating on the circle keeps the radius (low
-//!   lateral acceleration), so the loop still closes at the start.
-//! - `6 0 0 0.47`: coast round at about 4.7 m/s (cornering drag slows it to about 4.1 m/s): the
+//!   1.25 m/s^2, so about 5 m/s after 4 s, and the extra 0.024 pays for the rolling resistance
+//!   and drag (below). Accelerating on the circle keeps the radius (low lateral acceleration), so
+//!   the loop still closes at the start.
+//! - `6 0.024 0 0.47`: round at about 4.7 m/s, slowing to about 4.1 m/s from cornering drag: the
 //!   rest of the 2 pi x 10 m circle takes about 12 s, so the heading passes 360 degrees at about
-//!   18.4 s, back at the start pointing +x at the wall.
-//! - `18.5 0.5 0 0`: straight; throttle 0.5 gives 2.5 m/s^2, from about 4.1 m/s to 50 km/h
-//!   (13.89 m/s) in (13.89 - 4.1) / 2.5 = 3.9 s, about 35 m.
-//! - `22.4 0 0 0`: coast at about 50 km/h (no drag term, check 3.5) the last metres to the wall
-//!   at x = 50 (the front face starts at x = 2, 48 m away): first contact at about 23.3 s.
+//!   18.4 s, back at the start pointing +x at the wall. Throttle 0.024 is 151 N of drive force
+//!   (0.024 x 2000 N m / 0.3175 m), about the 141 N rolling resistance (0.012 x 1200 kg x g) plus
+//!   the drag at 4.5 m/s (8 N) of `car_basic.bsn`'s `rolling_resistance` and `drag_area`.
+//! - `18.5 0.535 0 0`: straight; throttle 0.5 gives 2.5 m/s^2, from about 4.1 m/s to 50 km/h
+//!   (13.89 m/s) in (13.89 - 4.1) / 2.5 = 3.9 s, about 35 m; the extra 0.035 is 220 N, the
+//!   rolling resistance plus the mean drag on the way up (up to 77 N at 50 km/h).
+//! - `22.4 0 0 0`: coast at about 50 km/h (slowing about 0.17 m/s^2 from the rolling resistance
+//!   and drag, `tests/coast_down.rs`) the last metres to the wall at x = 50 (the front face starts
+//!   at x = 2, 48 m away): first contact at about 23.3 s.
 //! - `24 0 1 0`: full brake once the crash is over, so the car stays by the wall instead of
-//!   rolling back from its rebound for the 36 s to t_last (the car has no rolling drag).
+//!   rolling back from its rebound for the 36 s to t_last.
+//!
+//! Re-aimed by task t-20261120-221319-2 (the rolling resistance and drag): the old script was
+//! `2 0.25 0 0.47`, `6 0 0 0.47` and `18.5 0.5 0 0`, aimed when the car had no drag; with the
+//! new forces it turned only 286.8 degrees before 72 s and never reached the wall. Only the
+//! three throttle values changed (times, steer, brake and the last line are as before), so that
+//! the car drives about the same path at about the same speeds (the 3.6 run before and after:
+//! lap heading 363.5 and 364.0 degrees, path 64.47 and 64.56 m, first wall contact 23.3130 and
+//! 23.2790 s, impact 49.8 and 49.7 km/h); no threshold of check 3.6 changed.
 //! - `60 0 1 0`: t_last, the line 3.6 fixes; the brake holds to the end of the 72 s run.
 
 use crash_sim::collide::{self, CrumpleParams};

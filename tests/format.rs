@@ -240,7 +240,21 @@ fn random_body(rng: &mut Rng) -> Body {
         if rng.below(2) == 0 {
             suspensions.reverse();
         }
-        controls = Some(Controls { max_steer_deg: 1e-6 + (rng.below(89_000) as f64) / 1000.0, max_drive_torque: rng.positive(), max_brake_torque: rng.positive() });
+        // the optional keys: absent, 0 or a positive number, each on its own
+        let optional = |rng: &mut Rng| match rng.below(3) {
+            0 => None,
+            1 => Some(0.0),
+            _ => Some(rng.positive()),
+        };
+        let rolling_resistance = optional(rng);
+        let drag_area = optional(rng);
+        controls = Some(Controls {
+            max_steer_deg: 1e-6 + (rng.below(89_000) as f64) / 1000.0,
+            max_drive_torque: rng.positive(),
+            max_brake_torque: rng.positive(),
+            rolling_resistance,
+            drag_area,
+        });
     }
     Body { materials, nodes, beams, groups, velocities, wheels, suspensions, tyres, controls, planes }
 }
@@ -943,6 +957,60 @@ fn refuse_steer_angle_outside_0_to_90_degrees() {
 fn refuse_nonpositive_drive_or_brake_torque() {
     expect_after(&car("max_drive_torque 100", "max_drive_torque 0"), 8, "max_drive_torque ", "max_drive_torque 0 must be > 0");
     expect_after(&car("max_brake_torque 200", "max_brake_torque -1"), 8, "max_brake_torque ", "max_brake_torque -1 must be > 0");
+}
+
+#[test]
+fn rolling_resistance_and_drag_area_are_optional_and_round_trip() {
+    // missing keys: None (the vehicle code reads 0), and the file is written without them
+    let body = parse(CAR).unwrap();
+    let c = body.controls.as_ref().unwrap();
+    assert_eq!((c.rolling_resistance, c.drag_area), (None, None));
+    assert_eq!(write(&body), CAR);
+    for (keys, rr, cda) in [
+        (" rolling_resistance 0.012 drag_area 0.65", Some(0.012), Some(0.65)),
+        (" rolling_resistance 0.012", Some(0.012), None),
+        (" drag_area 0.65", None, Some(0.65)),
+        (" rolling_resistance 0 drag_area 0", Some(0.0), Some(0.0)),
+    ] {
+        let text = car("max_brake_torque 200", &format!("max_brake_torque 200{keys}"));
+        let body = parse(&text).unwrap_or_else(|e| panic!("{keys}: {e}"));
+        let c = body.controls.as_ref().unwrap();
+        assert_eq!((c.rolling_resistance, c.drag_area), (rr, cda), "{keys}");
+        assert_eq!(write(&body), text, "{keys}: write(parse(x)) differs");
+        assert_eq!(parse(&write(&body)).unwrap(), body, "{keys}");
+    }
+}
+
+#[test]
+fn refuse_bad_rolling_resistance_or_drag_area() {
+    let with = |keys: &str| car("max_brake_torque 200", &format!("max_brake_torque 200 {keys}"));
+    for (key, other) in [("rolling_resistance", "drag_area 0.65"), ("drag_area", "")] {
+        let pre = format!("{key} ");
+        let rest = if other.is_empty() { String::new() } else { format!(" {other}") };
+        for (bad, words) in [
+            ("-0.01", format!("{key} -0.01 must be >= 0")),
+            ("-1e-300", format!("{key} -0.000")),
+            ("NaN", format!("{key} `NaN` is not finite")),
+            ("nan", format!("{key} `nan` is not finite")),
+            ("inf", format!("{key} `inf` is not finite")),
+            ("-inf", format!("{key} `-inf` is not finite")),
+            ("1e999", format!("{key} `1e999` is not finite")),
+            ("x", format!("{key} `x` is not a number")),
+        ] {
+            let text = with(&format!("{key} {bad}{rest}"));
+            expect_after(&text, 8, &pre, &words);
+        }
+        // the key with no value
+        let text = with(key);
+        expect(&text, 8, Some(text.split('\n').nth(7).unwrap().chars().count() + 1), &format!("missing {key}"));
+    }
+    // the order is rolling_resistance, then drag_area; anything else after them is refused
+    let text = with("drag_area 0.65 rolling_resistance 0.012");
+    expect_after(&text, 8, "0.65 ", "unexpected `rolling_resistance` at the end of the line");
+    let text = with("rolling_resistance 0.012 drag_area 0.65 drag_area 0.65");
+    expect_after(&text, 8, "drag_area 0.65 ", "unexpected `drag_area` at the end of the line");
+    let text = with("rolling_resistance 0.012 rolling_resistance 0.012");
+    expect_after(&text, 8, "0.012 ", "unexpected `rolling_resistance` at the end of the line");
 }
 
 #[test]

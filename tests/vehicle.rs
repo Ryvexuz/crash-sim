@@ -524,7 +524,13 @@ fn free_fall_keeps_momentum_and_wheels_on_their_axes() {
             }
         })
         .collect();
-    let body = parse(&text).unwrap();
+    let mut body = parse(&text).unwrap();
+    // The aero drag is an external force on a falling car (task t-20261120-221319-2), so this
+    // test of the axis constraint uses the car without it: the momentum must then grow by
+    // gravity's impulse alone. `tests/coast_down.rs` checks the drag itself.
+    let controls = body.controls.as_mut().unwrap();
+    controls.drag_area = None;
+    controls.rolling_resistance = None;
     let momentum = |s: &Sim| {
         let mut p = Vec3::ZERO;
         for (v, m) in s.vel.iter().zip(&s.mass) {
