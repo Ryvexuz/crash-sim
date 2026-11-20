@@ -78,7 +78,10 @@ fn reverse_from_rest_moves_the_car_backwards() {
     // Reverse is the same torque scale as forward (the distances differ with the weight
     // transfer and the tyre, not by a factor of 2), not a token push.
     let ratio = along_minus_heading / along_plus_heading;
-    assert!((0.5..2.0).contains(&ratio), "reverse/forward distance {ratio}");
+    assert!(
+        (0.5..2.0).contains(&ratio),
+        "reverse/forward distance {ratio}"
+    );
 }
 
 /// A sim of the car with every node and wheel moving forward at `speed` (m/s), wheels spinning
@@ -102,7 +105,7 @@ fn moving_sim(speed: f64, throttle: f64) -> Sim {
 /// same throttle does work, so the zero above is the rule and not a dead input.
 #[test]
 fn reverse_throttle_at_speed_adds_no_drive_torque() {
-    assert!(20.0 > REVERSE_MAX_FORWARD_SPEED && 0.5 < REVERSE_MAX_FORWARD_SPEED);
+    const { assert!(20.0 > REVERSE_MAX_FORWARD_SPEED && 0.5 < REVERSE_MAX_FORWARD_SPEED) };
     let mut rev = moving_sim(20.0, -1.0);
     let mut idle = moving_sim(20.0, 0.0);
     for _ in 0..500 {
@@ -149,7 +152,10 @@ fn throttle_range_is_minus_one_to_one() {
     let c = sim.car.as_mut().unwrap();
     assert!(c.set_controls(-1.0, 0.0, 0.0).is_ok());
     let e = c.set_controls(-1.01, 0.0, 0.0).unwrap_err();
-    assert!(e.contains("throttle -1.01 must be a number from -1 to 1"), "{e}");
+    assert!(
+        e.contains("throttle -1.01 must be a number from -1 to 1"),
+        "{e}"
+    );
     assert_eq!(c.throttle, -1.0, "a refused control changes nothing");
     assert!(c.set_controls(f64::NAN, 0.0, 0.0).is_err());
 }
@@ -208,8 +214,18 @@ fn input_and_live_accept_minus_one_and_refuse_below() {
         String::from_utf8_lossy(&f.stdout).into_owned(),
         String::from_utf8_lossy(&l.stdout).into_owned(),
     );
-    assert_eq!(f.status.code(), Some(0), "{}", String::from_utf8_lossy(&f.stderr));
-    assert_eq!(l.status.code(), Some(0), "{}", String::from_utf8_lossy(&l.stderr));
+    assert_eq!(
+        f.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&f.stderr)
+    );
+    assert_eq!(
+        l.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&l.stderr)
+    );
     assert_eq!(fo, lo, "--input and --live give the same bytes");
     let last = fo.lines().last().unwrap();
     let x: f64 = last

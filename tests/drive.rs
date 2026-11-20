@@ -542,7 +542,7 @@ fn input_errors_name_the_line() {
         ("0 0 0 0\n1 0 inf 0\n", "input line 2"),
         ("0 0 0 0\n1 0 0 -inf\n", "input line 2"),
         ("# comment\n0 0 0 0\n", "input line 1"),
-        ("0 -0.1 0 0\n", "input line 1"),
+        ("0 -1.0001 0 0\n", "input line 1"), // below -1: reverse is -1..=0 (task t-20261120-220016-2)
         ("0 1.0001 0 0\n", "input line 1"),
         ("0 0 -0.5 0\n", "input line 1"),
         ("0 0 1.5 0\n", "input line 1"),
