@@ -310,7 +310,9 @@ PASS iff `run: ok`, the last line of `scenarios/pad_lap.input` is `60 0 1 0`, th
 FAIL: `run: FAILED`; any `FAIL` line (an abort, which includes any NaN, is `settle: FAIL unstable ...`); a different last input line; or `wall_first_contact_s=none` or at or after 60.0000 (the settle window would not start after the crash).
 
 **3.7 A human drives it in the viewer** (nb-40 render half). Tell Lazlo first (nb-37: the PC shares RAM with the GPU; the viewer is software-rendered, but ask before long sessions).
-`broadsword run render -- cargo run --offline --release --example drive -- --body ../crash-sim/scenarios/pad_and_wall.bsn --save-input ../../scratch/s6-3-7.input > scratch/s6-3-7.txt 2>&1`
+First build the release crash-sim the viewer starts as its child (ADR 0001 (a)): `broadsword run crash-sim -- cargo build --offline --release`.
+`broadsword run render -- cargo run --offline --release --example drive -- --sim-exe ../../build/release/crash-sim.exe --body ../crash-sim/scenarios/pad_and_wall.bsn --save-input ../../scratch/s6-3-7.input > scratch/s6-3-7.txt 2>&1`
+(`--sim-exe` is required by the viewer, render 1d83276; the paths are relative to the render project folder. The viewer's `final ...` line comes from replaying the saved input through `crash-sim --input`, and it also prints `cross-check: ok` when the last live frame agrees with that replay within 1e-3 m.)
 Lazlo drives with the arrow keys or WASD, around the pad and into the wall, then closes the window. The viewer saves the inputs it used (ending with a line at the moment the window closed) and prints `final t=... x=... z=... heading_deg=...` and `saved input: ../../scratch/s6-3-7.input`. The orchestrator copies the input to `evidence/stage-6-m3-human.input` before scratch can be wiped.
 PASS iff Lazlo says the car responded to the keys and he hit the wall, and both lines are printed. FAIL: no window, no key response, or no saved input.
 
