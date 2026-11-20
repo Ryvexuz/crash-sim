@@ -9,6 +9,7 @@ pub mod settle;
 pub mod solver;
 pub mod trajectory;
 pub mod vec3;
+pub mod vehicle;
 
 pub use format::{Body, ParseError};
 
@@ -260,6 +261,10 @@ pub struct Sim {
     pub broken: Vec<bool>,
     /// Every break so far, in the order they happened (within one substep, by beam index).
     pub breaks: Vec<BreakEvent>,
+    /// The wheels, for a sim built by `Sim::from_car` from a body with wheels; None otherwise.
+    pub car: Option<vehicle::Car>,
+    /// Gravity tilt theta (rad, `set_gravity_tilt`): gravity is g (sin theta, -cos theta, 0).
+    gravity_tilt: f64,
     solver: Box<dyn Solver>,
     step: u64,
 }
@@ -315,7 +320,7 @@ impl Sim {
         let n = pos.len();
         let yield_strain = vec![None; beams.len()];
         let n_beams = beams.len();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), solver, step: 0 }
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0 }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -329,13 +334,54 @@ impl Sim {
     /// are the y = 0 ground, then the body's planes in file order.
     /// Positions, start velocities, masses and per-beam stiffness and damping come from the
     /// body; a material's `yield_strain` makes its beams plastic (`apply_yield`).
+    ///
+    /// A body with wheels is refused: this constructor does not simulate them, and every
+    /// command that builds its sim here (the CSV run, the settle and crumple reports, the
+    /// trajectory writer) measures nodes only, so the wheels would be dropped or not counted.
+    /// `Sim::from_car` simulates them.
     pub fn from_body_with_solver(cfg: Config, body: &Body, solver: Box<dyn Solver>) -> Result<Sim, String> {
+        if !body.wheels.is_empty() {
+            return Err(format!(
+                "the body has {} wheels, which this run does not simulate (they would be dropped): wheels are simulated by `Sim::from_car` (docs/PHYSICS.md, \"Wheels, suspension and tyres\"), which the command-line runs and reports do not use yet",
+                body.wheels.len()
+            ));
+        }
+        Sim::build_from_body(cfg, body, solver, false)
+    }
+
+    /// A sim of a body with wheels (or without: then it is `from_body`'s sim), with the default
+    /// solver. Refused for everything `from_body` refuses except the wheels, and for wheel
+    /// numbers that are not valid, a chassis whose up axis cannot be found, or a step that is not
+    /// below the stability bound of the chassis together with the wheels
+    /// (`vehicle::Car::limit_elements`).
+    pub fn from_car(cfg: Config, body: &Body) -> Result<Sim, String> {
+        Sim::from_car_with_solver(cfg, body, Box::new(SymplecticEuler))
+    }
+
+    /// `from_car` with the given solver.
+    pub fn from_car_with_solver(cfg: Config, body: &Body, solver: Box<dyn Solver>) -> Result<Sim, String> {
+        Sim::build_from_body(cfg, body, solver, true)
+    }
+
+    fn build_from_body(cfg: Config, body: &Body, solver: Box<dyn Solver>, with_wheels: bool) -> Result<Sim, String> {
         let mut planes = vec![Plane::ground()];
         for p in &body.planes {
             planes.push(Plane::from_format(p)?);
         }
         let built = body.build();
-        cfg.validate_body(&built.beams, &built.mass)?;
+        let car = if with_wheels && !body.wheels.is_empty() {
+            cfg.validate_numbers()?;
+            let car = vehicle::Car::new(body, &built.pos, &built.vel, &built.mass, planes.len(), cfg.gravity)?;
+            let (extra_mass, elements) = car.limit_elements(built.mass.len());
+            let h = cfg.dt / cfg.substeps as f64;
+            if let Some(e) = solver::step_error_with(h, &built.beams, &built.mass, &extra_mass, &elements) {
+                return Err(format!("{e} (the chassis with its wheels, suspension and tyres)"));
+            }
+            Some(car)
+        } else {
+            cfg.validate_body(&built.beams, &built.mass)?;
+            None
+        };
         let yield_strain: Vec<Option<f64>> = body
             .beams
             .iter()
@@ -368,9 +414,55 @@ impl Sim {
             break_strain,
             broken: vec![false; n_beams],
             breaks: Vec::new(),
+            car,
+            gravity_tilt: 0.0,
             solver,
             step: 0,
         })
+    }
+
+    /// Tilt gravity by theta (rad) about z: it becomes g (sin theta, -cos theta, 0), so on the
+    /// flat ground the body stands on a slope of angle theta, downhill +x (docs/STAGE6.md check
+    /// 3.4; `vehicle::slope_angle` gives theta from a grip fraction). Refused unless theta is
+    /// finite and |theta| < pi/2.
+    pub fn set_gravity_tilt(&mut self, theta: f64) -> Result<(), String> {
+        if !(theta.is_finite() && theta.abs() < std::f64::consts::FRAC_PI_2) {
+            return Err(format!("gravity tilt {theta} rad must be finite and below pi/2 in size"));
+        }
+        self.gravity_tilt = theta;
+        Ok(())
+    }
+
+    /// The gravity tilt theta (rad); 0 unless `set_gravity_tilt` changed it.
+    pub fn gravity_tilt(&self) -> f64 {
+        self.gravity_tilt
+    }
+
+    /// The gravitational acceleration vector (m/s^2).
+    pub fn gravity_vector(&self) -> Vec3 {
+        let (s, c) = self.gravity_tilt.sin_cos();
+        Vec3::new(self.cfg.gravity * s, -self.cfg.gravity * c, 0.0)
+    }
+
+    /// Total energy (J): kinetic, gravitational (potential -m g . r, zero at the origin; for an
+    /// untilted gravity this is m g y) and elastic over the nodes and unbroken beams, plus the
+    /// wheels' terms (`vehicle::Car::energy`) for a car. For a body without wheels and without
+    /// tilt it equals `settle::total_energy`.
+    pub fn total_energy(&self) -> f64 {
+        let gv = self.gravity_vector();
+        let mut e = 0.0;
+        for i in 0..self.pos.len() {
+            let v = self.vel[i];
+            e += 0.5 * self.mass[i] * v.dot(v) - self.mass[i] * gv.dot(self.pos[i]);
+        }
+        for b in self.live_beams() {
+            let stretch = (self.pos[b.a] - self.pos[b.b]).length() - b.rest;
+            e += 0.5 * b.stiffness * stretch * stretch;
+        }
+        if let Some(car) = &self.car {
+            e += car.energy(&self.planes, gv);
+        }
+        e
     }
 
     /// One solver substep of length `h` (no yield pass). `advance` does this and then
@@ -385,7 +477,23 @@ impl Sim {
             live = self.live_beams();
             &live
         };
-        self.solver.step(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: self.cfg.gravity }, h);
+        if self.car.is_none() && self.gravity_tilt == 0.0 {
+            // The plain path, unchanged: the cube's output stays byte-for-byte what it was.
+            self.solver.step(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: self.cfg.gravity }, h);
+            collide::apply(&mut self.pos, &mut self.vel, &self.planes, h);
+            return;
+        }
+        // Tilted gravity: its y part goes to the solver as `gravity`, its x part as an extra
+        // force on every node. The wheels add their suspension reactions on the mount nodes.
+        let gv = self.gravity_vector();
+        let mut extra: Vec<Vec3> = self.mass.iter().map(|&m| Vec3::new(m * gv.x, 0.0, 0.0)).collect();
+        if let Some(car) = self.car.as_mut() {
+            car.pre_step(&self.pos, &self.vel, &self.mass, &self.planes, vehicle::Substep { gravity: gv, h }, &mut extra);
+        }
+        self.solver.step_with_forces(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: -gv.y }, &extra, h);
+        if let Some(car) = self.car.as_mut() {
+            car.post_step(&mut self.pos, &mut self.vel, &self.mass, &self.planes, h);
+        }
         collide::apply(&mut self.pos, &mut self.vel, &self.planes, h);
     }
 
@@ -483,12 +591,20 @@ impl Sim {
         if strain.is_nan() || strain > MAX_STRAIN_LIMIT {
             return Err(format!("max beam strain {strain} exceeds limit {MAX_STRAIN_LIMIT}"));
         }
+        if let Some(e) = self.car.as_ref().and_then(|c| c.check()) {
+            return Err(e);
+        }
         Ok(())
     }
 
-    /// Largest node speed, m/s.
+    /// Largest node speed, m/s. For a car, also every wheel's centre speed and rim speed
+    /// (|spin| x radius), so a spinning or bouncing wheel is never "at rest".
     pub fn max_speed(&self) -> f64 {
-        self.vel.iter().map(|v| v.length()).fold(0.0, f64::max)
+        let nodes = self.vel.iter().map(|v| v.length()).fold(0.0, f64::max);
+        match &self.car {
+            Some(c) => nodes.max(c.max_speed()),
+            None => nodes,
+        }
     }
 
     /// Advance one output step (`substeps` physics substeps).

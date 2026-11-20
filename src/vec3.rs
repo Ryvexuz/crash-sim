@@ -20,6 +20,22 @@ impl Vec3 {
     pub fn length(self) -> f64 {
         self.dot(self).sqrt()
     }
+    /// The cross product self x o (right-handed: x cross y = z).
+    pub fn cross(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+    }
+    /// This vector scaled to length 1, or None when it is zero or has a non-finite component.
+    /// It is divided by its largest component before the length is taken, so a huge or tiny
+    /// vector cannot overflow or underflow (as `collide::Plane::new` does for a normal).
+    pub fn normalized(self) -> Option<Vec3> {
+        let finite = self.x.is_finite() && self.y.is_finite() && self.z.is_finite();
+        let m = self.x.abs().max(self.y.abs()).max(self.z.abs());
+        if !(finite && m > 0.0) {
+            return None;
+        }
+        let s = Vec3::new(self.x / m, self.y / m, self.z / m);
+        Some(s * (1.0 / s.length()))
+    }
 }
 
 impl Add for Vec3 {
