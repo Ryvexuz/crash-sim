@@ -2,3 +2,4 @@
 *.input text eol=lf
 *.csv text eol=lf
 *.meta text eol=lf
+*.save text eol=lf
