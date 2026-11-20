@@ -6,6 +6,7 @@
 pub mod format;
 pub mod settle;
 pub mod solver;
+pub mod trajectory;
 pub mod vec3;
 
 pub use format::{Body, ParseError};
