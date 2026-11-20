@@ -276,6 +276,8 @@ fn main() {
     println!();
     println!("needs instrumentation (follow-up): inside the solver step, beam forces vs node integration;");
     println!("inside Car::pre_step, the wheel loop vs tyre_force vs add_torque; inside post_step, the axis");
-    println!("constraint vs patch update; Sim::apply_breaks (private; no beam here has a break strain);");
+    println!(
+        "constraint vs patch update; Sim::apply_breaks (private; no beam here has a break strain);"
+    );
     println!("input.rs's per-step measurement (centroid, heading, wall_touched; private).");
 }
