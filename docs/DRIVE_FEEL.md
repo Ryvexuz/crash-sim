@@ -8,8 +8,10 @@ line names another source.
 
 ## Commands
 
-Run from the Broadsword root, in the task worktree (so the input path has one more `..` than it
-would from `projects/crash-sim`):
+Run from the Broadsword root, in the task worktree. From a worktree the command runs in
+`worktrees/crash-sim/<task id>`, so the input path is `../../../scratch/s6-3-7.input`; the
+brief's `../../scratch/s6-3-7.input` only resolves from `projects/crash-sim` (run as written from
+the worktree it fails with "The system cannot find the file specified"):
 
 ```
 build\bin\broadsword.exe run crash-sim --task t-20261120-220016 -- cargo run --offline --release --example drive_feel -- ../../../scratch/s6-3-7.input
@@ -145,9 +147,11 @@ deg/s) although the steering is wound off to 0 by 10.30 s: power oversteer.
    ratio there is divided by the 1 m/s floor of the example, so its size is not exact. Nothing in
    these runs isolates yaw damping.
 
-Also from the report: "didn't have a reverse". There is none: the input rules allow throttle 0
-to 1 only (`src/input.rs`, module comment), and the drive torque never pushes backward. That is
-a missing feature, not part of the ice feel; it goes to the orchestrator for `IDEAS.md`.
+Also from the report: "didn't have a reverse". The runs above, made on the crate before
+commit 15499f4, had none (throttle 0 to 1 only). Reverse was added after this diagnosis, in
+crash-sim commit 15499f4: a negative throttle drives backward below
+`vehicle::REVERSE_MAX_FORWARD_SPEED` = 1.0 m/s. It is not part of the ice feel; none of the
+measurements above depend on it.
 
 ## Proposed fixes (every expected effect is an estimate)
 
