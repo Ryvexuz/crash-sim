@@ -19,7 +19,9 @@ fn dir(name: &str) -> PathBuf {
 /// .gitattributes rule for `*.save`), which the strict parser refuses by design: undo only that.
 fn fixture() -> String {
     let path = format!("{}/tests/data/save_v1.save", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")).replace("\r\n", "\n")
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{path}: {e}"))
+        .replace("\r\n", "\n")
 }
 
 fn refused(text: &str) -> (usize, String) {
@@ -43,7 +45,14 @@ fn v1_fixture_loads_and_resaves_as_v2() {
     let s = Save::parse(&fixture()).expect("fixture parses");
     assert_eq!(s.best.len(), 3);
     let m = &s.best["monza"];
-    assert_eq!(*m, Best { seconds: 83.412, car: UNKNOWN.into(), date: UNKNOWN.into() });
+    assert_eq!(
+        *m,
+        Best {
+            seconds: 83.412,
+            car: UNKNOWN.into(),
+            date: UNKNOWN.into()
+        }
+    );
     assert_eq!(s.best["alpine"].seconds, 71.5);
     assert_eq!(s.best["zandvoort"].seconds, 90.0);
     assert_eq!(s.best["zandvoort"].car, "unknown");
@@ -101,18 +110,36 @@ fn refuses_bad_lines() {
     refusal("save 2\nbest a 1 c 2026-01-01 extra\n", 2, "found 6 fields");
     refusal("save 2\nbest  a 1 c 2026-01-01\n", 2, "found 6 fields");
     refusal("save 2\nbest a 1 c 2026-01-01 \n", 2, "found 6 fields");
-    refusal("save 2\nbest a 1 c 2026-01-01\nbest a 2 c 2026-01-01\n", 3, "duplicate track");
-    refusal("save 1\nbest a 1\nbest b 2\nbest a 3\n", 4, "duplicate track");
-    refusal("save 2\nbest a\u{e9} 1 c 2026-01-01\n", 2, "printable ASCII");
+    refusal(
+        "save 2\nbest a 1 c 2026-01-01\nbest a 2 c 2026-01-01\n",
+        3,
+        "duplicate track",
+    );
+    refusal(
+        "save 1\nbest a 1\nbest b 2\nbest a 3\n",
+        4,
+        "duplicate track",
+    );
+    refusal(
+        "save 2\nbest a\u{e9} 1 c 2026-01-01\n",
+        2,
+        "printable ASCII",
+    );
 }
 
 #[test]
 fn refuses_bad_seconds() {
-    for bad in ["0", "0.0", "-1", "-0.5", "inf", "NaN", "nan", "infinity", "+5", "1e3", "1.", ".5", "1,5", "abc", ""] {
+    for bad in [
+        "0", "0.0", "-1", "-0.5", "inf", "NaN", "nan", "infinity", "+5", "1e3", "1.", ".5", "1,5",
+        "abc", "",
+    ] {
         let text = format!("save 2\nbest a {bad} c 2026-01-01\n");
         let (line, m) = refused(&text);
         assert_eq!(line, 2, "{bad:?}: {m}");
-        assert!(m.contains("seconds") || m.contains("fields"), "{bad:?}: {m}");
+        assert!(
+            m.contains("seconds") || m.contains("fields"),
+            "{bad:?}: {m}"
+        );
     }
     refusal("save 1\nbest a 5\nbest b 0\n", 3, "must be positive");
     refusal("save 1\nbest a 1\nbest b 1e999\n", 3, "plain decimal");
@@ -123,7 +150,20 @@ fn refuses_bad_seconds() {
 
 #[test]
 fn refuses_bad_dates() {
-    for bad in ["2026-13-01", "2026-00-10", "2026-02-30", "2025-02-29", "2026-1-1", "26-01-01", "2026/01/01", "2026-01-00", "0000-01-01", "Unknown", "2026-01-0a", "2026-04-31"] {
+    for bad in [
+        "2026-13-01",
+        "2026-00-10",
+        "2026-02-30",
+        "2025-02-29",
+        "2026-1-1",
+        "26-01-01",
+        "2026/01/01",
+        "2026-01-00",
+        "0000-01-01",
+        "Unknown",
+        "2026-01-0a",
+        "2026-04-31",
+    ] {
         refusal(&format!("save 2\nbest a 1 c {bad}\n"), 2, "date");
     }
     // Calendar edge that is valid.
@@ -137,11 +177,31 @@ fn refuses_bad_dates() {
 fn record_lap_keeps_the_best() {
     let mut s = Save::new();
     assert!(s.record_lap("monza", 90.0, "gt", "2026-11-01").unwrap());
-    assert!(!s.record_lap("monza", 95.0, "kart", "2026-11-02").unwrap(), "slower must not replace");
-    assert!(!s.record_lap("monza", 90.0, "kart", "2026-11-02").unwrap(), "a tie keeps the old entry");
-    assert_eq!(s.best["monza"], Best { seconds: 90.0, car: "gt".into(), date: "2026-11-01".into() });
+    assert!(
+        !s.record_lap("monza", 95.0, "kart", "2026-11-02").unwrap(),
+        "slower must not replace"
+    );
+    assert!(
+        !s.record_lap("monza", 90.0, "kart", "2026-11-02").unwrap(),
+        "a tie keeps the old entry"
+    );
+    assert_eq!(
+        s.best["monza"],
+        Best {
+            seconds: 90.0,
+            car: "gt".into(),
+            date: "2026-11-01".into()
+        }
+    );
     assert!(s.record_lap("monza", 89.25, "kart", "2026-11-03").unwrap());
-    assert_eq!(s.best["monza"], Best { seconds: 89.25, car: "kart".into(), date: "2026-11-03".into() });
+    assert_eq!(
+        s.best["monza"],
+        Best {
+            seconds: 89.25,
+            car: "kart".into(),
+            date: "2026-11-03".into()
+        }
+    );
     assert!(s.record_lap("oval", 20.0, "kart", "unknown").unwrap());
     assert_eq!(s.best.len(), 2);
     // A migrated v1 entry is beaten like any other.
@@ -158,8 +218,20 @@ fn record_lap_refuses_bad_values_and_changes_nothing() {
     s.record_lap("monza", 90.0, "gt", "2026-11-01").unwrap();
     let before = s.clone();
     for secs in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        assert!(matches!(s.record_lap("monza", secs, "gt", "2026-11-01"), Err(SaveError::Invalid(_))), "{secs}");
-        assert!(matches!(s.record_lap("new", secs, "gt", "2026-11-01"), Err(SaveError::Invalid(_))), "{secs}");
+        assert!(
+            matches!(
+                s.record_lap("monza", secs, "gt", "2026-11-01"),
+                Err(SaveError::Invalid(_))
+            ),
+            "{secs}"
+        );
+        assert!(
+            matches!(
+                s.record_lap("new", secs, "gt", "2026-11-01"),
+                Err(SaveError::Invalid(_))
+            ),
+            "{secs}"
+        );
     }
     assert!(s.record_lap("", 1.0, "gt", "2026-11-01").is_err());
     assert!(s.record_lap("a b", 1.0, "gt", "2026-11-01").is_err());
@@ -190,7 +262,11 @@ fn failed_write_leaves_old_file_unchanged() {
         Err(SaveError::Io { path, .. }) => assert_eq!(path, tmp),
         other => panic!("expected an Io error, got {other:?}"),
     }
-    assert_eq!(std::fs::read(&p).unwrap(), old, "old file must be untouched");
+    assert_eq!(
+        std::fs::read(&p).unwrap(),
+        old,
+        "old file must be untouched"
+    );
     assert!(tmp.is_dir(), "the blocker must not be removed");
     std::fs::remove_dir(&tmp).unwrap();
 
@@ -198,6 +274,108 @@ fn failed_write_leaves_old_file_unchanged() {
     s.save(&p).unwrap();
     assert_eq!(Save::load(&p).unwrap().best["monza"].seconds, 80.0);
     assert!(!tmp.exists());
+}
+
+/// `best` is a public field: `save` must refuse what `load` would refuse, name the track, and
+/// leave the old file byte for byte as it was (and no temp file).
+#[test]
+fn save_refuses_invalid_best_and_leaves_old_file() {
+    let d = dir("invalid");
+    let p = d.join("game.save");
+    let mut good = Save::new();
+    good.record_lap("monza", 90.0, "gt", "2026-11-01").unwrap();
+    good.save(&p).unwrap();
+    let old = std::fs::read(&p).unwrap();
+
+    let ok = Best {
+        seconds: 80.0,
+        car: "kart".into(),
+        date: "2026-11-02".into(),
+    };
+    let bad: Vec<(&str, Best)> = vec![
+        (
+            "nan",
+            Best {
+                seconds: f64::NAN,
+                ..ok.clone()
+            },
+        ),
+        (
+            "inf",
+            Best {
+                seconds: f64::INFINITY,
+                ..ok.clone()
+            },
+        ),
+        (
+            "zero",
+            Best {
+                seconds: 0.0,
+                ..ok.clone()
+            },
+        ),
+        (
+            "negative",
+            Best {
+                seconds: -1.0,
+                ..ok.clone()
+            },
+        ),
+        (
+            "car with space",
+            Best {
+                car: "go kart".into(),
+                ..ok.clone()
+            },
+        ),
+        (
+            "empty car",
+            Best {
+                car: String::new(),
+                ..ok.clone()
+            },
+        ),
+        (
+            "newline in car",
+            Best {
+                car: "a\nbest x 1 y 2026-01-01".into(),
+                ..ok.clone()
+            },
+        ),
+        (
+            "bad date",
+            Best {
+                date: "2026-02-30".into(),
+                ..ok.clone()
+            },
+        ),
+    ];
+    for (what, b) in bad {
+        let mut s = good.clone();
+        s.best.insert("spa".to_string(), b);
+        match s.save(&p) {
+            Err(SaveError::Invalid(m)) => assert!(m.contains("spa"), "{what}: {m}"),
+            other => panic!("{what}: expected Invalid, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            old,
+            "{what}: old file must be untouched"
+        );
+        assert!(!save::temp_path(&p).exists(), "{what}: no temp file");
+    }
+    // A bad track id (the map key) is refused the same way.
+    let mut s = good.clone();
+    s.best.insert("two words".to_string(), ok.clone());
+    assert!(matches!(s.save(&p), Err(SaveError::Invalid(_))));
+    assert_eq!(std::fs::read(&p).unwrap(), old);
+
+    // The same rules in one place: whatever validate accepts, load accepts after save.
+    let mut s = good.clone();
+    s.best.insert("spa".to_string(), ok);
+    s.validate().unwrap();
+    s.save(&p).unwrap();
+    assert_eq!(Save::load(&p).unwrap(), s);
 }
 
 #[test]
@@ -211,7 +389,10 @@ fn failed_rename_leaves_target_and_no_temp() {
     let err = write_atomic(&target, b"save 2\n").unwrap_err();
     assert!(matches!(err, SaveError::Io { .. }), "{err:?}");
     assert!(target.join("keep").exists());
-    assert!(!save::temp_path(&target).exists(), "temp file left behind after a failed rename");
+    assert!(
+        !save::temp_path(&target).exists(),
+        "temp file left behind after a failed rename"
+    );
 }
 
 #[test]
@@ -222,12 +403,18 @@ fn leftover_temp_from_a_crash_is_replaced() {
     let mut s = Save::new();
     s.record_lap("a", 1.5, "c", "2026-01-01").unwrap();
     s.save(&p).unwrap();
-    assert_eq!(std::fs::read_to_string(&p).unwrap(), "save 2\nbest a 1.5 c 2026-01-01\n");
+    assert_eq!(
+        std::fs::read_to_string(&p).unwrap(),
+        "save 2\nbest a 1.5 c 2026-01-01\n"
+    );
     assert!(!save::temp_path(&p).exists());
 }
 
 #[test]
 fn load_missing_file_is_an_io_error() {
     let d = dir("missing");
-    assert!(matches!(Save::load(&d.join("nope.save")), Err(SaveError::Io { .. })));
+    assert!(matches!(
+        Save::load(&d.join("nope.save")),
+        Err(SaveError::Io { .. })
+    ));
 }
