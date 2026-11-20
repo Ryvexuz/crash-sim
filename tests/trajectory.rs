@@ -377,3 +377,30 @@ fn v2_triangle_text_matches_the_committed_fixture() {
     assert_eq!(got, want);
     assert!(parse_v2(&want).is_ok());
 }
+
+/// The last time a text prints, from its `t,node,x,y,z` rows.
+fn last_t(text: &str) -> f64 {
+    text.lines()
+        .filter(|l| !l.starts_with("break,"))
+        .filter_map(|l| l.split(',').next()?.parse::<f64>().ok())
+        .last()
+        .unwrap()
+}
+
+/// A duration that is not a whole number of steps (0.25 s at dt 0.1) must never print a t past it: the
+/// old `round()` printed 0.3.
+#[test]
+fn a_duration_that_is_not_whole_steps_never_prints_a_t_past_it() {
+    let cfg = Config {
+        duration: 0.25,
+        dt: 0.1,
+        substeps: 40,
+        ..Config::default()
+    };
+    let v1 = cube_text(&cfg, 1).unwrap();
+    assert!(last_t(&v1) <= cfg.duration, "v1 last t {}", last_t(&v1));
+    assert!((last_t(&v1) - 0.2).abs() < 1e-9);
+    let v2 = body_text(&cfg, &parse(TRIANGLE).unwrap(), 1).unwrap();
+    assert!(last_t(&v2) <= cfg.duration, "v2 last t {}", last_t(&v2));
+    assert!((last_t(&v2) - 0.2).abs() < 1e-9);
+}

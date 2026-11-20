@@ -119,7 +119,7 @@ fn check_stride(stride: u64) -> Result<(), String> {
 pub fn cube_text(cfg: &Config, stride: u64) -> Result<String, String> {
     check_stride(stride)?;
     cfg.validate()?;
-    let steps = (cfg.duration / cfg.dt).round() as u64;
+    let steps = crate::step_count(cfg);
     let mut sim = Sim::new(cfg.clone());
     let mut s = format!("{COLUMNS}\n");
     for i in 0..=steps {
@@ -141,7 +141,7 @@ pub fn body_text(cfg: &Config, body: &Body, stride: u64) -> Result<String, Strin
     check_stride(stride)?;
     let walls = walls_from_planes(&body.planes)?;
     let mut sim = Sim::from_body(cfg.clone(), body)?;
-    let steps = (cfg.duration / cfg.dt).round() as u64;
+    let steps = crate::step_count(cfg);
     let mut s = header_v2(sim.pos.len(), &sim.beams, &walls)?;
     let mut written = 0;
     for i in 0..=steps {
