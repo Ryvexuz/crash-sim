@@ -384,11 +384,26 @@ fn results() -> &'static Results {
             lv.steer,
             lv.throttle.len()
         );
-        let mut runs = Vec::new();
-        for scale in [1.0, GRIP_LOW, GRIP_HIGH] {
-            let r = run(&car, scale);
-            print!("{}", render(&r));
-            runs.push(r);
+        // The three runs are independent (each builds its own sim from its own copy of the
+        // car), so they run on three threads; they are printed afterwards in the fixed order.
+        let runs: Vec<Run> = std::thread::scope(|s| {
+            let handles: Vec<_> = [1.0, GRIP_LOW, GRIP_HIGH]
+                .into_iter()
+                .map(|scale| {
+                    let car = &car;
+                    s.spawn(move || run(car, scale))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| panic!("a skidpad run panicked"))
+                })
+                .collect()
+        });
+        for r in &runs {
+            print!("{}", render(r));
         }
         let runs: [Run; 3] = runs.try_into().unwrap();
         Results { mu, runs }
