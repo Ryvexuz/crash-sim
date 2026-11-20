@@ -298,7 +298,6 @@ fn free_fall_keeps_momentum_and_wheels_on_their_axes() {
         }
     }).collect();
     let body = parse(&text).unwrap();
-    let mut sim = Sim::from_car(substep_cfg(0.5), &body).unwrap();
     let momentum = |s: &Sim| {
         let mut p = Vec3::ZERO;
         for (v, m) in s.vel.iter().zip(&s.mass) {
@@ -309,20 +308,30 @@ fn free_fall_keeps_momentum_and_wheels_on_their_axes() {
         }
         p
     };
-    let m_total: f64 = sim.mass.iter().sum::<f64>() + 120.0;
-    for _ in 0..500 {
-        sim.advance();
-        sim.check().unwrap();
-    }
-    let p = momentum(&sim);
-    let want = -m_total * 9.81 * 0.5;
-    println!("momentum after 0.5 s free fall: ({:.3e}, {:.6}, {:.3e}), want y {want:.6}", p.x, p.y, p.z);
-    assert!((p.y - want).abs() < 1e-6 * want.abs() && p.x.abs() < 1e-9 && p.z.abs() < 1e-9, "{p:?}");
-    for w in &sim.car.as_ref().unwrap().wheels {
-        assert!(w.total_load() == 0.0);
-        let mount = sim.pos[w.p.mount[0]];
-        let off = (w.pos - mount) - Vec3::new(0.0, (w.pos - mount).y, 0.0);
-        assert!(off.length() < 1e-9, "wheel {} off its axis by {off:?}", w.p.name);
+    // Untilted gravity acts along every axis; tilted by 0.5 rad it also pulls each wheel across
+    // its axis, so the carrier and the constraint must take the wheel's mass along.
+    for tilt in [0.0, 0.5] {
+        let mut sim = Sim::from_car(substep_cfg(0.5), &body).unwrap();
+        sim.set_gravity_tilt(tilt).unwrap();
+        let m_total: f64 = sim.mass.iter().sum::<f64>() + 120.0;
+        for _ in 0..500 {
+            sim.advance();
+            sim.check().unwrap();
+        }
+        let p = momentum(&sim);
+        let want = sim.gravity_vector() * (m_total * 0.5);
+        let err = (p - want).length();
+        println!("tilt {tilt}: momentum after 0.5 s free fall ({:.6}, {:.6}, {:.3e}), want ({:.6}, {:.6}, 0), error {err:.3e}", p.x, p.y, p.z, want.x, want.y);
+        assert!(err < 1e-6 * want.length(), "tilt {tilt}: momentum {p:?} vs {want:?}");
+        let car = sim.car.as_ref().unwrap();
+        // the axis the constraint used: the frame of the positions after the solver's step
+        let up = car.fit_frame(&sim.pos).unwrap().up;
+        for w in &car.wheels {
+            assert!(w.total_load() == 0.0);
+            let rel = w.pos - sim.pos[w.p.mount[0]];
+            let off = rel - up * rel.dot(up);
+            assert!(off.length() < 1e-9, "tilt {tilt}: wheel {} off its axis by {off:?}", w.p.name);
+        }
     }
 }
 
