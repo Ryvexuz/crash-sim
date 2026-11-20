@@ -2,8 +2,7 @@
 //! because `src/lib.rs` does not register it yet.
 #![allow(dead_code)]
 
-#[path = "../src/pulse.rs"]
-mod pulse;
+use crash_sim::pulse;
 
 use pulse::*;
 use std::f64::consts::PI;

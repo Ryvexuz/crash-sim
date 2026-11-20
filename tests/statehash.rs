@@ -1,8 +1,7 @@
 //! Tests for the state hash module. Included by path because `src/lib.rs` does not register it yet.
 #![allow(dead_code)]
 
-#[path = "../src/statehash.rs"]
-mod statehash;
+use crash_sim::statehash;
 
 use statehash::*;
 

@@ -2,8 +2,7 @@
 //! is included by path because `src/lib.rs` does not register it yet.
 #![allow(dead_code)]
 
-#[path = "../src/reference.rs"]
-mod reference;
+use crash_sim::reference;
 
 use reference::*;
 use std::path::PathBuf;

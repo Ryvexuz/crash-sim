@@ -1,10 +1,8 @@
 //! Tests for src/track.rs (nb-43, docs/STAGE7.md check 1.1). The module is included by path
 //! because `src/lib.rs` registers it in a later one-line task.
 
-#[path = "../src/track.rs"]
-mod track;
-#[path = "../src/vec3.rs"]
-mod vec3;
+use crash_sim::track;
+use crash_sim::vec3;
 
 use track::{
     format_clock, format_seconds, ErrorKind, InvalidReason, LapEvent, LapTimer, ParseError,

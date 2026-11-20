@@ -1,8 +1,7 @@
 //! The racing save file: v1 -> v2 migration, v2 round trip, every refusal by line and words,
 //! `record_lap`, and the atomic write (a failed write leaves the old file unchanged).
 
-#[path = "../src/save.rs"]
-mod save;
+use crash_sim::save;
 
 use save::{write_atomic, Best, Save, SaveError, UNKNOWN};
 use std::path::PathBuf;

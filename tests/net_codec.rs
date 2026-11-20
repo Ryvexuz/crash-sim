@@ -1,8 +1,7 @@
 //! Net message codec tests (n20-25a). The module is included by path; lib.rs is not touched.
 #![allow(dead_code)]
 
-#[path = "../src/net.rs"]
-mod net;
+use crash_sim::net;
 
 use net::{decode, encode, Msg, NetError, INPUT_SCALE, MAX_LINE_BYTES, MAX_TICK_RATE};
 

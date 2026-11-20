@@ -1,5 +1,4 @@
-#[path = "../src/settings.rs"]
-mod settings;
+use crash_sim::settings;
 
 use settings::{load, validate, write, Key, Settings, SettingsError, Units, ACTIONS, KEY_NAMES};
 

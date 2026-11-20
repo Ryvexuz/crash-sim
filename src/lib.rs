@@ -3,11 +3,21 @@
 //! Simple on purpose: spring-damper beams, symplectic Euler, y = 0 ground with
 //! restitution and friction. Std only, deterministic (no RNG, fixed step order).
 
+pub mod ai;
 pub mod collide;
 pub mod format;
 pub mod input;
+pub mod menu;
+pub mod net;
+pub mod pulse;
+pub mod reference;
+pub mod save;
+pub mod settings;
 pub mod settle;
 pub mod solver;
+pub mod speed_profile;
+pub mod statehash;
+pub mod track;
 pub mod trajectory;
 pub mod vec3;
 pub mod vehicle;

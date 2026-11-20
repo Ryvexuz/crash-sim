@@ -1,7 +1,6 @@
 //! AI driver tests: a kinematic bicycle model (no crash-sim physics) closes the loop.
 
-#[path = "../src/ai.rs"]
-mod ai;
+use crash_sim::ai;
 
 use ai::{CarState, Controls, Driver, DriverParams};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};

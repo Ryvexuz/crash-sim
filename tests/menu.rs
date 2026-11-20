@@ -1,8 +1,7 @@
 //! Menu state machine tests (n20-23). The module is included by path; lib.rs is not touched.
 #![allow(dead_code)]
 
-#[path = "../src/menu.rs"]
-mod menu;
+use crash_sim::menu;
 
 use menu::{step, Action, Event, State};
 use std::collections::{HashSet, VecDeque};

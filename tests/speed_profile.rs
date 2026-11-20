@@ -1,7 +1,5 @@
-#[path = "../src/vec3.rs"]
-mod vec3;
-#[path = "../src/speed_profile.rs"]
-mod speed_profile;
+use crash_sim::vec3;
+use crash_sim::speed_profile;
 
 use speed_profile::{curvature, profile, ProfileError};
 use vec3::Vec3;
