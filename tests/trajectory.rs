@@ -229,11 +229,25 @@ fn v2_writes_nothing_for_a_bad_stride_or_a_body_the_sim_refuses() {
     let body = parse(TRIANGLE).unwrap();
     assert!(body_text(&cfg(), &body, 0).unwrap_err().contains("stride"));
     assert!(cube_text(&cfg(), 0).unwrap_err().contains("stride"));
-    // A plane makes Sim::from_body refuse until planes are wired; the writer passes the refusal on.
-    let with_plane = format!("{TRIANGLE}plane 6 0 0 -1 0 0\n");
-    let body = parse(&with_plane).unwrap();
+    // A plane with a zero normal is still refused by Sim::from_body; the writer passes the refusal on.
+    // The parser already refuses a zero normal, so the body is built in code.
+    let mut body = parse(&format!("{TRIANGLE}plane 6 0 0 -1 0 0
+")).unwrap();
+    body.planes[0].normal = Vec3::new(0.0, 0.0, 0.0);
     let err = body_text(&cfg(), &body, 1).unwrap_err();
     assert!(err.contains("plane"), "{err}");
+}
+
+#[test]
+fn v2_with_a_wall_plane_writes_a_wall_header_line() {
+    let with_wall = format!("{TRIANGLE}plane 6 0 0 -1 0 0
+");
+    let body = parse(&with_wall).unwrap();
+    let text = body_text(&cfg(), &body, 1).unwrap();
+    assert!(text.lines().any(|l| l == "wall,x,6"), "{text}");
+    let p = parse_v2(&text).unwrap();
+    assert_eq!(p.walls, vec![("x".to_string(), 6.0)]);
+    assert_eq!(p.frames.len(), 31);
 }
 
 #[test]
