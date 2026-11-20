@@ -101,3 +101,61 @@ Chassis: 40 nodes on a grid, node id = 8 ix + 2 iz + iy, with x in {-2, -1.25, 0
 ## Line endings in a Windows checkout
 
 The format is strict about the line ending `\n` (LF). Git on Windows with `core.autocrlf=true` would check text files out with CRLF, which `parse` refuses by name. The repo now enforces LF: `.gitattributes` has `*.bsn text eol=lf` and `*.input text eol=lf`, and the tests read scenario files exactly as checked out (`scenario_files_have_no_carriage_returns` fails on a CRLF copy).
+
+## The `.track` format, version 1
+
+A `.track` file is a race track on the ground plane (y = 0) as plain text: a closed centreline, a width, a start/finish point, checkpoints and the grid distance. Code: `src/track.rs` (`Track::parse`, `LapTimer`). Tests: `tests/track.rs`. Files: `scenarios/tracks/`. The lap rule itself is in `docs/STAGE7.md` ("Shared definitions"); this section is the file grammar and what the code does with it.
+
+```
+track 1
+width <w>
+start <i>
+grid <m>
+checkpoint <i>
+[checkpoint <i> ...]
+point <x> <z> [width <w>]
+point <x> <z> [width <w>]
+point <x> <z> [width <w>]
+[point ...]
+```
+
+Same layout rules as `.bsn`: one record per line, tokens separated by exactly one space (no tabs, no leading, trailing or doubled spaces), line endings `\n` and the file ends with one, line 1 is `track 1`, blank lines and lines starting with `#` after it are ignored. The keywords come in the order above (`width`, `start`, `grid`, `checkpoint`, `point`); `width`, `start` and `grid` appear once, `checkpoint` and `point` repeat.
+
+- `width <w>`: the track width in metres, finite and > 0. Every point has it unless the point gives its own.
+- `point <x> <z>`: a centreline point, finite, in driving order. The loop closes from the last point to point 0. The optional `width <w>` is that point's own width (finite, > 0); it replaces the one width at that point only. Along a segment the width is interpolated linearly between its two ends.
+- `start <i>`: the index of the start/finish point (0-based, decimal digits, no sign, no leading zero).
+- `checkpoint <i>`: a checkpoint index, at least one line. Counting cyclically from the start index, the checkpoints must be strictly increasing, and none may equal the start index.
+- `grid <m>`: the car starts this far before the start line, measured backwards along the centreline from the start point; finite, 0 or more, and not longer than the loop.
+
+The gate at point i is the segment through that point, perpendicular to the tangent there (the direction p[i+1] - p[i-1]), as long as the width at i. The start/finish line is the gate at the start index and each checkpoint is the gate at its index. `Track::on_track` is true when a position's distance to the centreline polyline is at most half the width at the nearest point.
+
+### Refusals
+
+`Track::parse` returns `Err(ParseError { kind, line, column, message })`; `Display` is `line 7, column 12: <message>` (no column when no single token is at fault). `kind` is one of these named errors, and nothing is ever defaulted:
+
+| `kind` | refused when |
+| --- | --- |
+| `Header` / `UnknownVersion` | the file is empty or line 1 is not `track 1` / a version other than 1 |
+| `CarriageReturn` | a `\r` anywhere (CR or CRLF line endings), at the line and column of the first one |
+| `Tab`, `Spacing`, `MissingFinalNewline` | a tab; a leading, trailing or doubled space; no final `\n` |
+| `UnknownKeyword`, `OutOfOrder`, `Syntax` | a keyword the grammar lacks; a keyword after a later one or a second `width`, `start` or `grid`; a missing or extra token |
+| `BadNumber`, `NonFinite` | a token that is not a number or not a plain index; `nan`, `inf` or an overflowing number |
+| `NonPositiveWidth` | a `width` (the track's or a point's) that is zero or negative |
+| `BadGrid` | `grid` below 0, or longer than the centreline loop |
+| `MissingLine` | no `width`, `start`, `grid` or `checkpoint` line |
+| `TooFewPoints` | fewer than 3 points (reported at the last point line) |
+| `ZeroLengthSegment` | two neighbouring points (the last and the first count) at the same place |
+| `SelfIntersecting` | any two segments of the closed loop that are not neighbours share a point (touching counts), or two neighbours fold back over each other (a spike, three collinear points) |
+| `StartOutOfRange`, `CheckpointOutOfRange` | an index that is not a point |
+| `CheckpointIsStart`, `CheckpointsOutOfOrder` | a checkpoint equal to the start index; checkpoints (a repeat included) not strictly increasing from the start index |
+
+### Lap timing
+
+`LapTimer::update(prev_pos, pos, prev_t, t)` takes one substep: the car moved in a straight line from `prev_pos` at `prev_t` to `pos` at `t` (positions are `Vec3`; x and z are used). It returns the events the step caused, in time order: `Start`, `Checkpoint { lap, k, t }`, `Lap(LapRecord)`. A crossing is a meeting of that straight move with a gate at a fraction s of the step with 0 < s <= 1, so a car that stops exactly on the line crosses once; its time is `prev_t + s * (t - prev_t)`, never rounded to the step. A lap is valid only if every checkpoint was crossed forward in order and no substep of the lap ended off track; `MissedCheckpoint` is reported before `OffTrack`. Backward crossings of any gate never count. Off track is judged at the end position of every substep, and a substep that contains the start-line crossing belongs to the lap that starts there. A position or time that is not finite, or a `t` earlier than `prev_t`, is a `TimerError` and leaves the timer unchanged. `LapRecord::time_ms` is `round((end_t - start_t) x 1000)`; `format_seconds` and `format_clock` print that one integer as `83.456` and `1:23.456`.
+
+### Files
+
+- `scenarios/tracks/oval.track`: the oval of `docs/STAGE7.md` (64 points, width 12 m, start 0, checkpoints 16, 32 and 48, `grid 20`, centreline 388.4094 m). Numbers are rounded to 12 decimals.
+- `scenarios/tracks/chicane.track`: a 12-point loop with an S-bend on the front straight, a start gate whose tangent is not along an axis, width 10 m with point 3 narrowed to 8 m, checkpoints 4, 7 and 9, `grid 15`.
+
+`.gitattributes` has `*.track text eol=lf`, as for `.bsn`, so a Windows checkout does not give the strict parser CRLF files (`track_files_have_no_carriage_return` checks the committed files).

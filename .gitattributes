@@ -3,3 +3,4 @@
 *.csv text eol=lf
 *.meta text eol=lf
 *.save text eol=lf
+*.track text eol=lf

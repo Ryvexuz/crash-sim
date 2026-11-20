@@ -1,0 +1,20 @@
+track 1
+# chicane: a rectangle-like loop with an S-bend on the front straight and a narrow point in it
+width 10
+start 0
+grid 15
+checkpoint 4
+checkpoint 7
+checkpoint 9
+point 0 0
+point 40 0
+point 65 10
+point 85 -10 width 8
+point 110 0
+point 170 0
+point 200 30
+point 200 70
+point 170 100
+point 0 100
+point -30 70
+point -30 30
