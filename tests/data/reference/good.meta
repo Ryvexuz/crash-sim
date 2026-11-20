@@ -1,0 +1,9 @@
+test = 0000
+vehicle = hand-made test pulse (not a real crash)
+mass_kg = 1300
+speed_kmh = 56.0
+channel = test channel X
+channel_location = nowhere
+sample_rate_hz = 1000
+static_crush_m = 0.35
+note = an unknown key: accepted and listed
