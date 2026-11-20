@@ -30,6 +30,7 @@ fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
+    eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <file.bsn> ... --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
     exit(2)
 }
@@ -54,6 +55,10 @@ fn main() {
     let mut crumple_groups: Option<(String, String)> = None;
     let (mut cmin, mut cmax, mut cdrift): (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
     let mut cube_only = false;
+    let mut input_path: Option<String> = None;
+    let mut slope_grip: Option<f64> = None;
+    let mut slope_report = false;
+    let (mut slope_from, mut slope_to): (Option<f64>, Option<f64>) = (None, None);
     let (mut by, mut hold, mut speed, mut rise, mut gain): (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>) =
         (None, None, None, None, None);
     let mut args = std::env::args().skip(1);
@@ -73,6 +78,17 @@ fn main() {
                     usage()
                 }
             },
+            "--input" => match args.next() {
+                Some(p) => input_path = Some(p),
+                None => {
+                    eprintln!("--input needs a file path");
+                    usage()
+                }
+            },
+            "--slope-grip-frac" => slope_grip = Some(num(&mut args, "--slope-grip-frac")),
+            "--slope-report" => slope_report = true,
+            "--slope-from" => slope_from = Some(num(&mut args, "--slope-from")),
+            "--slope-to" => slope_to = Some(num(&mut args, "--slope-to")),
             "--gravity" => cfg.gravity = num(&mut args, "--gravity"),
             "--no-tilt" => {
                 cube_only = true;
@@ -135,6 +151,61 @@ fn main() {
         eprintln!("--crumple-groups, --crumple-min, --crumple-max and --crumple-drift need --crumple-report");
         usage()
     }
+    // The car flags: they set up a car (Sim::from_car), so they need a body with wheels, and a
+    // report to print (settle or slope). A plain run still refuses a body with wheels.
+    let has_wheels = body.as_ref().is_some_and(|b| !b.wheels.is_empty());
+    let car_flags = input_path.is_some() || slope_grip.is_some() || slope_report || slope_from.is_some() || slope_to.is_some();
+    if car_flags {
+        if !has_wheels {
+            eprintln!("--input, --slope-grip-frac and --slope-report need --body with a body that has wheels");
+            usage()
+        }
+        if !settle_report && !slope_report {
+            eprintln!("--input and --slope-grip-frac need --settle-report or --slope-report (the per-step output of a car is not available yet)");
+            usage()
+        }
+        if crumple_report {
+            eprintln!("--crumple-report cannot be used with --input, --slope-grip-frac or --slope-report");
+            usage()
+        }
+        if summary {
+            eprintln!("--summary cannot be used with --input, --slope-grip-frac or --slope-report");
+            usage()
+        }
+    }
+    if slope_report != (slope_from.is_some() && slope_to.is_some()) || (slope_from.is_some() != slope_to.is_some()) {
+        eprintln!("--slope-report needs --slope-from and --slope-to, and they need --slope-report");
+        usage()
+    }
+    if slope_report && slope_grip.is_none() {
+        eprintln!("--slope-report needs --slope-grip-frac");
+        usage()
+    }
+    let car_setup = match (&input_path, &body) {
+        (_, None) => settle::CarSetup::default(),
+        (input, Some(_)) => {
+            let brake = match input {
+                None => false,
+                Some(path) => {
+                    let text = match std::fs::read_to_string(path) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("crash-sim: --input {path}: {e}");
+                            exit(2)
+                        }
+                    };
+                    match settle::parse_brake_input(&text) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("crash-sim: {path}: {e}");
+                            exit(2)
+                        }
+                    }
+                }
+            };
+            settle::CarSetup { brake, grip_frac: slope_grip }
+        }
+    };
     let any_threshold = by.is_some() || hold.is_some() || speed.is_some() || rise.is_some() || gain.is_some();
     if settle_report {
         // No defaults: all five thresholds are required, and --summary is a different output.
@@ -175,9 +246,23 @@ fn main() {
             }
             return;
         }
-        let report = settle::measure_body(&cfg, body.as_ref(), &params);
-        emit(&report.render());
-        if !report.is_ok() {
+        let report = match &body {
+            Some(b) if has_wheels => settle::measure_car(&cfg, b, &car_setup, &params),
+            _ => settle::measure_body(&cfg, body.as_ref(), &params),
+        };
+        let mut out = report.render();
+        let mut slope_failed = false;
+        if let (true, Some(b), Some(from), Some(to)) = (slope_report, &body, slope_from, slope_to) {
+            match settle::measure_slope(&cfg, b, &car_setup, from, to) {
+                Ok(r) => out.push_str(&r.render()),
+                Err(e) => {
+                    eprintln!("crash-sim: {e}");
+                    slope_failed = true;
+                }
+            }
+        }
+        emit(&out);
+        if !report.is_ok() || slope_failed {
             exit(1);
         }
         return;
@@ -185,6 +270,16 @@ fn main() {
     if any_threshold {
         eprintln!("--settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain need --settle-report");
         usage()
+    }
+    if let (true, Some(b), Some(from), Some(to)) = (slope_report, &body, slope_from, slope_to) {
+        match settle::measure_slope(&cfg, b, &car_setup, from, to) {
+            Ok(r) => emit(&r.render()),
+            Err(e) => {
+                eprintln!("crash-sim: {e}");
+                exit(1);
+            }
+        }
+        return;
     }
     let (samples, first_contact, breaks, result) = match &body {
         Some(b) => {
