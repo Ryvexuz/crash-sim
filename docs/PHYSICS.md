@@ -37,7 +37,19 @@ and when |s| > y + 1e-12 (`YIELD_EPS`, so rounding right after a yield cannot tr
     stretched, s > y:     rest' = len / (1 + y)      so that (len - rest') / rest' = +y
     squeezed,  s < -y:    rest' = len / (1 - y)      so that (len - rest') / rest' = -y
 
-Positions and velocities are not touched, and |len - rest'| < |len - rest|, so the elastic energy (1/2) k (len - rest)^2 goes down at every yield and nothing else changes: plastic flow only removes energy. (It is applied once per substep, so a beam can end a substep slightly past the limit and is brought back at the end of that substep.) The rest length never becomes zero or negative: for len > 0 both formulas give a positive number (a squeeze needs y < 1, and a strain below -1 cannot happen). If a beam yields while its two nodes are at the same place (len below 1e-12 m, where the force step skips it too) the new rest length would be zero: the rest length is left alone, the beam's index goes into `Sim::yield_refused`, and `Sim::check` fails with a message naming the beam. Breaking a beam is a later brief; `MAX_STRAIN_LIMIT` still applies to the elastic strain, which for a plastic beam never exceeds y by more than one substep's worth.
+Positions and velocities are not touched, and |len - rest'| < |len - rest|, so the elastic energy (1/2) k (len - rest)^2 goes down at every yield and nothing else changes: plastic flow only removes energy. (It is applied once per substep, so a beam can end a substep slightly past the limit and is brought back at the end of that substep.) The rest length never becomes zero or negative: for len > 0 both formulas give a positive number (a squeeze needs y < 1, and a strain below -1 cannot happen). If a beam yields while its two nodes are at the same place (len below 1e-12 m, where the force step skips it too) the new rest length would be zero: the rest length is left alone, the beam's index goes into `Sim::yield_refused`, and `Sim::check` fails with a message naming the beam. `MAX_STRAIN_LIMIT` still applies to the elastic strain, which for a plastic beam never exceeds y by more than one substep's worth. A beam that would be refused here can still break (see below) if its material has a `break_strain`; it is `check` that reports the refusal.
+
+## Breaking beams
+
+A material of a `.bsn` body may give a `break_strain` b (unitless, > 0, and above its `yield_strain` when both are given: `format::parse` refuses a body that breaks this, and `Sim::from_body` checks it again for a `Body` built another way). Every beam of the built-in cube is unbreakable. After each physics substep (`Sim::apply_breaks`, before the yield pass, so a plastic beam can still reach its break strain), every unbroken beam with |len - rest| / rest > b breaks. Beams are checked in index order, so breaks within one substep are listed by beam index.
+
+- A broken beam applies no force from the next substep on: `Sim::integrate` gives the solver only `Sim::live_beams()`, so the solver (and its force loop) never sees it. It never comes back, whatever the nodes do afterwards. It stays in `Sim::beams` so beam indices do not move; `Sim::broken[i]` marks it.
+- The strain checks use only unbroken beams: `Sim::check` (the `MAX_STRAIN_LIMIT` abort) and the `max_beam_strain` column skip broken ones, otherwise the first break (the beam is by then past b, and the nodes may be far apart) would abort the run. The yield pass skips them too. The step limit is checked once, before the run starts, when nothing has broken yet; breaking only removes stiffness, which never lowers the stable step.
+- A node left with no beams is still simulated: gravity, ground contact and friction act on it as on any node (`disconnected_node_falls_freely`).
+- Break time is the end of the substep where the strain was found past b (the first substep end after the true crossing), the same time base as `first_contact_s`. The reported strain is the absolute value at that moment.
+- Deterministic: no state besides positions, velocities, rest lengths and the broken flags; the same input gives the same bytes.
+
+Output (body runs only; the cube's output is byte-for-byte what it was): the CSV gets a last column `broken_beams`, the number of beams broken by that sample's time (`CSV_HEADER_BROKEN`, `to_csv_with_broken`); `--events` prints, after the CSV (or the `--summary` line), one line per break, `break t=<4 decimals> beam=<index> strain=<6 decimals>`, in the order they happened (`events_text`). Tests: `tests/breaking.rs`; the golden for the cube is an FNV-1a hash of its CSV taken from the program before breaking existed.
 
 Total energy for a plastic body uses each beam's current rest length (`settle::total_energy` already does), so the energy before and after a yield can be compared directly (`tests/deform.rs`).
 
@@ -101,7 +113,7 @@ Damping lowers the stable step, and `validate()` enforces the combined condition
 | `t` | time in seconds (step number * `dt`) | 4 |
 | `min_y` | height of the lowest node, metres | 6 |
 | `center_y` | mean y of all 8 nodes, metres | 6 |
-| `max_beam_strain` | largest beam strain over all 28 beams | 6 |
+| `max_beam_strain` | largest beam strain over all 28 beams (a body's broken beams are skipped) | 6 |
 
 Strain of a beam is `|len - rest| / rest`, so 0.01 means 1% off its rest length.
 
@@ -110,7 +122,7 @@ Strain of a beam is `|len - rest| / rest`, so 0.01 means 1% off its rest length.
 After every output step (not every substep), `Sim::check()` fails the run if:
 
 - any node position or velocity component is NaN or infinite;
-- the max strain is NaN, or exceeds `MAX_STRAIN_LIMIT` = 0.5 (50%). The strain calculation propagates NaN, so a blown-up state can never read as 0.
+- the max strain (over unbroken beams) is NaN, or exceeds `MAX_STRAIN_LIMIT` = 0.5 (50%). The strain calculation propagates NaN, so a blown-up state can never read as 0.
 
 Contact time is tracked separately, in the substep loop: `Sim::first_contact_s` is the time of the first substep at which any node is at or below the ground (0 if the cube starts there). `--summary` prints it, so it does not depend on the output sampling, which can miss a touchdown that begins and ends between two samples.
 

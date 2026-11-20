@@ -210,6 +210,17 @@ pub struct Sample {
     pub min_y: f64,
     pub center_y: f64,
     pub max_beam_strain: f64,
+    /// How many beams have broken so far (always 0 for a body with no `break_strain`).
+    pub broken_beams: usize,
+}
+
+/// One beam break: when (s, the end of the substep where the strain was found past the limit),
+/// which beam (index into `Sim::beams`, which never shrinks) and its |strain| then.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BreakEvent {
+    pub t: f64,
+    pub beam: usize,
+    pub strain: f64,
 }
 
 pub struct Sim {
@@ -228,8 +239,15 @@ pub struct Sim {
     pub yield_strain: Vec<Option<f64>>,
     /// Indices of beams that exceeded their yield strain while their two nodes were (almost)
     /// at the same place, where the new rest length would be zero: their rest length was left
-    /// alone and `check` reports them (breaking is a later brief).
+    /// alone and `check` reports them.
     pub yield_refused: Vec<usize>,
+    /// Per beam: the strain beyond which it breaks for good, or None for an unbreakable beam.
+    pub break_strain: Vec<Option<f64>>,
+    /// Per beam: true once it has broken. A broken beam stays in `beams` (so indices never move)
+    /// but is left out of the solve, the strain checks and the yield pass.
+    pub broken: Vec<bool>,
+    /// Every break so far, in the order they happened (within one substep, by beam index).
+    pub breaks: Vec<BreakEvent>,
     solver: Box<dyn Solver>,
     step: u64,
 }
@@ -283,7 +301,8 @@ impl Sim {
         let first_contact_s = if pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
         let n = pos.len();
         let yield_strain = vec![None; beams.len()];
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, yield_strain, yield_refused: Vec::new(), solver, step: 0 }
+        let n_beams = beams.len();
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), solver, step: 0 }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -302,11 +321,24 @@ impl Sim {
         }
         let built = body.build();
         cfg.validate_body(&built.beams, &built.mass)?;
-        let yield_strain = body
+        let yield_strain: Vec<Option<f64>> = body
             .beams
             .iter()
             .map(|b| body.materials.iter().find(|m| m.name == b.material).expect("beam names an existing material").yield_strain)
             .collect();
+        let break_strain: Vec<Option<f64>> = body
+            .beams
+            .iter()
+            .map(|b| body.materials.iter().find(|m| m.name == b.material).expect("beam names an existing material").break_strain)
+            .collect();
+        for (i, (y, b)) in yield_strain.iter().zip(&break_strain).enumerate() {
+            if let Some(b) = b {
+                if !(b.is_finite() && *b > 0.0) || y.is_some_and(|y| *b <= y) {
+                    return Err(format!("beam {i}: break_strain {b} must be a positive number above its yield_strain"));
+                }
+            }
+        }
+        let n_beams = built.beams.len();
         let first_contact_s = if built.pos.iter().any(|p| p.y <= 0.0) { Some(0.0) } else { None };
         Ok(Sim {
             cfg,
@@ -317,6 +349,9 @@ impl Sim {
             first_contact_s,
             yield_strain,
             yield_refused: Vec::new(),
+            break_strain,
+            broken: vec![false; n_beams],
+            breaks: Vec::new(),
             solver,
             step: 0,
         })
@@ -326,10 +361,42 @@ impl Sim {
     /// `apply_yield`, once per substep; the two are public so a test can measure the energy
     /// between them.
     pub fn integrate(&mut self, h: f64) {
-        self.solver.step(
-            State { pos: &mut self.pos, vel: &mut self.vel, beams: &self.beams, mass: &self.mass, gravity: self.cfg.gravity },
-            h,
-        );
+        // Broken beams are not given to the solver at all, so they cannot apply force.
+        let live: Vec<Beam>;
+        let beams: &[Beam] = if self.breaks.is_empty() {
+            &self.beams
+        } else {
+            live = self.live_beams();
+            &live
+        };
+        self.solver.step(State { pos: &mut self.pos, vel: &mut self.vel, beams, mass: &self.mass, gravity: self.cfg.gravity }, h);
+    }
+
+    /// The beams that have not broken, in index order.
+    pub fn live_beams(&self) -> Vec<Beam> {
+        self.beams.iter().zip(&self.broken).filter(|(_, &b)| !b).map(|(bm, _)| *bm).collect()
+    }
+
+    /// Break every unbroken beam whose |strain| exceeds its `break_strain`, in beam index order.
+    /// The time of an event is the end of substep number `substep` (1-based) of the current
+    /// output step. A broken beam never comes back. Returns how many broke. NaN never breaks a
+    /// beam (it stays for `check` to report).
+    fn apply_breaks(&mut self, substep: u32, h: f64) -> usize {
+        let t = self.step as f64 * self.cfg.dt + substep as f64 * h;
+        let mut n = 0;
+        for (i, bm) in self.beams.iter().enumerate() {
+            let Some(limit) = self.break_strain[i] else { continue };
+            if self.broken[i] {
+                continue;
+            }
+            let strain = ((self.pos[bm.a] - self.pos[bm.b]).length() - bm.rest).abs() / bm.rest;
+            if strain > limit {
+                self.broken[i] = true;
+                self.breaks.push(BreakEvent { t, beam: i, strain });
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Plastic flow, after a substep. For every beam with a yield strain y whose strain
@@ -345,6 +412,9 @@ impl Sim {
         let mut yielded = 0;
         for (i, bm) in self.beams.iter_mut().enumerate() {
             let Some(y) = self.yield_strain[i] else { continue };
+            if self.broken[i] {
+                continue;
+            }
             let len = (self.pos[bm.a] - self.pos[bm.b]).length();
             let strain = (len - bm.rest) / bm.rest;
             if !(strain.abs() > y + YIELD_EPS) {
@@ -363,16 +433,19 @@ impl Sim {
         yielded
     }
 
-    fn substep(&mut self, h: f64) {
+    fn substep(&mut self, substep: u32, h: f64) {
         self.integrate(h);
+        // Breaking is judged before yielding: a beam with both limits must be able to reach
+        // its break strain, which plastic flow would otherwise hold at the yield strain.
+        self.apply_breaks(substep, h);
         self.apply_yield();
     }
 
     pub fn sample(&self) -> Sample {
         let min_y = self.pos.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
         let center_y = self.pos.iter().map(|p| p.y).sum::<f64>() / self.pos.len() as f64;
-        let max_beam_strain = max_strain(&self.beams, &self.pos);
-        Sample { t: self.step as f64 * self.cfg.dt, min_y, center_y, max_beam_strain }
+        let max_beam_strain = max_strain_unbroken(&self.beams, &self.pos, &self.broken);
+        Sample { t: self.step as f64 * self.cfg.dt, min_y, center_y, max_beam_strain, broken_beams: self.breaks.len() }
     }
 
     /// Fail if any node position/velocity is non-finite or strain is NaN or above the limit.
@@ -386,10 +459,10 @@ impl Sim {
         }
         if let Some(&i) = self.yield_refused.first() {
             return Err(format!(
-                "beam {i} would yield to a rest length of zero or negative (its nodes are at the same place): breaking is not implemented"
+                "beam {i} would yield to a rest length of zero or negative (its nodes are at the same place)"
             ));
         }
-        let strain = max_strain(&self.beams, &self.pos);
+        let strain = max_strain_unbroken(&self.beams, &self.pos, &self.broken);
         if strain.is_nan() || strain > MAX_STRAIN_LIMIT {
             return Err(format!("max beam strain {strain} exceeds limit {MAX_STRAIN_LIMIT}"));
         }
@@ -405,7 +478,7 @@ impl Sim {
     pub fn advance(&mut self) {
         let h = self.cfg.dt / self.cfg.substeps as f64;
         for k in 0..self.cfg.substeps {
-            self.substep(h);
+            self.substep(k + 1, h);
             if self.first_contact_s.is_none() && self.pos.iter().any(|p| p.y <= 0.0) {
                 self.first_contact_s = Some(self.step as f64 * self.cfg.dt + (k + 1) as f64 * h);
             }
@@ -427,6 +500,21 @@ pub fn max_strain(beams: &[Beam], pos: &[Vec3]) -> f64 {
     m
 }
 
+/// `max_strain` over the beams not marked broken (`broken[i]` for `beams[i]`).
+pub fn max_strain_unbroken(beams: &[Beam], pos: &[Vec3], broken: &[bool]) -> f64 {
+    let live: Vec<Beam> = beams.iter().zip(broken).filter(|(_, &b)| !b).map(|(bm, _)| *bm).collect();
+    max_strain(&live, pos)
+}
+
+/// Everything a body run produces: the samples of the good steps, the first contact time, every
+/// beam break, and the run's verdict.
+pub struct Report {
+    pub samples: Vec<Sample>,
+    pub first_contact_s: Option<f64>,
+    pub breaks: Vec<BreakEvent>,
+    pub result: Result<(), String>,
+}
+
 /// Run the sim. Returns the samples of all good steps (t = 0, dt, 2dt, ...) and,
 /// if the config was refused or the state blew up, the reason (with the time).
 /// The step count is `round(duration / dt)`, so the last row can differ from
@@ -442,20 +530,27 @@ pub fn run_checked_with_contact(cfg: &Config) -> (Vec<Sample>, Option<f64>, Resu
     if let Err(e) = cfg.validate() {
         return (Vec::new(), None, Err(e));
     }
-    run_sim(Sim::new(cfg.clone()))
+    let r = run_sim(Sim::new(cfg.clone()));
+    (r.samples, r.first_contact_s, r.result)
 }
 
 /// Like `run_checked_with_contact`, for a body loaded from a `.bsn` file. A refused body or
 /// config comes back as the error with no samples.
 pub fn run_body_checked_with_contact(cfg: &Config, body: &Body) -> (Vec<Sample>, Option<f64>, Result<(), String>) {
+    let r = run_body_report(cfg, body);
+    (r.samples, r.first_contact_s, r.result)
+}
+
+/// Like `run_body_checked_with_contact`, and also returns the beam breaks.
+pub fn run_body_report(cfg: &Config, body: &Body) -> Report {
     match Sim::from_body(cfg.clone(), body) {
         Ok(sim) => run_sim(sim),
-        Err(e) => (Vec::new(), None, Err(e)),
+        Err(e) => Report { samples: Vec::new(), first_contact_s: None, breaks: Vec::new(), result: Err(e) },
     }
 }
 
 /// The run loop shared by both entry points, on a sim whose config is already validated.
-fn run_sim(mut sim: Sim) -> (Vec<Sample>, Option<f64>, Result<(), String>) {
+fn run_sim(mut sim: Sim) -> Report {
     let cfg = sim.cfg.clone();
     let steps = (cfg.duration / cfg.dt).round() as u64;
     let mut out = Vec::with_capacity(steps as usize + 1);
@@ -463,11 +558,12 @@ fn run_sim(mut sim: Sim) -> (Vec<Sample>, Option<f64>, Result<(), String>) {
     for _ in 0..steps {
         sim.advance();
         if let Err(e) = sim.check() {
-            return (out, sim.first_contact_s, Err(format!("unstable at t = {:.4} s: {e}", sim.sample().t)));
+            let result = Err(format!("unstable at t = {:.4} s: {e}", sim.sample().t));
+            return Report { samples: out, first_contact_s: sim.first_contact_s, breaks: sim.breaks, result };
         }
         out.push(sim.sample());
     }
-    (out, sim.first_contact_s, Ok(()))
+    Report { samples: out, first_contact_s: sim.first_contact_s, breaks: sim.breaks, result: Ok(()) }
 }
 
 /// Run the whole sim; panics if the config is refused or the sim blows up.
@@ -486,4 +582,24 @@ pub fn to_csv(samples: &[Sample]) -> String {
         s.push_str(&format!("{:.4},{:.6},{:.6},{:.6}\n", r.t, r.min_y, r.center_y, r.max_beam_strain));
     }
     s
+}
+
+/// The CSV header of a body run: the cube header plus the `broken_beams` count.
+pub const CSV_HEADER_BROKEN: &str = "t,min_y,center_y,max_beam_strain,broken_beams";
+
+/// Like `to_csv`, with a final `broken_beams` column (used for `--body` runs only, so the cube's
+/// output stays as it was).
+pub fn to_csv_with_broken(samples: &[Sample]) -> String {
+    let mut s = String::from(CSV_HEADER_BROKEN);
+    s.push('\n');
+    for r in samples {
+        s.push_str(&format!("{:.4},{:.6},{:.6},{:.6},{}\n", r.t, r.min_y, r.center_y, r.max_beam_strain, r.broken_beams));
+    }
+    s
+}
+
+/// One line per break, `break t=<4 decimals> beam=<index> strain=<6 decimals>` (strain is the
+/// absolute value), each ending in a newline; empty when nothing broke.
+pub fn events_text(breaks: &[BreakEvent]) -> String {
+    breaks.iter().map(|b| format!("break t={:.4} beam={} strain={:.6}\n", b.t, b.beam, b.strain)).collect()
 }

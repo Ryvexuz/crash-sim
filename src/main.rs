@@ -1,4 +1,4 @@
-use crash_sim::{run_body_checked_with_contact, run_checked_with_contact, to_csv, Config};
+use crash_sim::{events_text, run_body_report, run_checked_with_contact, to_csv, to_csv_with_broken, Config};
 use std::io::Write;
 use std::process::exit;
 
@@ -28,7 +28,7 @@ fn emit(text: &str) {
 
 fn usage() -> ! {
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
-    eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary]");
+    eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
     exit(2)
 }
@@ -46,6 +46,7 @@ fn num<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, flag: &str
 fn main() {
     let mut cfg = Config::default();
     let mut summary = false;
+    let mut events = false;
     let mut settle_report = false;
     let mut body_path: Option<String> = None;
     let mut cube_only = false;
@@ -74,6 +75,7 @@ fn main() {
                 cfg.tilt = false
             }
             "--summary" => summary = true,
+            "--events" => events = true,
             "--settle-report" => settle_report = true,
             "--settle-by" => by = Some(num(&mut args, "--settle-by")),
             "--settle-hold" => hold = Some(num(&mut args, "--settle-hold")),
@@ -137,9 +139,15 @@ fn main() {
         eprintln!("--settle-by, --settle-hold, --settle-speed, --energy-rise and --energy-gain need --settle-report");
         usage()
     }
-    let (samples, first_contact, result) = match &body {
-        Some(b) => run_body_checked_with_contact(&cfg, b),
-        None => run_checked_with_contact(&cfg),
+    let (samples, first_contact, breaks, result) = match &body {
+        Some(b) => {
+            let r = run_body_report(&cfg, b);
+            (r.samples, r.first_contact_s, r.breaks, r.result)
+        }
+        None => {
+            let (s, f, r) = run_checked_with_contact(&cfg);
+            (s, f, Vec::new(), r)
+        }
     };
     // The run's own error is reported first, before any output write, so a failed write
     // (which exits 1 at once) can never hide it.
@@ -163,7 +171,11 @@ fn main() {
             }
         }
     } else if !samples.is_empty() {
-        emit(&to_csv(&samples));
+        // The broken_beams column is for --body runs only: the cube's CSV stays as it was.
+        emit(&if body.is_some() { to_csv_with_broken(&samples) } else { to_csv(&samples) });
+    }
+    if events && !breaks.is_empty() {
+        emit(&events_text(&breaks));
     }
     if result.is_err() {
         exit(1);
