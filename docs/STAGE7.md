@@ -168,6 +168,23 @@ FAIL: any failed or missing test, or a smaller N.
 
 (a) The old tests are unchanged: `git -C projects/crash-sim diff --stat abe471c -- tests/csv.rs tests/determinism.rs tests/energy.rs tests/invariants.rs tests/physics.rs tests/risky.rs tests/stability.rs tests/summary.rs tests/sweep.rs > scratch/s7-1-2a.txt 2>&1`
 PASS iff `scratch/s7-1-2a.txt` is empty.
+Those nine files are the tests that existed before Stage 6 (STAGE6.md 1.2). The test files Stage 6 added (for example `tests/format.rs`, `tests/settle.rs`, `tests/deform.rs` and `tests/solver.rs`) are pinned against the crash-sim commit at which Stage 6 milestone 3 passed, named S6. S6 is written in this file, on the line below, by the orchestrator when it records Stage 6 m3 in `evidence/stage-6-m3.md`, as the same commit it records there. Until then the line says `none yet`, and this part fails.
+
+Stage 6 commit: none yet
+
+In Git Bash from the Broadsword root:
+```
+{ P=projects/crash-sim; L=$(grep -cE '^Stage 6 commit: ' $P/docs/STAGE7.md); S6=$(grep -E '^Stage 6 commit: ' $P/docs/STAGE7.md | head -n 1 | sed -E 's/^Stage 6 commit: //')
+if [ "$L" != 1 ] || ! echo "$S6" | grep -qxE '[0-9a-f]{7,40}' || ! git -C $P merge-base --is-ancestor "$S6" HEAD; then echo "stage6-tests: FAIL S6 is not one commit that is an ancestor of HEAD (lines: $L; value: ${S6:-missing})"; else
+  F=$(git -C $P ls-tree --name-only "$S6" tests/ | grep -E '^tests/[^/]+\.rs$'); N=$(echo $F | wc -w); echo "stage6_commit=$S6 test_files=$N"
+  if ! D=$(git -C $P diff --name-only "$S6" HEAD -- $F); then echo "stage6-tests: FAIL git diff failed"; else
+    for X in $D; do echo "changed $X"; done
+    if [ "$N" -ge 1 ] && [ -z "$D" ]; then echo "stage6-tests: ok"; else echo "stage6-tests: FAIL"; fi
+  fi
+fi; } > scratch/s7-1-2a2.txt 2>&1
+```
+It lists every `tests/*.rs` file at S6 (the nine above included), and prints a `changed <file>` line for each one that differs at HEAD, deleted files included. Files added after S6, such as `tests/track.rs`, are not in the list.
+PASS iff the **last line** of `scratch/s7-1-2a2.txt` is exactly `stage6-tests: ok`, which is printed only when S6 is set on exactly one line to a commit that is an ancestor of HEAD, S6 has at least one test file, and none of them changed. An empty file, or one ending in a git error, fails. If a Stage 6 test must change during Stage 7, that is a finding for the orchestrator; S6 is never moved forward to hide it.
 
 (b) Every Stage 6 crash-sim test still exists and passes, by name, in the 1.1 run. In Git Bash:
 ```
@@ -204,7 +221,7 @@ PASS iff `run: ok`, the file contains `test result: ok. 4 passed; 0 failed`, and
 (b) `limit_g` <= 1.02 x `mu`, limit(0.8) <= 1.02 x 0.8 x `mu`, and limit(1.2) <= 1.02 x 1.2 x `mu`;
 (c) limit(0.8) < `limit_g` < limit(1.2), with limit(0.8) / `limit_g` in [0.72, 0.88] and limit(1.2) / `limit_g` in [1.08, 1.32];
 (d) for each of the three runs: the `level` line of its `limit_level` says `steady=yes` and its `a_g` equals that run's `limit_g`; `limit_level` <= `levels` - 2; and `steady_levels` >= 5. Also, `radius_kinematic_m` is within 1% of 30.00 (29.70 to 30.30), and there are exactly `levels` `level` lines per run;
-(e) the target range was fixed before any tyre tuning, not only before the skidpad test. The tuning files are exactly these six crash-sim paths: `scenarios/car_basic.bsn` (its tyre section is the tyre data), `scenarios/pad_and_wall.bsn` (it embeds the same car), `scenarios/skidpad.bsn`, `scenarios/skidpad.input`, `src/vehicle.rs` (nb-39's tyre model) and `tests/skidpad.rs`. In Git Bash from the Broadsword root:
+(e) no tuning file changed while the range could still move. Exactly what it proves: every commit that touches a tuning file is either strictly older than the commit that first wrote the range or strictly newer than the range's last edit, and the skidpad test is strictly newer than that last edit. Tuning-file commits older than the range pass on purpose: they were written before the range existed in the repository (nb-38's, nb-39's and nb-40's commits), so they cannot have been aimed at it. What (e) cannot rule out on its own is a range chosen afterwards to fit tyres that already existed; (g) rules that out, because the range must rest on a public source, not on a measured value. The tuning files are exactly these six crash-sim paths: `scenarios/car_basic.bsn` (its tyre section is the tyre data), `scenarios/pad_and_wall.bsn` (it embeds the same car), `scenarios/skidpad.bsn`, `scenarios/skidpad.input`, `src/vehicle.rs` (nb-39's tyre model) and `tests/skidpad.rs`. In Git Bash from the Broadsword root:
 ```
 { P=projects/crash-sim; T="scenarios/car_basic.bsn scenarios/pad_and_wall.bsn scenarios/skidpad.bsn scenarios/skidpad.input src/vehicle.rs tests/skidpad.rs"
 R=$(git -C $P log --format=%H -S"0.750 <= limit_g <= 0.950" -- docs/STAGE7.md)
@@ -272,7 +289,7 @@ FAIL: no window, no key response, no saved input, no valid lap, a `hud` text tha
 How the close time reaches the replay: the live run ended at T_end when the viewer closed the child's stdin, and 1.8 saved T_end as the time of the input's last line (the end line), copied from the live `final` line's `t=` text. The file run has no `--duration`, so by nb-40's rule it ends at that last line's time, which is the same T_end, and its `final` line is printed at the same substep. Before the diff, in Git Bash from the Broadsword root: `{ echo "live_final_t=$(grep -E '^final ' scratch/s7-1-8.txt | sed -E 's/^final t=([^ ]+) .*/\1/')"; echo "input_end_t=$(tail -n 1 evidence/stage-7-m1-human.input | cut -d ' ' -f 1)"; echo "replay_final_t=$(grep -E '^final ' scratch/s7-1-9.txt | sed -E 's/^final t=([^ ]+) .*/\1/')"; } > scratch/s7-1-9-end.txt 2>&1`
 PASS iff `run: ok`; `scratch/s7-1-9-end.txt` has three lines whose values after `=` are the same non-empty text (the live close time, the saved end line's time and the replay's end time agree); `scratch/s7-1-9.txt` contains a `lap ... valid=yes` line (so the comparison is not of two empty sets); and `scratch/s7-1-9-diff.txt` is empty: the same lines, character for character, live and headless. A replay whose `final` line differs only because the saved input has no end line fails the first rule, and points at the viewer, not the physics. FAIL: any difference (the live run and the file run are not the same simulation, so a human lap cannot be checked or replayed).
 
-What guards against tuning to the test in milestone 1: the grip target must be confirmed from a public source with its URL and read date (1.3 g) and is fixed in Git before any tyre tuning commit or the skidpad test (1.3 e); a physics ceiling and the grip variants must agree with friction (1.3 b, c); the skidpad measures motion, not tyre forces, and only over 5 s windows of steady cornering (1.3 d); the lap is checked against a geometric floor and a timing identity that do not use `LapTimer` (1.4); the pinch shows that `on_track` is applied and that the track does not change the physics (1.5); the lap must survive a different step size (1.6); the HUD and the printed time come from one integer (1.7); and a human has to drive it, and the drive must replay exactly (1.8, 1.9).
+What guards against tuning to the test in milestone 1: the grip target must be confirmed from a public source with its URL and read date (1.3 g) and every tyre-file commit in Git is either older than the range or newer than its last edit, with the skidpad test newer than that edit (1.3 e); a physics ceiling and the grip variants must agree with friction (1.3 b, c); the skidpad measures motion, not tyre forces, and only over 5 s windows of steady cornering (1.3 d); the lap is checked against a geometric floor and a timing identity that do not use `LapTimer` (1.4); the pinch shows that `on_track` is applied and that the track does not change the physics (1.5); the lap must survive a different step size (1.6); the HUD and the printed time come from one integer (1.7); and a human has to drive it, and the drive must replay exactly (1.8, 1.9).
 
 After 1.1 to 1.9 pass, the Stage 7 m1 retro entry in `RETRO.md` is due (AGENTS.md); nb-49 lists its inputs in `evidence/stage-7-m1.md`. The Stage 7 lesson goes in it: what the human check found that the tests did not.
 
