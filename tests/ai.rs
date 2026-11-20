@@ -349,3 +349,63 @@ fn ki_changes_the_speed_command() {
     }
     assert!(a.throttle > b.throttle + 0.05);
 }
+
+impl Model {
+    /// Same as `step`, plus a constant retarding acceleration `grade` (m/s^2), like a hill.
+    fn step_with_grade(&mut self, c: &Controls, grade: f64) {
+        let delta = c.steer * MAX_STEER;
+        self.x += self.speed * self.heading.cos() * DT;
+        self.z += self.speed * self.heading.sin() * DT;
+        self.heading += self.speed / WHEELBASE * delta.tan() * DT;
+        let accel = 4.0 * c.throttle - 8.0 * c.brake - 0.05 * self.speed - grade;
+        self.speed = (self.speed + accel * DT).max(0.0);
+    }
+}
+
+/// Drives 60 s on a constant grade; returns (min, max) of |speed - target| over the last 5 s.
+fn grade_error_band(ki: f64, grade: f64, target: f64) -> (f64, f64) {
+    let path = oval(80.0, 25.0, 0.5);
+    let tspeed = vec![target; path.len()];
+    let mut p = params();
+    p.ki = ki;
+    let mut d = Driver::new(p);
+    let mut m = Model {
+        x: path[0].0,
+        z: path[0].1,
+        heading: 0.0,
+        speed: target,
+    };
+    let (mut lo, mut hi) = (f64::INFINITY, 0.0f64);
+    let steps = (65.0 / DT) as usize;
+    let tail = (5.0 / DT) as usize;
+    for i in 0..steps {
+        let c = d.update(&m.state(), &path, &tspeed, DT);
+        m.step_with_grade(&c, grade);
+        if i >= steps - tail {
+            let e = (m.speed - target).abs();
+            lo = lo.min(e);
+            hi = hi.max(e);
+        }
+    }
+    assert!(lo.is_finite(), "no samples taken");
+    (lo, hi)
+}
+
+#[test]
+fn pi_integral_removes_steady_error_that_p_only_leaves() {
+    // Grade 1.5 m/s^2 at 10 m/s needs throttle (1.5 + 0.5) / 4 = 0.5 to hold speed.
+    // P-only (kp 0.8) can only make that with an error of 0.5 / 0.8 = 0.625 m/s.
+    let (target, grade) = (10.0, 1.5);
+    let (p_lo, p_hi) = grade_error_band(0.0, grade, target);
+    println!("P-only error over last 5 s: min {p_lo} max {p_hi}");
+    assert!(
+        p_lo > 0.3,
+        "P-only should leave a steady error above 0.3 m/s, min was {p_lo}"
+    );
+    let (pi_lo, pi_hi) = grade_error_band(params().ki, grade, target);
+    println!("PI error over last 5 s: min {pi_lo} max {pi_hi}");
+    assert!(
+        pi_hi < 0.05,
+        "PI should be within 0.05 m/s after 60 s, worst was {pi_hi}"
+    );
+}
