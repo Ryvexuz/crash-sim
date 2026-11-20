@@ -15,6 +15,12 @@ pub enum ProfileError {
     DuplicatePoint(usize),
     /// A parameter that must be finite and positive was not; carries its name.
     BadParameter(&'static str),
+    /// Point `index` has a NaN or infinite coordinate.
+    NonFinitePoint(usize),
+    /// Point `index` is a spike: its two neighbours coincide, so the curvature is unbounded.
+    Spike(usize),
+    /// The curvature at point `index` is not finite (coordinates so large the maths overflowed).
+    NonFiniteCurvature(usize),
     /// The accel/brake passes did not settle within the sweep cap.
     NotConverged,
 }
@@ -24,6 +30,9 @@ impl std::fmt::Display for ProfileError {
         match self {
             ProfileError::TooFewPoints(n) => write!(f, "need at least 3 points, got {n}"),
             ProfileError::DuplicatePoint(i) => write!(f, "point {i} duplicates the next point"),
+            ProfileError::NonFinitePoint(i) => write!(f, "point {i} has a non-finite coordinate"),
+            ProfileError::Spike(i) => write!(f, "point {i} is a spike: its neighbours coincide"),
+            ProfileError::NonFiniteCurvature(i) => write!(f, "curvature at point {i} is not finite"),
             ProfileError::BadParameter(p) => write!(f, "{p} must be finite and positive"),
             ProfileError::NotConverged => write!(f, "speed profile did not converge"),
         }
@@ -36,10 +45,24 @@ fn check_path(path: &[Vec3]) -> Result<(), ProfileError> {
     if path.len() < 3 {
         return Err(ProfileError::TooFewPoints(path.len()));
     }
-    for i in 0..path.len() {
+    // Every coordinate (y too) must be finite: a NaN would make a NaN curvature, and `f64::min`
+    // would then silently turn that into full speed.
+    for (i, p) in path.iter().enumerate() {
+        if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+            return Err(ProfileError::NonFinitePoint(i));
+        }
+    }
+    let n = path.len();
+    for i in 0..n {
         let d = path[(i + 1) % path.len()] - path[i];
         if d.x == 0.0 && d.z == 0.0 {
             return Err(ProfileError::DuplicatePoint(i));
+        }
+    }
+    for i in 0..n {
+        let (a, b) = (path[(i + n - 1) % n], path[(i + 1) % n]);
+        if a.x == b.x && a.z == b.z {
+            return Err(ProfileError::Spike(i));
         }
     }
     Ok(())
@@ -51,18 +74,22 @@ fn seg_len(a: Vec3, b: Vec3) -> f64 {
 }
 
 /// Signed curvature (1 / circumradius) at every point from it and its two neighbours, closed loop.
-/// Positive turns from +x towards +z. Collinear points give 0.
+/// Refuses non-finite coordinates and spikes (see `ProfileError`). Positive turns from +x towards +z. Collinear points give 0.
 pub fn curvature(path: &[Vec3]) -> Result<Vec<f64>, ProfileError> {
     check_path(path)?;
     let n = path.len();
-    Ok((0..n)
+    let k: Vec<f64> = (0..n)
         .map(|i| {
             let (p0, p1, p2) = (path[(i + n - 1) % n], path[i], path[(i + 1) % n]);
             let cross = (p1.x - p0.x) * (p2.z - p0.z) - (p1.z - p0.z) * (p2.x - p0.x);
             let denom = seg_len(p0, p1) * seg_len(p1, p2) * seg_len(p0, p2);
             if denom == 0.0 { 0.0 } else { 2.0 * cross / denom }
         })
-        .collect())
+        .collect();
+    if let Some(i) = k.iter().position(|x| !x.is_finite()) {
+        return Err(ProfileError::NonFiniteCurvature(i));
+    }
+    Ok(k)
 }
 
 fn positive(name: &'static str, v: f64) -> Result<(), ProfileError> {
@@ -94,7 +121,7 @@ pub fn profile(
         .collect();
     for _ in 0..MAX_SWEEPS {
         let mut changed = false;
-        // Forward: speed at i limits speed at i+1 (start at the slowest point so one lap suffices).
+        // Forward: speed at i limits speed at i+1 (one lap may not settle; the loop repeats until nothing changes).
         for i in 0..n {
             let j = (i + 1) % n;
             let lim = (v[i] * v[i] + 2.0 * a_accel * ds[i]).sqrt();

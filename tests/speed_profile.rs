@@ -134,3 +134,60 @@ fn refusals() {
     assert_eq!(run(&ok, f64::NAN, G, 5.0, 8.0, 50.0), Err(ProfileError::BadParameter("mu")));
     assert_eq!(run(&ok, MU, G, 5.0, 8.0, f64::INFINITY), Err(ProfileError::BadParameter("v_max")));
 }
+
+#[test]
+fn non_finite_coordinates_are_refused_not_run_at_full_speed() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for axis in 0..3 {
+            let mut p = circle(30.0, 16);
+            match axis {
+                0 => p[7].x = bad,
+                1 => p[7].y = bad,
+                _ => p[7].z = bad,
+            }
+            assert_eq!(curvature(&p), Err(ProfileError::NonFinitePoint(7)), "curvature {bad} axis {axis}");
+            assert_eq!(
+                profile(&p, MU, G, 5.0, 8.0, 50.0),
+                Err(ProfileError::NonFinitePoint(7)),
+                "profile {bad} axis {axis}"
+            );
+        }
+    }
+}
+
+#[test]
+fn non_finite_parameters_are_refused() {
+    let ok = circle(30.0, 16);
+    let n = f64::NAN;
+    let i = f64::INFINITY;
+    assert_eq!(profile(&ok, MU, n, 5.0, 8.0, 50.0), Err(ProfileError::BadParameter("g")));
+    assert_eq!(profile(&ok, MU, i, 5.0, 8.0, 50.0), Err(ProfileError::BadParameter("g")));
+    assert_eq!(profile(&ok, MU, G, n, 8.0, 50.0), Err(ProfileError::BadParameter("a_accel")));
+    assert_eq!(profile(&ok, MU, G, i, 8.0, 50.0), Err(ProfileError::BadParameter("a_accel")));
+    assert_eq!(profile(&ok, MU, G, 5.0, n, 50.0), Err(ProfileError::BadParameter("a_brake")));
+    assert_eq!(profile(&ok, MU, G, 5.0, i, 50.0), Err(ProfileError::BadParameter("a_brake")));
+    assert_eq!(profile(&ok, MU, G, 5.0, 8.0, n), Err(ProfileError::BadParameter("v_max")));
+    assert_eq!(profile(&ok, i, G, 5.0, 8.0, 50.0), Err(ProfileError::BadParameter("mu")));
+}
+
+#[test]
+fn a_spike_is_refused_not_given_full_speed() {
+    // Out along +x, then straight back: point 2's neighbours (1 and 3) coincide.
+    let p = vec![
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(20.0, 0.0, 0.0),
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(10.0, 0.0, 5.0),
+    ];
+    // p[1] == p[3]: spike at 2.
+    assert_eq!(curvature(&p), Err(ProfileError::Spike(2)));
+    assert_eq!(profile(&p, MU, G, 5.0, 8.0, 50.0), Err(ProfileError::Spike(2)));
+}
+
+#[test]
+fn overflowing_curvature_is_refused() {
+    let big = 1.0e200;
+    let p = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(big, 0.0, 0.0), Vec3::new(big, 0.0, big)];
+    assert!(matches!(curvature(&p), Err(ProfileError::NonFiniteCurvature(_))));
+}
