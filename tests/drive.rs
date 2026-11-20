@@ -60,8 +60,26 @@ fn drive(body: &Body, text: &str, seconds: f64, mut each: impl FnMut(&mut Sim, f
     sim
 }
 
+/// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
+/// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable (as tests/csv.rs).
+/// Never `env!` at compile time: that path is in the shared build folder, which another checkout's
+/// stale-package clean can empty while these tests run.
 fn crash_sim_bin() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_BIN_EXE_crash-sim"))
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!("CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder", exe.display())
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and the cargo layout path {} does not exist",
+        bin.display()
+    );
+    bin
 }
 
 /// A file in the build's own temp folder (the test binary's, not the repo).
