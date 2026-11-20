@@ -665,9 +665,8 @@ fn reverse_input_at(peer_seed: u64, t: u64) -> Input {
 fn two_peers_stay_in_sync_through_a_reverse_segment() {
     let c = cfg(3, 60, 5000);
     let (a, b) = channel_pair();
-    let host = thread::spawn(move || {
-        run_peer_with(a, Role::Host, c, HOST_INPUTS, 1000, reverse_input_at)
-    });
+    let host =
+        thread::spawn(move || run_peer_with(a, Role::Host, c, HOST_INPUTS, 1000, reverse_input_at));
     let guest = thread::spawn(move || {
         run_peer_with(b, Role::Guest, c, GUEST_INPUTS, 1000, reverse_input_at)
     });
@@ -681,7 +680,10 @@ fn two_peers_stay_in_sync_through_a_reverse_segment() {
         .iter()
         .filter(|p| p[0].throttle < 0 && p[1].throttle < 0)
         .count();
-    assert_eq!(reversed, 200, "ticks 203..403 apply the delayed reverse inputs");
+    assert_eq!(
+        reversed, 200,
+        "ticks 203..403 apply the delayed reverse inputs"
+    );
     // Every hash check passed (no Desync) and they match a single machine stepping the same inputs.
     assert_eq!(hc.len(), 16);
     assert_eq!(hc, gc);
