@@ -85,7 +85,7 @@ For the ground (point 0, normal (0, 1, 0)) this is the rule above operation for 
 
 Limits of the rule (known, not fixed): the planes are infinite, so no node can tunnel through one, but a node that ends a substep deep behind a plane is moved straight along the normal onto it, whatever path it took (no sweep test; 10 m/s at 1 ms is 1 cm per substep). Two planes that meet at a corner are applied one after the other in list order, so a node in a corner can be corrected by both in the same substep, the later plane last.
 
-Impacts (settle report): `collide::impact_this_substep` is the plane version of "a node sits on the surface and moves away"; `settle.rs` still uses its own ground-only test, so `last_impact_s` in the settle report counts ground impacts only.
+Impacts (settle report): `collide::impact_this_substep` is the plane version of "a node sits on the surface and moves away"; `settle.rs` calls it too, so `last_impact_s` in the settle report counts impacts with every collider plane, walls included.
 
 ## The box_wall material
 
@@ -95,7 +95,7 @@ Impacts (settle report): `collide::impact_this_substep` is the plane version of 
 |---|---|---|
 | `stiffness` | 20000 N/m | The cube's `BEAM_STIFFNESS`, so the step-limit reasoning (the cube: 1 ms against 4.1 ms) carries over. The box's most loaded node has 11 beams, so Gershgorin gives omega_max <= sqrt(2 * 11 * 20000 / 1) = 663 rad/s and a limit of 3.0 ms, again against 1 ms. Not a real material's stiffness: a lumped beam stands for a whole panel. |
 | `damping` | 20 N s/m | The cube's `BEAM_DAMPING`, same reason; it takes out impact ringing within the 10 s run. |
-| `yield_strain` | 0.02 | A choice made before any run, not measured and not tuned. Real structural steel yields at about 0.2% (250 MPa / 210 GPa), but a lumped beam here stands for a whole panel whose crush force is set by buckling, so the material value does not apply. 0.02 gives a crush force per 1 m beam of `k * strain * length` = 20000 * 0.02 * 1 = 400 N. The box has 600 J of kinetic energy at 10 m/s; the four front nodes lose about 150 J at the wall's restitution (their 50 J becomes 12.5 J each), so about 450 J is left for the plastic work. With roughly 12 beams' worth of force along x at 400 N (about 5 kN), that is a crush of about 450 / 5000 = 0.09 m, an estimate good to a factor of about 2, inside the 0.02 to 1.0 m the check allows by a factor of 4 on one side and 10 on the other. |
+| `yield_strain` | 0.02 | A choice made before any run, not measured and not tuned. Real structural steel yields at about 0.2% (250 MPa / 210 GPa), but a lumped beam here stands for a whole panel whose crush force is set by buckling, so the material value does not apply. 0.02 gives a crush force per 1 m beam of `k * strain * length` = 20000 * 0.02 * 1 = 400 N. The box has 600 J of kinetic energy at 10 m/s; the four front nodes lose about 150 J at the wall's restitution (their 50 J becomes 12.5 J each), so about 450 J is left for the plastic work. With roughly 12 beams' worth of force along x at 400 N (about 5 kN), that is a crush of about 450 / 5000 = 0.09 m, an estimate good to a factor of about 2, inside the 0.02 to 1.0 m the check allows by a factor of 4 on one side and 10 on the other. That margin is for the estimated deepest crush; the gated number is the crumple kept after settle-by (rule 1, floor 0.02 m), which measured 0.024905 m, only about 1.25 times above the floor. |
 | `break_strain` | none | The box crumples without breaking in this check (breaking is gated by check 2.9 on its own scenario). |
 
 The speed 10 m/s is 50 J/kg, half of the 96 J/kg of a car at 50 km/h (`docs/STAGE6.md`). If a measured value breaks a limit of `docs/STAGE6.md`, the limit is not loosened: report it.
@@ -166,6 +166,6 @@ After every output step (not every substep), `Sim::check()` fails the run if:
 - any node position or velocity component is NaN or infinite;
 - the max strain (over unbroken beams) is NaN, or exceeds `MAX_STRAIN_LIMIT` = 0.5 (50%). The strain calculation propagates NaN, so a blown-up state can never read as 0.
 
-Contact time is tracked separately, in the substep loop: `Sim::first_contact_s` is the time of the first substep at which any node is at or below the ground (0 if the cube starts there). `--summary` prints it, so it does not depend on the output sampling, which can miss a touchdown that begins and ends between two samples.
+Contact time is tracked separately, in the substep loop: `Sim::first_contact_s` is the time of the first substep at which any node is at or behind any collider plane, ground or wall (0 if the body starts there). `--summary` prints it, so it does not depend on the output sampling, which can miss a touchdown that begins and ends between two samples.
 
 `run_checked` then stops and returns the good samples so far plus an error reading `unstable at t = ... s: ...`. A config that `validate()` accepts can still abort here, for example `--gravity 5000` crushes the cube on impact (`tests/risky.rs`). A config refused by `validate()` returns no samples and the validation error. `run` is the same but panics on any error.

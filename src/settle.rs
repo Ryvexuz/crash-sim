@@ -158,10 +158,11 @@ pub fn measure_body_with(cfg: &Config, body: Option<&Body>, p: &SettleParams, mu
     if let Err(e) = p.validate() {
         return aborted(e);
     }
-    if body.is_none() {
-        if let Err(e) = cfg.validate() {
-            return aborted(e);
-        }
+    // The cube gets the full check; a body gets the finite-number rules on the original dt and
+    // substeps here (its step limit is checked by `Sim::from_body` on h, which is the same h).
+    let checked = if body.is_none() { cfg.validate() } else { cfg.validate_numbers() };
+    if let Err(e) = checked {
+        return aborted(e);
     }
     let h = cfg.dt / cfg.substeps as f64;
     let outer = (cfg.duration / cfg.dt).round() as u64;

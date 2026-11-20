@@ -233,8 +233,8 @@ pub struct Sim {
     pub beams: Vec<Beam>,
     /// Mass of each node (kg).
     pub mass: Vec<f64>,
-    /// Time (s) of the first physics substep at which any node was at or below the
-    /// ground (0.0 if the cube starts there); None until then. Set inside the substep
+    /// Time (s) of the first physics substep at which any node was at or behind any
+    /// collider plane, ground or wall (0.0 if the body starts there); None until then. Set inside the substep
     /// loop, so it cannot miss a contact that starts and ends between two output samples.
     pub first_contact_s: Option<f64>,
     /// Collider planes: the ground first, then the body's own, in file order. `integrate`
