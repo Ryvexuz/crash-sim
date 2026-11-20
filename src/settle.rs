@@ -10,7 +10,7 @@
 use crate::collide;
 use crate::input::Script;
 use crate::vec3::Vec3;
-use crate::{max_strain_unbroken, vehicle, Beam, Body, Config, Sim};
+use crate::{max_strain, max_strain_unbroken, vehicle, Beam, Body, Config, Sim};
 
 /// Total energy in joules: kinetic plus gravitational (potential measured from y = 0) plus
 /// elastic beam energy.
@@ -40,6 +40,17 @@ pub fn total_energy(pos: &[Vec3], vel: &[Vec3], beams: &[Beam], mass: &[f64], gr
 /// only leaves a node on a plane moving away when it reversed a contact faster than `REST_SPEED`.
 fn impact_this_substep(sim: &Sim) -> bool {
     collide::impact_this_substep(&sim.pos, &sim.vel, &sim.planes)
+}
+
+/// Largest strain over the beams that have not broken. While none has, that is `max_strain`
+/// over all the beams (the same beams in the same order, so the same number), which does not
+/// copy the beam list as `max_strain_unbroken` does: this runs every substep of the report.
+fn peak_strain(sim: &Sim) -> f64 {
+    if sim.broken.contains(&true) {
+        max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken)
+    } else {
+        max_strain(&sim.beams, &sim.pos)
+    }
 }
 
 /// The five thresholds of `--settle-report`. No defaults.
@@ -414,8 +425,12 @@ fn measure_inner(
     let energy = |s: &Sim| {
         if is_car {
             s.total_energy()
-        } else {
+        } else if s.broken.contains(&true) {
             total_energy(&s.pos, &s.vel, &s.live_beams(), &s.mass, g)
+        } else {
+            // No beam has broken: the live beams are all of them, in the same order, so this is
+            // the same sum without copying the beam list every substep.
+            total_energy(&s.pos, &s.vel, &s.beams, &s.mass, g)
         }
     };
 
@@ -438,7 +453,7 @@ fn measure_inner(
     let mut min_e_after = if p.by - tol <= 0.0 { e0 } else { f64::INFINITY };
     let mut rise_after = 0.0_f64;
     let mut gain = 0.0_f64;
-    let mut peak = max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken);
+    let mut peak = peak_strain(&sim);
     let mut first_speed_fail: Option<(f64, f64)> = None; // (speed, t) of the first substep at or after T
     for i in 1..=total {
         if let Some(script) = car.and_then(|c| c.script.as_ref()) {
@@ -465,7 +480,7 @@ fn measure_inner(
                 "unstable at t = {t:.4} s: total energy is not finite"
             ));
         }
-        peak = peak.max(max_strain_unbroken(&sim.beams, &sim.pos, &sim.broken));
+        peak = peak.max(peak_strain(&sim));
         // The engine adds energy (docs/STAGE6.md, settle rule 4): the rule is
         // (E - E0 - W) / (E0 + W) <= G, with W the work the drive torque has done so far.
         let w = sim.car.as_ref().map_or(0.0, |c| c.drive_work);
