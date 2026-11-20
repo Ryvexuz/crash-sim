@@ -201,3 +201,102 @@ fn live_closed_stdout_ends_quietly() {
         String::from_utf8_lossy(&o.stderr)
     );
 }
+
+/// The v2 run: the same lines piped live with `--trajectory-v2` and given as `--input` with it
+/// (no `--duration`) give the same bytes, and the live frames arrive flushed per frame while
+/// stdin is still open.
+#[test]
+fn live_trajectory_v2_matches_file_bytes() {
+    let path = tmp_file("live_v2.input", LINES);
+    let file = Command::new(crash_sim_bin())
+        .args(["--body", &car_path(), "--input", &path, "--trajectory-v2"])
+        .output()
+        .unwrap();
+    assert_eq!(file.status.code(), Some(0));
+    assert!(file.stdout.starts_with(b"trajectory v2\nnodes,"));
+
+    let mut child = Command::new(crash_sim_bin())
+        .args(["--body", &car_path(), "--live", "--trajectory-v2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for line in LINES.split_inclusive('\n') {
+        stdin.write_all(line.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+    drop(stdin);
+    let live = child.wait_with_output().unwrap();
+    assert_eq!(live.status.code(), Some(0));
+    assert!(
+        live.stderr.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&live.stderr)
+    );
+    assert!(
+        live.stdout == file.stdout,
+        "the same lines live and as --input must give the same v2 bytes"
+    );
+    // The v1 drive rows of the same lines are a different file: the flag is what selects v2.
+    let rows = Command::new(crash_sim_bin())
+        .args(["--body", &car_path(), "--input", &path])
+        .output()
+        .unwrap();
+    assert!(rows.stdout.starts_with(b"t,speed_mps,"));
+}
+
+/// A v2 frame is flushed as soon as the sim reaches it, with stdin open: the header and the t = 0
+/// frame after the first line, nothing more until the next line, then each frame up to that time.
+#[test]
+fn live_trajectory_v2_frames_arrive_before_end_of_input() {
+    let mut child = Command::new(crash_sim_bin())
+        .args(["--body", &car_path(), "--live", "--trajectory-v2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let next = |rx: &mpsc::Receiver<String>| {
+        rx.recv_timeout(Duration::from_secs(60))
+            .expect("a v2 line must arrive while stdin is open (flushed per frame)")
+    };
+    stdin.write_all(b"0 0 0 0\n").unwrap();
+    stdin.flush().unwrap();
+    assert_eq!(next(&rx), "trajectory v2");
+    let nodes: usize = next(&rx).strip_prefix("nodes,").unwrap().parse().unwrap();
+    let mut l = next(&rx);
+    while l != "t,node,x,y,z" {
+        assert!(l.starts_with("beam,") || l.starts_with("wall,"), "{l}");
+        l = next(&rx);
+    }
+    for i in 0..nodes {
+        assert!(next(&rx).starts_with(&format!("0.0000,{i},")));
+    }
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_err(),
+        "the sim ran past the last time received"
+    );
+    stdin.write_all(b"0.01 0.2 0 0\n").unwrap();
+    stdin.flush().unwrap();
+    for i in 0..nodes {
+        assert!(next(&rx).starts_with(&format!("0.0100,{i},")));
+    }
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_err(),
+        "the sim ran past the last time received"
+    );
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}

@@ -18,6 +18,7 @@
 
 use crate::format::Body;
 use crate::settle::{car_sim, run_substeps, CarSetup};
+use crate::trajectory;
 use crate::vec3::Vec3;
 use crate::{Config, Sim};
 
@@ -471,6 +472,48 @@ pub fn has_heading_groups(body: &Body) -> bool {
     group_indices(body, "rear").is_ok() && group_indices(body, "front").is_ok()
 }
 
+/// Writes a car run as trajectory v2 (`src/trajectory.rs`): the header, then one frame of every node
+/// per output step, each frame preceded by the break events that happened since the last one. The
+/// wheels are not nodes of the body and are not in the file (v2 has no wheel lines), and there is no
+/// `final` line: the file is the trajectory only, so the renderer can read it as it is. Shared by
+/// `drive` (a file run) and `live`, so both write the same bytes.
+pub struct FrameWriter {
+    header: String,
+    written: usize,
+}
+
+impl FrameWriter {
+    /// The writer for `sim` (a car sim built from `body`): refuses what `trajectory::header_v2` and
+    /// `walls_from_planes` refuse (a wall not along an axis, a bad beam).
+    pub fn new(sim: &Sim, body: &Body) -> Result<FrameWriter, String> {
+        let walls = trajectory::walls_from_planes(&body.planes)?;
+        let header = trajectory::header_v2(sim.pos.len(), &sim.beams, &walls)?;
+        Ok(FrameWriter { header, written: 0 })
+    }
+
+    /// The header, through the column line.
+    pub fn header(&self) -> &str {
+        &self.header
+    }
+
+    /// The text of the frame at time `t`: the break events not yet written, then the node rows.
+    pub fn frame(&mut self, sim: &Sim, t: f64) -> String {
+        let mut s = self.tail(sim);
+        s.push_str(&trajectory::frame_rows(t, &sim.pos));
+        s
+    }
+
+    /// The break events not yet written (those after the last frame).
+    pub fn tail(&mut self, sim: &Sim) -> String {
+        let mut s = String::new();
+        for b in &sim.breaks[self.written..] {
+            s.push_str(&trajectory::break_row(b.t, b.beam));
+        }
+        self.written = sim.breaks.len();
+        s
+    }
+}
+
 /// Run the drive of `setup` (which must carry a script) on `body` and measure it at every
 /// substep. `lap_min_heading` (degrees) is the heading change at which the lap path and closing
 /// distance are read; pass `f64::INFINITY` when no lap report is wanted. The run is
@@ -481,6 +524,19 @@ pub fn drive(
     body: &Body,
     setup: &CarSetup,
     lap_min_heading: f64,
+) -> Result<DriveRun, String> {
+    drive_frames(cfg, body, setup, lap_min_heading, None)
+}
+
+/// `drive`, and when `frames` is given, the trajectory v2 text of the run appended to it (the
+/// header, a frame at t = 0 and one per output step, the break events after the last frame). A run
+/// that aborts leaves the whole frames before the abort.
+pub fn drive_frames(
+    cfg: &Config,
+    body: &Body,
+    setup: &CarSetup,
+    lap_min_heading: f64,
+    mut frames: Option<&mut String>,
 ) -> Result<DriveRun, String> {
     cfg.validate_numbers()?;
     let script = setup
@@ -502,6 +558,15 @@ pub fn drive(
     let row = |sim: &Sim, t: f64| row_of(sim, &front, &rear, t);
     let fin = |sim: &Sim, t: f64| final_of(sim, &front, &rear, t);
 
+    let mut writer = match frames.as_deref_mut() {
+        Some(f) => {
+            let mut w = FrameWriter::new(&sim, body)?;
+            f.push_str(w.header());
+            f.push_str(&w.frame(&sim, 0.0));
+            Some(w)
+        }
+        None => None,
+    };
     let start = centroid(&sim);
     let mut prev_c = start;
     let mut prev_h = heading(&sim);
@@ -557,7 +622,13 @@ pub fn drive(
         last = fin(&sim, t);
         if i % cfg.substeps as u64 == 0 {
             rows.push(row(&sim, t));
+            if let (Some(w), Some(f)) = (writer.as_mut(), frames.as_deref_mut()) {
+                f.push_str(&w.frame(&sim, t));
+            }
         }
+    }
+    if let (Some(w), Some(f)) = (writer.as_mut(), frames) {
+        f.push_str(&w.tail(&sim));
     }
     Ok(DriveRun {
         rows,
@@ -614,6 +685,7 @@ fn next_line(
 pub fn live(
     cfg: &Config,
     body: &Body,
+    v2: bool,
     input: &mut impl std::io::BufRead,
     emit: &mut impl FnMut(&str) -> std::io::Result<()>,
 ) -> Result<(), LiveError> {
@@ -643,9 +715,23 @@ pub fn live(
         .car
         .clone()
         .ok_or_else(|| LiveError::Input("internal: a live run built no car".into()))?;
-    let mut text = String::from(ROWS_HEADER);
-    text.push('\n');
-    text.push_str(&render_row(&row_of(&sim, &front, &rear, 0.0)));
+    let mut writer = if v2 {
+        Some(FrameWriter::new(&sim, body).map_err(LiveError::Input)?)
+    } else {
+        None
+    };
+    let mut text = String::new();
+    match writer.as_mut() {
+        Some(w) => {
+            text.push_str(w.header());
+            text.push_str(&w.frame(&sim, 0.0));
+        }
+        None => {
+            text.push_str(ROWS_HEADER);
+            text.push('\n');
+            text.push_str(&render_row(&row_of(&sim, &front, &rear, 0.0)));
+        }
+    }
     emit(&text).map_err(LiveError::Output)?;
     let mut done: u64 = 0;
     loop {
@@ -663,7 +749,11 @@ pub fn live(
                 return Err(LiveError::Abort(format!("unstable at t = {t:.4} s: {e}")));
             }
             if done.is_multiple_of(cfg.substeps as u64) {
-                emit(&render_row(&row_of(&sim, &front, &rear, t))).map_err(LiveError::Output)?;
+                let text = match writer.as_mut() {
+                    Some(w) => w.frame(&sim, t),
+                    None => render_row(&row_of(&sim, &front, &rear, t)),
+                };
+                emit(&text).map_err(LiveError::Output)?;
             }
         }
         match next_line(&mut parser, input)? {
@@ -682,6 +772,18 @@ pub fn live(
             script.t_last()
         )));
     }
-    let fin = final_of(&sim, &front, &rear, done as f64 * h);
-    emit(&fin.render()).map_err(LiveError::Output)
+    match writer.as_mut() {
+        // v2 is the trajectory only: the break events after the last frame, no `final` line.
+        Some(w) => {
+            let tail = w.tail(&sim);
+            if tail.is_empty() {
+                return Ok(());
+            }
+            emit(&tail).map_err(LiveError::Output)
+        }
+        None => {
+            let fin = final_of(&sim, &front, &rear, done as f64 * h);
+            emit(&fin.render()).map_err(LiveError::Output)
+        }
+    }
 }

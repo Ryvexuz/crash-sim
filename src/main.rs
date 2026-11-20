@@ -35,7 +35,8 @@ fn usage() -> ! {
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
     eprintln!("       crash-sim --body <car.bsn> --input <file> [--duration <s>] [--slope-grip-frac <f>]   (per-step rows and a final line)");
-    eprintln!("       crash-sim --body <car.bsn> --live [--dt <s>] [--substeps <n>]   (input lines on stdin, rows on stdout: docs/STAGE6.md, \"The live protocol\")");
+    eprintln!("       crash-sim --body <car.bsn> (--input <file> | --live) --trajectory-v2   (trajectory v2 frames, every node, instead of the drive rows; for the renderer)");
+    eprintln!("       crash-sim --body <car.bsn> --live [--dt <s>] [--substeps <n>] [--trajectory-v2]   (input lines on stdin, rows on stdout: docs/STAGE6.md, \"The live protocol\")");
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
     eprintln!("       crash-sim --body <file.bsn> [--input <file> [--drive-report ...]] --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
@@ -86,6 +87,7 @@ fn main() {
     let mut cube_only = false;
     let mut input_path: Option<String> = None;
     let mut live = false;
+    let mut trajectory_v2 = false;
     let mut duration_given = false;
     let mut drive_report = false;
     let (mut lap_heading, mut lap_path, mut lap_close): (Option<f64>, Option<f64>, Option<f64>) =
@@ -129,6 +131,7 @@ fn main() {
                 }
             },
             "--live" => live = true,
+            "--trajectory-v2" => trajectory_v2 = true,
             "--drive-report" => drive_report = true,
             "--lap-min-heading" => lap_heading = Some(num(&mut args, "--lap-min-heading")),
             "--lap-min-path" => lap_path = Some(num(&mut args, "--lap-min-path")),
@@ -222,14 +225,14 @@ fn main() {
             || imp_min.is_some()
             || imp_max.is_some();
         if other {
-            eprintln!("--live takes only --body, --dt and --substeps (the input comes from stdin and the run ends at end of input)");
+            eprintln!("--live takes only --body, --dt, --substeps and --trajectory-v2 (the input comes from stdin and the run ends at end of input)");
             usage()
         }
         let Some(b) = body.as_ref().filter(|b| !b.wheels.is_empty()) else {
             eprintln!("--live needs --body with a body that has wheels");
             usage()
         };
-        exit(run_live(&cfg, b));
+        exit(run_live(&cfg, b, trajectory_v2));
     }
     let any_crumple =
         crumple_groups.is_some() || cmin.is_some() || cmax.is_some() || cdrift.is_some();
@@ -257,6 +260,23 @@ fn main() {
         || slope_to.is_some()
         || drive_report
         || any_lap;
+    if trajectory_v2 {
+        // The frames replace the per-step rows of an --input drive, so nothing else may print.
+        if input_path.is_none() {
+            eprintln!("--trajectory-v2 needs --input (or --live)");
+            usage()
+        }
+        if drive_report
+            || any_lap
+            || settle_report
+            || crumple_report
+            || slope_report
+            || slope_grip.is_some()
+        {
+            eprintln!("--trajectory-v2 replaces the per-step rows, so it cannot be used with a report or a slope flag");
+            usage()
+        }
+    }
     if car_flags {
         if !has_wheels {
             eprintln!("--input, --slope-grip-frac, --slope-report and --drive-report need --body with a body that has wheels");
@@ -394,6 +414,7 @@ fn main() {
             slope: slope_from.zip(slope_to).filter(|_| slope_report),
             drive: drive_params,
             crumple,
+            trajectory_v2,
         };
         exit(run_car(&args));
     }
@@ -509,13 +530,13 @@ fn main() {
 /// The live run (docs/STAGE6.md, "The live protocol"): lines on stdin, rows on stdout flushed per
 /// output step. Exit 0 at end of input or when stdout is closed (quietly, no message), 1 when the
 /// sim aborts or another write fails, 2 for a refused input (a bad line, the body does not suit).
-fn run_live(cfg: &Config, body: &Body) -> i32 {
+fn run_live(cfg: &Config, body: &Body, v2: bool) -> i32 {
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let mut emit = |text: &str| write_all_flush(&mut out, text);
-    match input::live(cfg, body, &mut input, &mut emit) {
+    match input::live(cfg, body, v2, &mut input, &mut emit) {
         Ok(()) => 0,
         Err(input::LiveError::Input(e)) => {
             eprintln!("crash-sim: --live: {e}");
@@ -544,6 +565,8 @@ struct CarArgs<'a> {
     drive: Option<DriveParams>,
     /// `--crumple-report` (only with `--settle-report`): measured on the settle run.
     crumple: Option<collide::CrumpleParams>,
+    /// `--trajectory-v2`: the run is written as trajectory v2 frames instead of the drive rows.
+    trajectory_v2: bool,
 }
 
 /// A car run: the drive (when there is a script), then the settle (and crumple) and slope
@@ -571,12 +594,14 @@ fn run_car(a: &CarArgs) -> i32 {
             return 2;
         }
     }
+    let mut frames = String::new();
     let run: Option<DriveRun> = match &a.setup.script {
-        Some(_) if needs_run => match input::drive(
+        Some(_) if needs_run => match input::drive_frames(
             a.cfg,
             a.body,
             &a.setup,
             a.drive.map_or(f64::INFINITY, |p| p.lap_min_heading),
+            a.trajectory_v2.then_some(&mut frames),
         ) {
             Ok(r) => Some(r),
             Err(e) => {
@@ -596,7 +621,9 @@ fn run_car(a: &CarArgs) -> i32 {
             }
             failed = true;
         }
-        if !reports {
+        if a.trajectory_v2 {
+            out.push_str(&frames);
+        } else if !reports {
             out.push_str(&input::render_rows(&r.rows));
         }
         if let (Some(dp), None) = (&a.drive, &r.abort) {
@@ -638,7 +665,7 @@ fn run_car(a: &CarArgs) -> i32 {
         }
     }
     if let Some(r) = &run {
-        if a.drive.is_none() && r.abort.is_none() {
+        if a.drive.is_none() && r.abort.is_none() && !a.trajectory_v2 {
             out.push_str(&r.final_state.render());
         }
     }

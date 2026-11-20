@@ -1346,3 +1346,78 @@ fn car_runs_refuse_plain_run_flags() {
         assert!(err.contains(flag), "{err}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// --trajectory-v2 (docs/STAGE6.md, "The live protocol")
+// ---------------------------------------------------------------------------------------------
+
+const V2_INPUT: &str = "0 0 0 0\n0.5 0.6 0 0\n1 0.3 0 -0.5\n";
+
+/// Without `--trajectory-v2` an --input run prints exactly the drive rows and the `final` line of
+/// the library's own `drive` (the default output is unchanged); with it the file is trajectory v2,
+/// every node per frame, and has neither the drive header nor a `final` line.
+#[test]
+fn trajectory_v2_flag_replaces_rows_and_default_is_unchanged() {
+    use crash_sim::input::{drive, render_rows};
+    let path = car_path();
+    let input = tmp_file("v2_flag.input", V2_INPUT);
+    let body = car();
+
+    // The default: the library's rows and final line, byte for byte.
+    let cfg = Config::default();
+    let setup = CarSetup {
+        script: Some(script(V2_INPUT)),
+        until_script_end: true,
+        grip_frac: None,
+    };
+    let run = drive(&cfg, &body, &setup, f64::INFINITY).unwrap();
+    let expected = format!("{}{}", render_rows(&run.rows), run.final_state.render());
+    let (code, rows, _) = cli(&["--body", &path, "--input", &input]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        rows, expected,
+        "the default output must stay the drive rows"
+    );
+
+    // The flag: trajectory v2.
+    let (code, v2, err) = cli(&["--body", &path, "--input", &input, "--trajectory-v2"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(v2.starts_with("trajectory v2\nnodes,"), "{v2}");
+    assert!(!v2.contains("final "), "a v2 file has no final line");
+    assert!(!v2.contains("speed_mps"), "a v2 file has no drive header");
+    let lines: Vec<&str> = v2.lines().collect();
+    let n: usize = lines[1].strip_prefix("nodes,").unwrap().parse().unwrap();
+    assert_eq!(n, body.nodes.len());
+    let columns = lines.iter().position(|l| *l == "t,node,x,y,z").unwrap();
+    let beams = lines[2..columns]
+        .iter()
+        .filter(|l| l.starts_with("beam,"))
+        .count();
+    assert_eq!(beams, body.beams.len());
+    let data: Vec<&str> = lines[columns + 1..]
+        .iter()
+        .copied()
+        .filter(|l| !l.starts_with("break,"))
+        .collect();
+    // one frame at t = 0 and one per output step: the rows of the default run, one for one.
+    assert_eq!(data.len(), n * run.rows.len());
+    for (k, row) in run.rows.iter().enumerate() {
+        let frame = &data[k * n..(k + 1) * n];
+        for (i, l) in frame.iter().enumerate() {
+            assert!(l.starts_with(&format!("{:.4},{i},", row.t)), "{l}");
+        }
+    }
+
+    // A report flag, or no input, is refused: the flag replaces the rows, nothing else prints.
+    let (code, _, err) = cli(&["--body", &path, "--trajectory-v2"]);
+    assert_eq!(code, Some(2), "{err}");
+    let (code, _, err) = cli(&[
+        "--body",
+        &path,
+        "--input",
+        &input,
+        "--trajectory-v2",
+        "--slope-report",
+    ]);
+    assert_eq!(code, Some(2), "{err}");
+}
