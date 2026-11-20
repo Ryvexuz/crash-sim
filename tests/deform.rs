@@ -212,7 +212,15 @@ fn cube_bsn_output_matches_default() {
         let body = run(&args);
         assert!(plain.status.success() && body.status.success(), "{extra:?}");
         assert!(!plain.stdout.is_empty());
-        assert_eq!(plain.stdout, body.stdout, "--body cube.bsn differs from the default cube for {extra:?}");
+        // A body run's CSV has one more column, `broken_beams` (nb-35); drop it and the rest is the cube's output.
+        let body_out = String::from_utf8(body.stdout).unwrap();
+        let without_column: String = if extra.contains(&"--summary") {
+            body_out.clone()
+        } else {
+            body_out.lines().map(|l| format!("{}
+", l.rsplit_once(',').unwrap().0)).collect()
+        };
+        assert_eq!(String::from_utf8(plain.stdout).unwrap(), without_column, "--body cube.bsn differs from the default cube for {extra:?}");
     }
 }
 
@@ -222,7 +230,7 @@ fn box_bsn_runs_from_the_command_line() {
     let o = run(&["--body", path.as_str(), "--duration", "2"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let text = String::from_utf8(o.stdout).unwrap();
-    assert!(text.starts_with("t,min_y,center_y,max_beam_strain\n"));
+    assert!(text.starts_with("t,min_y,center_y,max_beam_strain,broken_beams\n"));
     assert_eq!(text.lines().count(), 1 + 201);
 }
 
