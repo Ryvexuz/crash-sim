@@ -124,6 +124,7 @@ fn reverse_throttle_at_speed_adds_no_drive_torque() {
     let mut slow = moving_sim(0.5, -1.0);
     for _ in 0..50 {
         slow.advance();
+        slow.check().unwrap();
     }
     let slow_work = slow.car.as_ref().unwrap().drive_work;
     println!("0.5 m/s, throttle -1: drive work {slow_work:e} J");
@@ -227,6 +228,11 @@ fn input_and_live_accept_minus_one_and_refuse_below() {
         String::from_utf8_lossy(&l.stderr)
     );
     assert_eq!(fo, lo, "--input and --live give the same bytes");
+    // `--live` writes the same bytes as `--input` (docs/STAGE6.md, "Same bytes": "The same lines
+    // piped live and given as `--input` (no `--duration`) give identical stdout bytes: the header,
+    // the rows, the `final` line"). So the last line of both is the `final t=... x=... z=...
+    // heading_deg=...` line, and that is where `x=` comes from: the rows alone are CSV with no
+    // `x=` key, but the output ends with the `final` line at end of input.
     let last = fo.lines().last().unwrap();
     let x: f64 = last
         .split("x=")

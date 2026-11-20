@@ -618,7 +618,11 @@ impl Car {
         scratch.brake.clear();
         scratch.drive.clear();
         scratch.axles.clear();
-        // Only a reverse throttle needs the speed; for throttle >= 0 it is never read.
+        // Only a reverse throttle needs the speed; for throttle >= 0 it is never read. The speed
+        // is along the frame of the previous force pass (`self.frame`, refitted just below): one
+        // substep old, so a frame that turns 1 rad/s is off by about 1 mrad at 1 ms, far inside
+        // the 1 m/s threshold's meaning. Using the fresh frame would not change any number for
+        // throttle >= 0 either, but this keeps the order of the substep as it was.
         let forward_speed = if self.throttle < 0.0 {
             self.forward_speed(vel, mass)
         } else {
