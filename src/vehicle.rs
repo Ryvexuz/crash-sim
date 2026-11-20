@@ -123,6 +123,22 @@ pub struct Substep {
     pub h: f64,
 }
 
+/// Per-wheel buffers `pre_step` refills every substep, so the hot path never allocates once
+/// their capacity is reached. They carry no state between substeps (each is cleared and refilled
+/// before it is read), so two cars compare equal whatever their scratch holds.
+#[derive(Clone, Debug, Default)]
+struct StepScratch {
+    brake: Vec<f64>,
+    drive: Vec<f64>,
+    axles: Vec<Vec3>,
+}
+
+impl PartialEq for StepScratch {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// The wheels of a car and what they share.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Car {
@@ -161,6 +177,8 @@ pub struct Car {
     /// carrier is rigid, so that force reaches the chassis at the wheel centre). `pre_step`
     /// applies it to the chassis in the next substep, as forces in the solver's sum.
     pub carrier_torque: Vec3,
+    /// Buffers for `pre_step`; see `StepScratch`.
+    scratch: StepScratch,
 }
 
 fn finite3(v: Vec3) -> bool {
@@ -387,6 +405,7 @@ impl Car {
             },
             frame_error: None,
             carrier_torque: Vec3::ZERO,
+            scratch: StepScratch::default(),
         };
         car.frame = car
             .fit_frame(pos)
@@ -562,8 +581,16 @@ impl Car {
     ) {
         let Substep { gravity, h } = step;
         let mut chassis_torque = self.carrier_torque;
-        let brake: Vec<f64> = self.wheels.iter().map(|w| self.brake_torque(w)).collect();
-        let drive: Vec<f64> = self.wheels.iter().map(|w| self.drive_torque(w)).collect();
+        // Take the buffers out of `self` (a move, no allocation) so the loops below can borrow
+        // `self` as before; they go back at the end. Cleared and refilled, they keep their capacity.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.brake.clear();
+        scratch.drive.clear();
+        scratch.axles.clear();
+        for w in &self.wheels {
+            scratch.brake.push(self.brake_torque(w));
+            scratch.drive.push(self.drive_torque(w));
+        }
         let old = self.frame;
         match self.fit_frame(pos) {
             Ok(f) => self.frame = f,
@@ -574,18 +601,17 @@ impl Car {
             }
         }
         let fr = self.frame;
-        let axles: Vec<Vec3> = self
-            .wheels
-            .iter()
-            .map(|w| self.wheel_axle(w, &fr))
-            .collect();
+        for w in &self.wheels {
+            scratch.axles.push(self.wheel_axle(w, &fr));
+        }
         let mut drive_work = 0.0;
         // The chassis' rotation rate about the axle (rad/s), from how far its forward axis turned
         // since the last substep: d(forward)/dt = omega x forward, so omega . axle =
         // -(d forward/dt) . up. The brake acts on the wheel's spin relative to this.
         let chassis_spin = -((fr.forward - old.forward) * (1.0 / h)).dot(fr.up);
         let reference_load = self.reference_load;
-        for (((w, tb), td), wa) in self.wheels.iter_mut().zip(brake).zip(drive).zip(axles) {
+        let per_wheel = scratch.brake.iter().zip(&scratch.drive).zip(&scratch.axles);
+        for (w, ((&tb, &td), &wa)) in self.wheels.iter_mut().zip(per_wheel) {
             w.axle = wa;
             let (c, vc) = centroid(&w.p.mount, pos, vel);
             let s = (c - w.pos).dot(fr.up);
@@ -635,7 +661,28 @@ impl Car {
             drive_work += td * h * (0.5 * (w.spin + w.spin_next) - cs);
         }
         self.drive_work += drive_work;
+        self.scratch = scratch;
         add_torque(pos, mass, chassis_torque, extra);
+    }
+
+    /// Capacities of `pre_step`'s three reuse buffers (brake, drive, axles): constant once the
+    /// first substep has run. Exists so a test can show the buffers are reused, not reallocated.
+    pub fn scratch_capacities(&self) -> [usize; 3] {
+        [
+            self.scratch.brake.capacity(),
+            self.scratch.drive.capacity(),
+            self.scratch.axles.capacity(),
+        ]
+    }
+
+    /// Addresses of `pre_step`'s three reuse buffers, for the same test: they do not move while
+    /// the buffers are reused.
+    pub fn scratch_addresses(&self) -> [usize; 3] {
+        [
+            self.scratch.brake.as_ptr() as usize,
+            self.scratch.drive.as_ptr() as usize,
+            self.scratch.axles.as_ptr() as usize,
+        ]
     }
 
     /// After the solver's step: each wheel's velocity and centre (symplectic Euler, velocity
