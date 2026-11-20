@@ -37,72 +37,98 @@ pub struct Script {
     lines: Vec<Line>,
 }
 
+/// The one parser of input lines, fed a line at a time: `Script::parse` (a file) and `live` (a
+/// pipe) both use it, so a line is accepted or refused the same way in both. It holds what the
+/// rules need from the lines before: the line number and the previous time.
+#[derive(Clone, Debug, Default)]
+pub struct LineParser {
+    /// Lines fed so far (blank lines count): the number of the next line is this plus 1.
+    fed: usize,
+    last_t: Option<f64>,
+}
+
+impl LineParser {
+    pub fn new() -> LineParser {
+        LineParser::default()
+    }
+
+    /// Feed the next line, without its `\n`. `Ok(None)` for a blank line; the error names the line.
+    pub fn feed(&mut self, raw: &str) -> Result<Option<Line>, String> {
+        self.fed += 1;
+        let number = self.fed;
+        if raw.contains('\r') {
+            return Err(format!("input line {number}: a carriage return is not allowed (lines end with \\n only)"));
+        }
+        if raw.trim().is_empty() {
+            return Ok(None);
+        }
+        let f: Vec<&str> = raw.split_whitespace().collect();
+        if f.len() != 4 {
+            return Err(format!("input line {number}: a line is `t throttle brake steer`, found {} fields in `{raw}`", f.len()));
+        }
+        let mut v = [0.0_f64; 4];
+        for (k, x) in f.iter().enumerate() {
+            v[k] = x
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| format!("input line {number}: `{x}` is not a finite number"))?;
+        }
+        let [t, throttle, brake, steer] = v;
+        if t < 0.0 {
+            return Err(format!("input line {number}: time {t} is below 0"));
+        }
+        match self.last_t {
+            None if t != 0.0 => {
+                return Err(format!(
+                    "input line {number}: the first line must be at t = 0, found t = {t}"
+                ));
+            }
+            Some(prev) if t <= prev => {
+                return Err(format!("input line {number}: time {t} is not above the previous line's time {prev} (times must strictly increase)"));
+            }
+            _ => {}
+        }
+        if !(0.0..=1.0).contains(&throttle) {
+            return Err(format!(
+                "input line {number}: throttle {throttle} must be from 0 to 1"
+            ));
+        }
+        if !(0.0..=1.0).contains(&brake) {
+            return Err(format!(
+                "input line {number}: brake {brake} must be from 0 to 1"
+            ));
+        }
+        if !(-1.0..=1.0).contains(&steer) {
+            return Err(format!(
+                "input line {number}: steer {steer} must be from -1 to 1"
+            ));
+        }
+        self.last_t = Some(t);
+        Ok(Some(Line {
+            number,
+            t,
+            throttle,
+            brake,
+            steer,
+        }))
+    }
+}
+
 impl Script {
     /// Parse `text`. The error names the line (`input line N: ...`).
     pub fn parse(text: &str) -> Result<Script, String> {
         let mut lines: Vec<Line> = Vec::new();
+        let mut parser = LineParser::new();
         let mut pieces: Vec<&str> = text.split('\n').collect();
         // `a\nb\n` splits into a, b and an empty last piece that is not a line.
         if pieces.last() == Some(&"") {
             pieces.pop();
         }
-        for (i, raw) in pieces.iter().enumerate() {
-            let number = i + 1;
-            if raw.contains('\r') {
-                return Err(format!("input line {number}: a carriage return is not allowed (lines end with \\n only)"));
+        for raw in pieces {
+            if let Some(line) = parser.feed(raw)? {
+                lines.push(line);
             }
-            if raw.trim().is_empty() {
-                continue;
-            }
-            let f: Vec<&str> = raw.split_whitespace().collect();
-            if f.len() != 4 {
-                return Err(format!("input line {number}: a line is `t throttle brake steer`, found {} fields in `{raw}`", f.len()));
-            }
-            let mut v = [0.0_f64; 4];
-            for (k, x) in f.iter().enumerate() {
-                v[k] = x
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|n| n.is_finite())
-                    .ok_or_else(|| format!("input line {number}: `{x}` is not a finite number"))?;
-            }
-            let [t, throttle, brake, steer] = v;
-            if t < 0.0 {
-                return Err(format!("input line {number}: time {t} is below 0"));
-            }
-            match lines.last() {
-                None if t != 0.0 => {
-                    return Err(format!(
-                        "input line {number}: the first line must be at t = 0, found t = {t}"
-                    ));
-                }
-                Some(prev) if t <= prev.t => {
-                    return Err(format!("input line {number}: time {t} is not above the previous line's time {} (times must strictly increase)", prev.t));
-                }
-                _ => {}
-            }
-            if !(0.0..=1.0).contains(&throttle) {
-                return Err(format!(
-                    "input line {number}: throttle {throttle} must be from 0 to 1"
-                ));
-            }
-            if !(0.0..=1.0).contains(&brake) {
-                return Err(format!(
-                    "input line {number}: brake {brake} must be from 0 to 1"
-                ));
-            }
-            if !(-1.0..=1.0).contains(&steer) {
-                return Err(format!(
-                    "input line {number}: steer {steer} must be from -1 to 1"
-                ));
-            }
-            lines.push(Line {
-                number,
-                t,
-                throttle,
-                brake,
-                steer,
-            });
         }
         if lines.is_empty() {
             return Err("input: the file has no line (a script needs at least `0 <throttle> <brake> <steer>`)".into());
@@ -199,12 +225,18 @@ pub fn render_rows(rows: &[DriveRow]) -> String {
     let mut s = String::from(ROWS_HEADER);
     s.push('\n');
     for r in rows {
-        s.push_str(&format!(
-            "{:.4},{:.4},{:.4},{:.4},{:.4},{:.2}\n",
-            r.t, r.speed, r.pos.x, r.pos.y, r.pos.z, r.heading_deg
-        ));
+        s.push_str(&render_row(r));
     }
     s
+}
+
+/// One row as text, ending in a newline: the only place a row is formatted, so a file run and a
+/// live run print the same bytes.
+pub fn render_row(r: &DriveRow) -> String {
+    format!(
+        "{:.4},{:.4},{:.4},{:.4},{:.4},{:.2}\n",
+        r.t, r.speed, r.pos.x, r.pos.y, r.pos.z, r.heading_deg
+    )
 }
 
 /// What a drive measured. The fields are the lines of the drive report.
@@ -385,6 +417,38 @@ fn chassis_com_velocity(sim: &Sim) -> Vec3 {
     v * (1.0 / m)
 }
 
+/// Heading of the car (radians): the ground-plane direction from the `rear` to the `front` centroid.
+fn heading_of(sim: &Sim, front: &[usize], rear: &[usize]) -> f64 {
+    ground_angle(mean(&sim.pos, front) - mean(&sim.pos, rear))
+}
+
+/// Centroid of all the sim's nodes.
+fn centroid_of(sim: &Sim) -> Vec3 {
+    let all: Vec<usize> = (0..sim.pos.len()).collect();
+    mean(&sim.pos, &all)
+}
+
+/// The output row at time `t`: used by `drive` and `live`, so both print the same numbers.
+fn row_of(sim: &Sim, front: &[usize], rear: &[usize], t: f64) -> DriveRow {
+    DriveRow {
+        t,
+        speed: chassis_com_velocity(sim).length(),
+        pos: centroid_of(sim),
+        heading_deg: heading_of(sim, front, rear).to_degrees(),
+    }
+}
+
+/// The `final` state at time `t`.
+fn final_of(sim: &Sim, front: &[usize], rear: &[usize], t: f64) -> FinalState {
+    let c = centroid_of(sim);
+    FinalState {
+        t,
+        x: c.x,
+        z: c.z,
+        heading_deg: heading_of(sim, front, rear).to_degrees(),
+    }
+}
+
 /// Whether the car touches wall plane `k` (any plane after the ground): a chassis node at or
 /// behind it, or a tyre pressed into it. Returns the first such plane index.
 fn wall_touched(sim: &Sim) -> Option<usize> {
@@ -431,24 +495,10 @@ pub fn drive(
     let mut sim = car_sim(one, body, setup)?;
     let tol = h * 1e-6;
 
-    let all: Vec<usize> = (0..sim.pos.len()).collect();
-    let heading = |sim: &Sim| ground_angle(mean(&sim.pos, &front) - mean(&sim.pos, &rear));
-    let centroid = |sim: &Sim| mean(&sim.pos, &all);
-    let row = |sim: &Sim, t: f64| DriveRow {
-        t,
-        speed: chassis_com_velocity(sim).length(),
-        pos: centroid(sim),
-        heading_deg: heading(sim).to_degrees(),
-    };
-    let fin = |sim: &Sim, t: f64| {
-        let c = centroid(sim);
-        FinalState {
-            t,
-            x: c.x,
-            z: c.z,
-            heading_deg: heading(sim).to_degrees(),
-        }
-    };
+    let heading = |sim: &Sim| heading_of(sim, &front, &rear);
+    let centroid = centroid_of;
+    let row = |sim: &Sim, t: f64| row_of(sim, &front, &rear, t);
+    let fin = |sim: &Sim, t: f64| final_of(sim, &front, &rear, t);
 
     let start = centroid(&sim);
     let mut prev_c = start;
@@ -513,4 +563,123 @@ pub fn drive(
         final_state: last,
         abort,
     })
+}
+
+/// Why a live run ended without its `final` line.
+#[derive(Debug)]
+pub enum LiveError {
+    /// A refused input: a bad line, the body or the car does not suit, no line at all (exit 2).
+    Input(String),
+    /// The sim became unstable or broke a limit: the rows so far were written (exit 1).
+    Abort(String),
+    /// stdout could not be written.
+    Output(std::io::Error),
+}
+
+/// Read the next non-blank line from `input`: `Ok(None)` at end of input. A last line with no
+/// `\n` counts as a line, as in a file. Each line goes through `parser`, the same parser a file does.
+fn next_line(
+    parser: &mut LineParser,
+    input: &mut impl std::io::BufRead,
+) -> Result<Option<Line>, LiveError> {
+    loop {
+        let mut buf: Vec<u8> = Vec::new();
+        let n = input
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| LiveError::Input(format!("input: cannot read: {e}")))?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        }
+        let text = String::from_utf8(buf).map_err(|_| {
+            LiveError::Input(format!("input line {}: not valid UTF-8", parser.fed + 1))
+        })?;
+        if let Some(l) = parser.feed(&text).map_err(LiveError::Input)? {
+            return Ok(Some(l));
+        }
+    }
+}
+
+/// The live drive (`--live`, docs/STAGE6.md "The live protocol"): lines of the input grammar are
+/// read from `input` as they arrive and `emit` is called with the output text, once for the header
+/// and the row at t = 0 (after the first line) and once per output step after that, then once for
+/// the `final` line at end of input. The sim runs substep i only when the last time received is at
+/// or after the end of that substep, so it never runs ahead of the lines, and it runs exactly the
+/// substeps a file of the same lines runs (the same count as `settle::run_substeps`), so the bytes
+/// are the same. `emit` is where the caller writes and flushes: its error ends the run.
+pub fn live(
+    cfg: &Config,
+    body: &Body,
+    input: &mut impl std::io::BufRead,
+    emit: &mut impl FnMut(&str) -> std::io::Result<()>,
+) -> Result<(), LiveError> {
+    cfg.validate_numbers().map_err(LiveError::Input)?;
+    let rear = group_indices(body, "rear").map_err(LiveError::Input)?;
+    let front = group_indices(body, "front").map_err(LiveError::Input)?;
+    let h = cfg.dt / cfg.substeps as f64;
+    let tol = h * 1e-6;
+    let mut parser = LineParser::new();
+    let first = next_line(&mut parser, input)?.ok_or_else(|| {
+        LiveError::Input(
+            "input: end of input before any line (a run needs at least `0 <throttle> <brake> <steer>`)"
+                .into(),
+        )
+    })?;
+    let mut script = Script { lines: vec![first] };
+    let setup = CarSetup {
+        script: Some(script.clone()),
+        until_script_end: false,
+        grip_frac: None,
+    };
+    let mut one = cfg.clone();
+    one.dt = h;
+    one.substeps = 1;
+    let mut sim = car_sim(one, body, &setup).map_err(LiveError::Input)?;
+    let mut probe = sim
+        .car
+        .clone()
+        .ok_or_else(|| LiveError::Input("internal: a live run built no car".into()))?;
+    let mut text = String::from(ROWS_HEADER);
+    text.push('\n');
+    text.push_str(&render_row(&row_of(&sim, &front, &rear, 0.0)));
+    emit(&text).map_err(LiveError::Output)?;
+    let mut done: u64 = 0;
+    loop {
+        // The substeps whose end is at or before the last time received (the same count as
+        // `settle::run_substeps` gives a file whose last line is that time).
+        let allowed = (script.t_last() / h * (1.0 + 1e-9)).floor() as u64;
+        while done < allowed {
+            done += 1;
+            let t = done as f64 * h;
+            script
+                .apply(&mut sim, (done - 1) as f64 * h, tol)
+                .map_err(LiveError::Input)?;
+            sim.advance();
+            if let Err(e) = sim.check() {
+                return Err(LiveError::Abort(format!("unstable at t = {t:.4} s: {e}")));
+            }
+            if done % cfg.substeps as u64 == 0 {
+                emit(&render_row(&row_of(&sim, &front, &rear, t))).map_err(LiveError::Output)?;
+            }
+        }
+        match next_line(&mut parser, input)? {
+            Some(l) => {
+                probe
+                    .set_controls(l.throttle, l.brake, l.steer)
+                    .map_err(|e| LiveError::Input(format!("input line {}: {e}", l.number)))?;
+                script.lines.push(l);
+            }
+            None => break,
+        }
+    }
+    if done == 0 {
+        return Err(LiveError::Input(format!(
+            "the input ends at t={}, so the run has 0 substeps",
+            script.t_last()
+        )));
+    }
+    let fin = final_of(&sim, &front, &rear, done as f64 * h);
+    emit(&fin.render()).map_err(LiveError::Output)
 }

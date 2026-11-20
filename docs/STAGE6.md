@@ -225,6 +225,28 @@ drive: ok
 
 `drive: ok` iff `lap_heading_deg` >= lap-min-heading, `lap_path_m` >= lap-min-path, `lap_close_m` <= lap-close, `chassis_ground_contacts_before_wall=0`, and the impact speed is within [impact-min, impact-max]; otherwise `drive: FAIL <rule and numbers>`. Without `--drive-report`, a run with `--input` still ends with the same `final ...` line.
 
+### The live protocol (`--live`, task t-20261120-134815)
+
+`crash-sim --body <car.bsn> [--dt <s>] [--substeps <n>] --live` runs the drive as a child process of a viewer (ADR 0001 (a)): input lines in on stdin, rows out on stdout. STAGE7's `--sim-exe` and `race --live` rely on it. `--live` takes no other flag (not `--input`, `--duration`, a report or a slope flag; a `--body` with wheels is required): the input is stdin and the run ends at end of input.
+
+**Lines in.** The grammar and the rules are those of `--input` (see "The files" and `src/input.rs`), and the parser is the same code (`LineParser`), so a line is accepted or refused the same way in both: `t throttle brake steer`, only `\n` line ends (a `CR` is an error), blank lines skipped, the first line at t = 0, times strictly increasing, throttle and brake in 0..=1, steer in -1..=1. The line must end with `\n` to be read at once; the viewer writes one line per input change and flushes it. `t` is simulation time, never wall-clock time. A last line with no `\n` at end of input counts as a line, as in a file.
+
+**Rows out.** Before anything is written the program waits for the first line (it must be at t = 0). It then writes, as one flushed write, the header `t,speed_mps,x,y,z,heading_deg` and the row at t = 0; after that one row per output step (`dt`), flushed after each row, in the format of the per-step rows of `--input` (`{:.4},{:.4},{:.4},{:.4},{:.4},{:.2}`, each row ending in `\n`; the code that formats a row is shared, so the bytes cannot differ). The viewer can read a row as soon as it is written: there is no other buffering. (The rows are the car's chassis-centre speed, position and heading, not per-node frames; a viewer that needs nodes needs a protocol extension, which this file does not define.)
+
+**Never ahead of the input.** The sim runs a substep only when the last time received is at or after the end of that substep, so after a line at time `t` it runs up to `t` (every whole substep not after `t`, with the relative epsilon of 1e-9 that a file uses) and then blocks reading the next line. A line takes effect at the first substep that starts at or after its time, as in a file, so a line sent at `t` changes the run from `t` on, and the rows already written (all at times up to the previous line's `t`) are never taken back.
+
+**End.** End of input (the viewer closes the child's stdin) ends the run at the last line, as a file script with no `--duration` does: the run is exactly the substeps up to the last line's time, the last row is the last output step not after it, and the program writes the line `final t=<4 decimals> x=<4 decimals> z=<4 decimals> heading_deg=<2 decimals>` (the format of the drive's `final` line, at the end of the last substep) and exits 0. If the input ends before one whole substep (only a line at t = 0), it is an error naming the cause, exit 2, after the header and the t = 0 row.
+
+**Same bytes.** The same lines piped live and given as `--input` (no `--duration`) give identical stdout bytes: the header, the rows, the `final` line (test `live_matches_file_input_bytes`).
+
+**Errors.** Exit codes are those of the car runs.
+- A bad line (any rule above, or a value the car cannot obey) writes `crash-sim: --live: input line N: <reason>` to stderr and exits 2. `N` counts every line received, blank ones too, from 1. What was written before stays written (rows are never retracted); no `final` line follows. The same holds for end of input before any line, a body without `front` and `rear` groups, and a line that is not valid UTF-8.
+- If the sim becomes unstable (a non-finite state, a strain limit), the program writes `crash-sim: unstable at t = <t> s: <reason>` to stderr, no `final` line, and exits 1; the rows before the failure stay written.
+- A closed stdout (the viewer went away) ends the run quietly: exit 0, nothing on stderr. Any other write error prints `crash-sim: cannot write output: <error>` and exits 1.
+- stdout carries protocol only: header, rows and the `final` line. Every message goes to stderr.
+
+Tests (`tests/live.rs`, run through the real binary): `live_matches_file_input_bytes`, `live_rows_arrive_before_end_of_input` (rows up to the last time received arrive with stdin open, none after it until the next line), `live_bad_line_exits_2_naming_the_line`, `live_closed_stdout_ends_quietly`.
+
 ### The numbers, and why
 
 - **Impact 45 to 55 km/h.** 50 km/h is the speed of the full-width rigid-barrier frontal tests (Euro NCAP full width, UN Regulation 137), and the wall is a rigid plane, so milestone 4 can compare this run against such a test. The +-5 km/h lets an open-loop script aim; if physics changes and the speed drifts out, the script is re-aimed and the change is recorded, never the window.

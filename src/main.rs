@@ -35,6 +35,7 @@ fn usage() -> ! {
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
     eprintln!("       crash-sim --body <car.bsn> --input <file> [--duration <s>] [--slope-grip-frac <f>]   (per-step rows and a final line)");
+    eprintln!("       crash-sim --body <car.bsn> --live [--dt <s>] [--substeps <n>]   (input lines on stdin, rows on stdout: docs/STAGE6.md, \"The live protocol\")");
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
     eprintln!("       crash-sim --body <file.bsn> ... --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
@@ -63,6 +64,7 @@ fn main() {
         (None, None, None);
     let mut cube_only = false;
     let mut input_path: Option<String> = None;
+    let mut live = false;
     let mut duration_given = false;
     let mut drive_report = false;
     let (mut lap_heading, mut lap_path, mut lap_close): (Option<f64>, Option<f64>, Option<f64>) =
@@ -105,6 +107,7 @@ fn main() {
                     usage()
                 }
             },
+            "--live" => live = true,
             "--drive-report" => drive_report = true,
             "--lap-min-heading" => lap_heading = Some(num(&mut args, "--lap-min-heading")),
             "--lap-min-path" => lap_path = Some(num(&mut args, "--lap-min-path")),
@@ -170,6 +173,43 @@ fn main() {
         }
         None => None,
     };
+    if live {
+        // The live run has its own path: the input comes from stdin, the length from the input.
+        let other = input_path.is_some()
+            || duration_given
+            || summary
+            || events
+            || settle_report
+            || crumple_report
+            || drive_report
+            || slope_report
+            || slope_grip.is_some()
+            || slope_from.is_some()
+            || slope_to.is_some()
+            || cmin.is_some()
+            || cmax.is_some()
+            || cdrift.is_some()
+            || crumple_groups.is_some()
+            || by.is_some()
+            || hold.is_some()
+            || speed.is_some()
+            || rise.is_some()
+            || gain.is_some()
+            || lap_heading.is_some()
+            || lap_path.is_some()
+            || lap_close.is_some()
+            || imp_min.is_some()
+            || imp_max.is_some();
+        if other {
+            eprintln!("--live takes only --body, --dt and --substeps (the input comes from stdin and the run ends at end of input)");
+            usage()
+        }
+        let Some(b) = body.as_ref().filter(|b| !b.wheels.is_empty()) else {
+            eprintln!("--live needs --body with a body that has wheels");
+            usage()
+        };
+        exit(run_live(&cfg, b));
+    }
     let any_crumple =
         crumple_groups.is_some() || cmin.is_some() || cmax.is_some() || cdrift.is_some();
     if (crumple_report || any_crumple) && !settle_report {
@@ -447,6 +487,33 @@ fn main() {
     }
     if result.is_err() {
         exit(1);
+    }
+}
+
+/// The live run (docs/STAGE6.md, "The live protocol"): lines on stdin, rows on stdout flushed per
+/// output step. Exit 0 at end of input or when stdout is closed (quietly, no message), 1 when the
+/// sim aborts or another write fails, 2 for a refused input (a bad line, the body does not suit).
+fn run_live(cfg: &Config, body: &Body) -> i32 {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let mut emit = |text: &str| write_all_flush(&mut out, text);
+    match input::live(cfg, body, &mut input, &mut emit) {
+        Ok(()) => 0,
+        Err(input::LiveError::Input(e)) => {
+            eprintln!("crash-sim: --live: {e}");
+            2
+        }
+        Err(input::LiveError::Abort(e)) => {
+            eprintln!("crash-sim: {e}");
+            1
+        }
+        Err(input::LiveError::Output(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => 0,
+        Err(input::LiveError::Output(e)) => {
+            eprintln!("{}", write_failure_message(&e));
+            1
+        }
     }
 }
 
