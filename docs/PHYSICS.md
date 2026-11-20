@@ -105,6 +105,16 @@ with `e_x = unit(a x n)` the rolling direction, `e_y = n x e_x` the lateral one,
 - `braked_car_slides_above_grip_slope`: braked, tan theta = 1.2 mu, 4 s; chassis centre-of-mass acceleration along x from 2 to 4 s 1.1667 m/s^2 against g (sin theta - mu cos theta) = 1.1872 m/s^2 (1.7%, 15% allowed); every rim speed 8.1e-4 m/s while sliding at 5.45 m/s (the wheels turn only with the chassis' pitch).
 - Also: `unbraked_car_rolls_on_the_hold_slope`, `car_step_limit_counts_suspension_and_wheels`, `body_with_wheels_is_refused_where_wheels_are_not_simulated` (library and both CLI paths), `slope_angle_follows_grip_and_refuses_what_has_no_grip`, `from_car_refuses_bad_wheel_numbers`, `free_fall_keeps_momentum_and_wheels_on_their_axes` (also with gravity tilted 0.5 rad, where the carrier must take the wheels across their axes).
 
+### Tyre tuning log (nb-44, the skidpad)
+
+Target and method are fixed in `docs/STAGE7.md` ("The skidpad", "The numbers, and why") before any try: `limit_g` 0.830 to 0.930 g (*sourced* there), measured by `tests/skidpad.rs` from the chassis centre-of-mass motion only, over the last 5 s (50 blocks of 0.1 s) of each throttle level, steady iff v_b, r_b and rho_b each vary at most 2% and the body slip angle stays under 10 degrees; a_g = mean(v_b) x mean(r_b) / g. `scenarios/skidpad.input`: steer 0.1588 (kinematic radius 2.5 m / tan(0.1588 x 30 deg) = 30.00 m), 60 throttle levels 0.005 to 0.300 in steps of 0.005, 30 s each, brake 0. One row per try; the tyre data is the four `tyre` lines of `car_basic.bsn`.
+
+| Try | Tyre parameters (all four tyres) | `limit_g` (x1.0) | limit level, speed, radius | x0.8 / x1.2 `limit_g` | Balance | Change |
+|---|---|---|---|---|---|---|
+| 1 | mu 0.88, radial_stiffness 200000, radial_damping 500, long_stiffness 15, lat_stiffness 10 (as merged by nb-39) | 0.842 | level 34 of 60 (throttle 0.170), 59.0 km/h, 32.52 m | 0.683 (ratio 0.811) / 0.992 (ratio 1.178) | understeer in all three | no change needed: 0.842 is inside 0.830 to 0.930 and under the ceiling 1.02 x 0.88 = 0.898 |
+
+What the run shows (not tuned, recorded): the limit is about 0.96 mu (0.842 / 0.88). A probe with every tyre at mu 0.70 (a temporary edit of `skidpad.bsn` only, reverted, never committed) measured 0.679 (0.97 mu), so the limit moves with mu, as the x0.8 and x1.2 copies also show. Below the limit the circle stays within 0.5% of 30.15 m; past it the car runs wide (understeer) with a_g falling slowly, 0.842 to 0.836 over the next 7 steady levels. Because the model has no aero drag or rolling resistance, the levels well past the limit keep accelerating onto ever larger circles (the x0.8 copy reaches about 1400 km/h on a 24 km circle at throttle 0.300, and its window still reads steady); those levels are below the limit in a_g, so they do not change `limit_g`, but the speeds there are not physical.
+
 ## Gravity
 
 Each node gets a downward force of `gravity * NODE_MASS`. The default `gravity` is `GRAVITY` = 9.81 m/s^2; it is a config value (the code comments mention Moon 1.62 and Mars 3.71).
