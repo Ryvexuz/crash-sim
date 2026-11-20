@@ -20,7 +20,7 @@ fn scenario_files_have_no_carriage_returns() {
     let mut seen = 0;
     for e in std::fs::read_dir(&dir).unwrap() {
         let p = e.unwrap().path();
-        if p.extension().map_or(false, |x| x == "bsn") {
+        if p.extension().is_some_and(|x| x == "bsn") {
             let bytes = std::fs::read(&p).unwrap();
             assert!(!bytes.contains(&b'\r'), "{} contains a carriage return", p.display());
             seen += 1;
