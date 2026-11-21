@@ -1,7 +1,8 @@
 bsn 2
 material chassis stiffness 300000 damping 200 yield_strain 0.02
 material cabin stiffness 1000000 damping 666.667 yield_strain 0.02
-material crush stiffness 62820512.821 damping 1989.176 yield_strain 0.00167
+material crush_front stiffness 62820512.821 damping 1597.524 yield_strain 0.00167
+material crush_rear stiffness 125641025.642 damping 3090.947 yield_strain 0.00167
 node 0 -2.261 0.55 -0.844 mass 18.25
 node 1 -2.261 1.95 -0.844 mass 14.75
 node 2 -2.261 0.55 -0.75425 mass 18.25
@@ -221,14 +222,14 @@ beam 23 31 cabin
 beam 24 25 cabin
 beam 24 26 cabin
 beam 24 27 cabin
-beam 24 32 crush
+beam 24 32 crush_rear
 beam 24 33 chassis
 beam 24 34 chassis
 beam 24 35 chassis
 beam 25 26 cabin
 beam 25 27 cabin
 beam 25 32 chassis
-beam 25 33 crush
+beam 25 33 crush_rear
 beam 25 34 chassis
 beam 25 35 chassis
 beam 26 27 cabin
@@ -236,7 +237,7 @@ beam 26 28 cabin
 beam 26 29 cabin
 beam 26 32 chassis
 beam 26 33 chassis
-beam 26 34 crush
+beam 26 34 crush_rear
 beam 26 35 chassis
 beam 26 36 chassis
 beam 26 37 chassis
@@ -253,7 +254,7 @@ beam 28 30 cabin
 beam 28 31 cabin
 beam 28 34 chassis
 beam 28 35 chassis
-beam 28 36 crush
+beam 28 36 crush_rear
 beam 28 37 chassis
 beam 28 38 chassis
 beam 28 39 chassis
@@ -268,23 +269,23 @@ beam 29 39 chassis
 beam 30 31 cabin
 beam 30 36 chassis
 beam 30 37 chassis
-beam 30 38 crush
+beam 30 38 crush_rear
 beam 30 39 chassis
 beam 31 36 chassis
 beam 31 37 chassis
 beam 31 38 chassis
-beam 31 39 crush
+beam 31 39 crush_rear
 beam 32 33 chassis
 beam 32 34 chassis
 beam 32 35 chassis
-beam 32 40 crush
+beam 32 40 crush_front
 beam 32 41 chassis
 beam 32 42 chassis
 beam 32 43 chassis
 beam 33 34 chassis
 beam 33 35 chassis
 beam 33 40 chassis
-beam 33 41 crush
+beam 33 41 crush_front
 beam 33 42 chassis
 beam 33 43 chassis
 beam 34 35 chassis
@@ -292,7 +293,7 @@ beam 34 36 chassis
 beam 34 37 chassis
 beam 34 40 chassis
 beam 34 41 chassis
-beam 34 42 crush
+beam 34 42 crush_front
 beam 34 43 chassis
 beam 34 44 chassis
 beam 34 45 chassis
@@ -309,7 +310,7 @@ beam 36 38 chassis
 beam 36 39 chassis
 beam 36 42 chassis
 beam 36 43 chassis
-beam 36 44 crush
+beam 36 44 crush_front
 beam 36 45 chassis
 beam 36 46 chassis
 beam 36 47 chassis
@@ -324,12 +325,12 @@ beam 37 47 chassis
 beam 38 39 chassis
 beam 38 44 chassis
 beam 38 45 chassis
-beam 38 46 crush
+beam 38 46 crush_front
 beam 38 47 chassis
 beam 39 44 chassis
 beam 39 45 chassis
 beam 39 46 chassis
-beam 39 47 crush
+beam 39 47 crush_front
 beam 40 41 chassis
 beam 40 42 chassis
 beam 40 43 chassis
