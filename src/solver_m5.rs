@@ -9,13 +9,14 @@
 //! `pos += vel * h`. No threads, no hash maps, a fixed order everywhere: the same input gives the
 //! same bytes.
 //!
-//! The solver fails closed. The working force array is checked for finiteness before it is
-//! applied (after each source, so the error names it), and so are the state before the step and
-//! the new state after it; on the first non-finite value nothing of the substep is applied. A
-//! tet whose trial elastic volume ratio `Je` is not finite or is at or below `J_MIN_FAIL` applies
-//! no force in that substep, and a tangent bound that puts `h omega` at or above 2 is an error.
-//! The first error is kept and `Solver::check` returns it, so `Sim::check` ends the run. Nothing
-//! is clamped.
+//! The solver fails closed. No non-finite value is ever written into the working force array:
+//! each contribution is checked, with the sum it would make, before it is written (the error
+//! names its source), and the whole array is checked again after each source. The state before
+//! the step and the new state after it are checked too, and every tet's `Je` on the new
+//! positions. A tet whose `Je` is not finite or is at or below `J_MIN_FAIL`, and a tangent bound
+//! that puts `h omega` at or above 2, are errors as well. Every error goes through one function,
+//! and one gate before the commit then applies nothing of the substep. The first error is kept
+//! and `Solver::check` returns it, so `Sim::check` ends the run. Nothing is clamped.
 
 use crate::format::{Body, TET_MIN_SHAPE, TET_MIN_VOLUME};
 use crate::solver::{Solver, State};
@@ -1179,7 +1180,10 @@ impl SolverM5 {
             }
             force.push(g);
         }
-        debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (gravity)");
+        debug_assert!(
+            force.iter().all(|&f| finite(f)),
+            "a non-finite value is in the force array (gravity)"
+        );
         if !self.check_forces(&force, "gravity") {
             return;
         }
@@ -1205,13 +1209,19 @@ impl SolverM5 {
             force[bm.a] = fa;
             force[bm.b] = fb;
         }
-        debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (beams)");
+        debug_assert!(
+            force.iter().all(|&f| finite(f)),
+            "a non-finite value is in the force array (beams)"
+        );
         if !self.check_forces(&force, "beams") {
             return;
         }
         if !self.tets.is_empty() {
             self.add_tet_forces(pos, v, &mut force);
-            debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (tets)");
+            debug_assert!(
+                force.iter().all(|&f| finite(f)),
+                "a non-finite value is in the force array (tets)"
+            );
             if !self.check_forces(&force, "tets") {
                 return;
             }
@@ -1241,7 +1251,11 @@ impl SolverM5 {
         for ti in 0..self.tets.len() {
             let t = &self.tets[ti];
             let x0 = np[t.nodes[0]];
-            let d = [np[t.nodes[1]] - x0, np[t.nodes[2]] - x0, np[t.nodes[3]] - x0];
+            let d = [
+                np[t.nodes[1]] - x0,
+                np[t.nodes[2]] - x0,
+                np[t.nodes[3]] - x0,
+            ];
             let je = det(&cols_times(d, &self.pending[ti].0));
             if !(je.is_finite() && je > J_MIN_FAIL) {
                 self.fail(format!(

@@ -1620,7 +1620,10 @@ fn a_tet_inverted_within_one_substep_is_caught_on_the_updated_positions() {
         e.starts_with("tet 0 inverted or collapsed at the updated positions of substep 1: Je = -"),
         "{e}"
     );
-    assert!(state_bits(&sim.pos, &sim.vel) == before, "the failed substep changed the state");
+    assert!(
+        state_bits(&sim.pos, &sim.vel) == before,
+        "the failed substep changed the state"
+    );
 }
 
 /// Round 5, point 2: no non-finite value is ever written into the working force array. Each
