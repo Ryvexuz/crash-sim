@@ -187,9 +187,9 @@ impl Config {
         let ok = self.dt.is_finite() && self.dt > 0.0;
         if !(ok && self.duration.is_finite() && self.duration >= 0.0 && self.substeps >= 1
             && self.drop_height.is_finite() && self.drop_height >= 0.0
-            && self.gravity.is_finite() && self.gravity > 0.0)
+            && self.gravity.is_finite() && self.gravity >= 0.0)
         {
-            return Err("dt must be > 0, duration >= 0, substeps >= 1, drop-height >= 0, gravity > 0 (all finite)".into());
+            return Err("dt must be > 0, duration >= 0, substeps >= 1, drop-height >= 0, gravity >= 0 (all finite)".into());
         }
         if self.dt < MIN_DT {
             return Err(format!(
