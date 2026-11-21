@@ -23,6 +23,14 @@ pub type Mat3 = [[f64; 3]; 3];
 /// The most tets the solver takes: `frozen: m5_max_tets = 300` (docs/M5-SOLVER.md section 8).
 /// A body with more is refused before the solver allocates anything per tet.
 pub const M5_MAX_TETS: usize = 300;
+/// The largest node coordinate (m, in size, inclusive) `from_body` takes: 1 000 km. A car, a
+/// crash zone or a whole track lies within a few km of its origin, so this is far beyond any
+/// real body, and it keeps every length, squared length and beam or tet product of a built
+/// body many orders of magnitude below f64 overflow (the source of round 3's finding).
+pub const MAX_COORD_M: f64 = 1e6;
+/// The largest start speed (m/s, inclusive) `from_body` takes: 10 km/s, about 640 times the
+/// 56 km/h of the m4/m5 crash tests and above orbital speed, so it is far beyond any car.
+pub const MAX_SPEED_MPS: f64 = 1e4;
 /// `frozen: poisson_ratio = 0.3` (docs/M5-SOLVER.md section 8).
 pub const POISSON_RATIO: f64 = 0.3;
 /// Steel density (kg/m^3) of the lock-up line `phi_zone = zone_mass / (zone_volume * 7850)`.
@@ -458,7 +466,14 @@ pub struct SolverM5 {
     beam_c: Vec<f64>,
     w2_rest: f64,
     g_rest: f64,
+    /// The substep's working arrays: the summed forces, the velocities after the extra-force
+    /// kick of `step_with_forces`, the new velocities and positions, and each tet's new plastic
+    /// state `(b, Fp, e_c)`. They are checked before any of them reaches the state.
     force: Vec<Vec3>,
+    kicked: Vec<Vec3>,
+    new_vel: Vec<Vec3>,
+    new_pos: Vec<Vec3>,
+    pending: Vec<(Mat3, Mat3, f64)>,
     k_node: Vec<f64>,
     c_node: Vec<f64>,
     substep: u64,
@@ -483,8 +498,9 @@ fn tet_shape(p: [Vec3; 4]) -> (f64, f64, f64) {
 impl SolverM5 {
     /// Build the solver for `body` at physics step `h` (s). Refused (Err, with a named reason)
     /// for, in this order: more tets than `M5_MAX_TETS` (before anything per tet is allocated);
-    /// `h` not a positive finite number; a node whose position is not finite or whose mass is
-    /// not a positive finite number, or a node id given twice; a beam on a missing node or
+    /// `h` not a positive finite number; a node whose position is not finite or has a
+    /// coordinate beyond `MAX_COORD_M`, or whose mass is not a positive finite number; a node
+    /// id given twice; a start velocity above `MAX_SPEED_MPS`; a beam on a missing node or
     /// naming a missing material; a solid with a name given twice or numbers outside the
     /// format's ranges; a tet naming a missing solid or node, listing a node twice, whose rest
     /// volume is not finite, below `TET_MIN_VOLUME`, flatter than `TET_MIN_SHAPE` or negative, or
@@ -508,6 +524,13 @@ impl SolverM5 {
             if !finite(nd.pos) {
                 return Err(format!("node {}: its position is not finite", nd.id));
             }
+            let p = nd.pos;
+            if p.x.abs().max(p.y.abs()).max(p.z.abs()) > MAX_COORD_M {
+                return Err(format!(
+                    "node {}: its position ({:e}, {:e}, {:e}) is beyond MAX_COORD_M = {MAX_COORD_M} m in a coordinate",
+                    nd.id, p.x, p.y, p.z
+                ));
+            }
             if !(nd.mass.is_finite() && nd.mass > 0.0) {
                 return Err(format!(
                     "node {}: its mass {} must be a positive finite number",
@@ -525,6 +548,15 @@ impl SolverM5 {
         ids.sort_unstable();
         if let Some(w) = ids.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(format!("node id {} is given twice", w[0].0));
+        }
+        for v in &body.velocities {
+            let speed = v.velocity.length();
+            if speed.is_nan() || speed > MAX_SPEED_MPS {
+                return Err(format!(
+                    "velocity of group `{}`: speed {speed:e} m/s is above MAX_SPEED_MPS = {MAX_SPEED_MPS} m/s (or not a number)",
+                    v.group
+                ));
+            }
         }
         let index = |id: u32| {
             ids.binary_search_by_key(&id, |&(i, _)| i)
@@ -754,6 +786,10 @@ impl SolverM5 {
             w2_rest: w2,
             g_rest: g,
             force: Vec::with_capacity(n),
+            kicked: Vec::with_capacity(n),
+            new_vel: Vec::with_capacity(n),
+            new_pos: Vec::with_capacity(n),
+            pending: Vec::new(),
             k_node: vec![0.0; n],
             c_node: vec![0.0; n],
             substep: 0,
@@ -824,13 +860,18 @@ impl SolverM5 {
         cols_times(d, &t.b)
     }
 
-    /// The tet forces (N) alone at `pos` and `vel`, one per node, with the plastic update of
-    /// this evaluation kept, as `step` does it; errors are recorded as in `step` (at the current
-    /// substep count) and returned by `Solver::check`. For quasi-static tests of the law.
+    /// The tet forces (N) alone at `pos` and `vel`, one per node, as `step` computes them;
+    /// errors are recorded as in `step` (at the current substep count) and returned by
+    /// `Solver::check`. The plastic update is kept only when every force is finite (as in
+    /// `step`, which also needs the rest of the substep to be finite). For quasi-static tests.
     pub fn tet_forces(&mut self, pos: &[Vec3], vel: &[Vec3]) -> Vec<Vec3> {
         let mut f = vec![Vec3::ZERO; pos.len()];
         let h = self.h;
-        self.add_tet_forces(pos, vel, &mut f, h);
+        self.add_tet_forces(pos, vel, &mut f);
+        if self.check_forces(&f, "tets") {
+            self.stiffness_verdict(h);
+            self.commit_tets();
+        }
         f
     }
 
@@ -840,12 +881,58 @@ impl SolverM5 {
         }
     }
 
-    /// Adds every tet's force into `force`, in tet index order, updates the plastic state, and
-    /// runs the per-substep stiffness check (R5b) at step `h`.
-    fn add_tet_forces(&mut self, pos: &[Vec3], vel: &[Vec3], force: &mut [Vec3], h: f64) {
+    /// True if every entry of the working force array is finite; else records
+    /// `force on node <id> is not finite at substep <n> (from <source>)` for the first one.
+    fn check_forces(&mut self, force: &[Vec3], source: &str) -> bool {
+        match force.iter().position(|&f| !finite(f)) {
+            None => true,
+            Some(i) => {
+                let n = self.substep;
+                self.fail(format!(
+                    "force on node {} is not finite at substep {n} (from {source})",
+                    self.node_ids[i]
+                ));
+                false
+            }
+        }
+    }
+
+    /// Keeps the plastic state `add_tet_forces` computed for this substep.
+    fn commit_tets(&mut self) {
+        for (t, &(b, fp, e_c)) in self.tets.iter_mut().zip(&self.pending) {
+            t.b = b;
+            t.fp = fp;
+            t.e_c = e_c;
+        }
+    }
+
+    /// R5b: the Gershgorin sums `add_tet_forces` left in `k_node` and `c_node`, at step `h`.
+    fn stiffness_verdict(&mut self, h: f64) {
+        let n = self.substep;
+        let kmax = self.k_node.iter().cloned().fold(0.0, f64::max);
+        let cmax = self.c_node.iter().cloned().fold(0.0, f64::max);
+        let w2 = kmax / self.m_min;
+        let g = cmax / self.m_min;
+        let x = h * h * w2 + 2.0 * h * g;
+        // NaN or infinity fails too.
+        if x.is_nan() || x >= 4.0 {
+            self.fail(format!(
+                "stiffness bound exceeded at substep {n}: h omega = {}",
+                x.sqrt()
+            ));
+        }
+    }
+
+    /// Adds every tet's force into `force`, in tet index order, and leaves each tet's new
+    /// plastic state in `pending` and its share of the R5b sums in `k_node` and `c_node`;
+    /// nothing of the tets' own state changes here (`commit_tets` keeps it).
+    fn add_tet_forces(&mut self, pos: &[Vec3], vel: &[Vec3], force: &mut [Vec3]) {
         let n = self.substep;
         self.k_node.copy_from_slice(&self.beam_k);
         self.c_node.copy_from_slice(&self.beam_c);
+        self.pending.clear();
+        self.pending
+            .extend(self.tets.iter().map(|t| (t.b, t.fp, t.e_c)));
         for ti in 0..self.tets.len() {
             let t = &self.tets[ti];
             let law = self.laws[t.solid];
@@ -924,10 +1011,8 @@ impl SolverM5 {
                 }
             }
             f[0] = -(f[1] + f[2] + f[3]);
-            if !f.iter().all(|&x| finite(x)) {
-                self.fail(format!("tet {ti} force is not finite at substep {n}"));
-                continue;
-            }
+            // A non-finite force goes into the working array, where the caller's check of the
+            // whole array finds it before anything is applied.
             // R5b: this tet's share of the Gershgorin sums, from the current state.
             let a_bound = bound_from(eig.lower, ln_je, &law);
             let gn = [
@@ -953,28 +1038,20 @@ impl SolverM5 {
             for a in 0..4 {
                 force[nodes[a]] += f[a];
             }
-            let tm = &mut self.tets[ti];
-            tm.b = b;
-            tm.fp = fp;
-            tm.e_c = e_c;
-        }
-        let kmax = self.k_node.iter().cloned().fold(0.0, f64::max);
-        let cmax = self.c_node.iter().cloned().fold(0.0, f64::max);
-        let w2 = kmax / self.m_min;
-        let g = cmax / self.m_min;
-        let x = h * h * w2 + 2.0 * h * g;
-        // NaN or infinity fails too.
-        if x.is_nan() || x >= 4.0 {
-            self.fail(format!(
-                "stiffness bound exceeded at substep {n}: h omega = {}",
-                x.sqrt()
-            ));
+            self.pending[ti] = (b, fp, e_c);
         }
     }
-}
 
-impl Solver for SolverM5 {
-    fn step(&mut self, s: State<'_>, h: f64) {
+    /// One substep, `extra` the per-node extra forces of `step_with_forces` (the trait's
+    /// operator splitting: velocities first get `extra * h / m`, then the step runs on them).
+    /// Everything is computed into the working arrays first: the kicked velocities, the force
+    /// array (gravity, then the beams with the arithmetic and order of `SymplecticEuler`, then
+    /// the tets in index order, damping included), the new velocities and positions, and the
+    /// tets' new plastic state. Each is checked for finiteness before the next uses it, and the
+    /// state and the tets are written only when all of them passed: on the first non-finite
+    /// value a named error is recorded and nothing of the substep is applied. So no non-finite
+    /// value from any source reaches the force that is applied, nor the state.
+    fn step_inner(&mut self, s: State<'_>, extra: Option<&[Vec3]>, h: f64) {
         let State {
             pos,
             vel,
@@ -984,10 +1061,10 @@ impl Solver for SolverM5 {
         } = s;
         self.substep += 1;
         let n = self.substep;
-        if pos.len() != self.n_nodes || vel.len() != self.n_nodes || mass.len() != self.n_nodes {
+        let nn = self.n_nodes;
+        if pos.len() != nn || vel.len() != nn || mass.len() != nn || extra.is_some_and(|e| e.len() != nn) {
             self.fail(format!(
-                "the m5 solver was built for {} nodes but substep {n} has {} (a different body)",
-                self.n_nodes,
+                "the m5 solver was built for {nn} nodes but substep {n} has {} (a different body)",
                 pos.len()
             ));
             return;
@@ -999,9 +1076,7 @@ impl Solver for SolverM5 {
             ));
             return;
         }
-        // Before any force is summed: every node finite, or nothing moves in this substep and
-        // the run ends through `check` (so no NaN can reach the force array through a beam or
-        // a tet; the tet guard of `add_tet_forces` is a second line behind this one).
+        // The state itself first: a non-finite node would spread through every force.
         if let Some(i) = (0..pos.len()).find(|&i| !(finite(pos[i]) && finite(vel[i]))) {
             self.fail(format!(
                 "node {} is not finite at substep {n}",
@@ -1009,10 +1084,28 @@ impl Solver for SolverM5 {
             ));
             return;
         }
-        // Gravity and the beams: the arithmetic and order of `SymplecticEuler`.
+        let mut kicked = std::mem::take(&mut self.kicked);
+        kicked.clear();
+        if let Some(extra) = extra {
+            if !self.check_forces(extra, "extra forces") {
+                return;
+            }
+            kicked.extend((0..nn).map(|i| vel[i] + extra[i] * (h / mass[i])));
+            if let Some(i) = kicked.iter().position(|&v| !finite(v)) {
+                self.fail(format!(
+                    "update of node {} is not finite at substep {n}",
+                    self.node_ids[i]
+                ));
+                return;
+            }
+        }
+        let v: &[Vec3] = if extra.is_some() { &kicked } else { vel };
         let mut force = std::mem::take(&mut self.force);
         force.clear();
         force.extend(mass.iter().map(|&m| Vec3::new(0.0, -gravity * m, 0.0)));
+        if !self.check_forces(&force, "gravity") {
+            return;
+        }
         for bm in beams {
             let d = pos[bm.b] - pos[bm.a];
             let len = d.length();
@@ -1020,22 +1113,61 @@ impl Solver for SolverM5 {
                 continue;
             }
             let dir = d * (1.0 / len);
-            let rel_v = (vel[bm.b] - vel[bm.a]).dot(dir);
+            let rel_v = (v[bm.b] - v[bm.a]).dot(dir);
             let mag = bm.stiffness * (len - bm.rest) + bm.damping * rel_v;
             let f = dir * mag;
             force[bm.a] += f;
             force[bm.b] += -f;
         }
-        // Then the tets, in index order, into the same array.
+        if !self.check_forces(&force, "beams") {
+            return;
+        }
         if !self.tets.is_empty() {
-            self.add_tet_forces(pos, vel, &mut force, h);
+            self.add_tet_forces(pos, v, &mut force);
+            if !self.check_forces(&force, "tets") {
+                return;
+            }
         }
-        for i in 0..pos.len() {
-            // semi-implicit Euler: velocity first, then position with the new velocity
-            vel[i] += force[i] * (h / mass[i]);
-            pos[i] += vel[i] * h;
+        // semi-implicit Euler: velocity first, then position with the new velocity
+        let (mut nv, mut np) = (std::mem::take(&mut self.new_vel), std::mem::take(&mut self.new_pos));
+        nv.clear();
+        np.clear();
+        for i in 0..nn {
+            let vi = v[i] + force[i] * (h / mass[i]);
+            nv.push(vi);
+            np.push(pos[i] + vi * h);
         }
+        if let Some(i) = (0..nn).find(|&i| !(finite(nv[i]) && finite(np[i]))) {
+            self.fail(format!(
+                "update of node {} is not finite at substep {n}",
+                self.node_ids[i]
+            ));
+            return;
+        }
+        // Every check passed: apply the substep.
+        if !self.tets.is_empty() {
+            self.stiffness_verdict(h);
+            self.commit_tets();
+        }
+        vel.copy_from_slice(&nv);
+        pos.copy_from_slice(&np);
         self.force = force;
+        self.kicked = kicked;
+        self.new_vel = nv;
+        self.new_pos = np;
+    }
+}
+
+impl Solver for SolverM5 {
+    /// One substep (`step_inner`): the working force array is checked before it is applied.
+    fn step(&mut self, s: State<'_>, h: f64) {
+        self.step_inner(s, None, h);
+    }
+
+    /// The trait's operator splitting, with the same checks: the extra forces and the kicked
+    /// velocities are checked too, and nothing is applied unless the whole substep is finite.
+    fn step_with_forces(&mut self, s: State<'_>, extra: &[Vec3], h: f64) {
+        self.step_inner(s, Some(extra), h);
     }
 
     fn handles_solids(&self) -> bool {

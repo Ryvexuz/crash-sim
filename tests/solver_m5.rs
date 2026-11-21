@@ -1171,6 +1171,194 @@ fn a_nan_node_shared_by_a_beam_and_a_tet_stops_the_step_before_any_force() {
 }
 
 // ---------------------------------------------------------------------------------------
+// Round 3 (q-20261121-032354): the force array is checked before it is applied
+
+fn state_bits(pos: &[Vec3], vel: &[Vec3]) -> Vec<u64> {
+    pos.iter()
+        .chain(vel)
+        .flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()])
+        .collect()
+}
+
+/// Two nodes and one beam between them, `gap` apart, no tets.
+fn two_node_beam(gap: f64, mass: f64, k: f64, rest: f64) -> Body {
+    let mut b = empty_body();
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: k,
+        damping: 0.0,
+        yield_strain: None,
+        break_strain: None,
+    });
+    add_node(&mut b, 0, Vec3::new(-gap / 2.0, 10.0, 0.0), mass);
+    add_node(&mut b, 1, Vec3::new(gap / 2.0, 10.0, 0.0), mass);
+    b.beams.push(BodyBeam {
+        a: 0,
+        b: 1,
+        material: "m".into(),
+        rest,
+    });
+    b
+}
+
+/// The reviewer's body (a beam between finite coordinates of 1e200 m, whose length and force
+/// overflow) is refused at construction by `MAX_COORD_M`, and a start speed above
+/// `MAX_SPEED_MPS` is refused too; both bounds are inclusive.
+#[test]
+fn a_body_beyond_the_coordinate_or_speed_bound_is_refused() {
+    let e = refused(&two_node_beam(2e200, 1.0, 1e3, 1.0), 1e-5);
+    assert!(
+        e.starts_with("node 0: its position (-1e200, 1e1, 0e0) is beyond MAX_COORD_M = 1000000 m"),
+        "{e}"
+    );
+    // At the bound: taken; just past it: refused.
+    let mut at = two_node_beam(2.0, 1.0, 1e3, 2.0);
+    at.nodes[1].pos.x = solver_m5::MAX_COORD_M;
+    assert!(SolverM5::from_body(&at, 1e-5).is_ok());
+    at.nodes[1].pos.z = -solver_m5::MAX_COORD_M * (1.0 + f64::EPSILON);
+    assert!(refused(&at, 1e-5).starts_with("node 1: its position"));
+    let mut fast = two_node_beam(2.0, 1.0, 1e3, 2.0);
+    fast.groups.push(format::Group {
+        name: "all".into(),
+        nodes: vec![0, 1],
+    });
+    fast.velocities.push(format::Velocity {
+        group: "all".into(),
+        velocity: Vec3::new(6e3, 8e3, 0.0), // 1e4 m/s: at the bound
+    });
+    assert!(SolverM5::from_body(&fast, 1e-5).is_ok());
+    fast.velocities[0].velocity.z = 1.0;
+    assert!(
+        refused(&fast, 1e-5).starts_with("velocity of group `all`: speed 1.00000000"),
+        "{}",
+        refused(&fast, 1e-5)
+    );
+    fast.velocities[0].velocity.z = f64::NAN;
+    assert!(refused(&fast, 1e-5).contains("is above MAX_SPEED_MPS = 10000 m/s"));
+}
+
+/// A body that passes construction but whose force overflows during the run: nodes of 1e300 kg
+/// and a beam of 5e307 N/m (stable: h^2 2k/m = 1 < 4 at h = 1e-4) with an explicit rest length
+/// of 0.5 m between nodes 5 m apart, so k (len - rest) = 2.25e308 overflows in the first
+/// substep. Through `Sim`: the run ends with the named error and the state never changes.
+#[test]
+fn a_beam_force_that_overflows_during_the_run_is_stopped_before_it_is_applied() {
+    let b = two_node_beam(5.0, 1e300, 5e307, 0.5);
+    let cfg = Config {
+        dt: 1e-3,
+        substeps: 10,
+        gravity: 9.81,
+        duration: 1.0,
+        ..Config::default()
+    };
+    let m5 = SolverM5::from_body(&b, cfg.dt / cfg.substeps as f64).unwrap();
+    let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
+    let start = state_bits(&sim.pos, &sim.vel);
+    sim.advance();
+    assert!(state_bits(&sim.pos, &sim.vel) == start, "a substep changed the state");
+    assert_eq!(
+        sim.check(),
+        Err("force on node 0 is not finite at substep 1 (from beams)".to_string())
+    );
+}
+
+/// The force check names each source of a non-finite force (gravity, beams, tets, the extra
+/// forces of `step_with_forces`) and the update check an overflow of the new state; in every
+/// case nothing of the substep is applied, the tets' plastic state included.
+#[test]
+fn the_force_check_catches_every_source_before_anything_is_applied() {
+    let h = 1e-5;
+    let run = |b: &Body, pos: &mut Vec<Vec3>, vel: &mut Vec<Vec3>, gravity: f64, extra: Option<&[Vec3]>| -> (Option<String>, SolverM5) {
+        let mut s = SolverM5::from_body(b, h).unwrap();
+        let mass: Vec<f64> = b.nodes.iter().map(|n| n.mass).collect();
+        let beams = Body::build(b).beams;
+        let before = state_bits(pos, vel);
+        let st = State {
+            pos,
+            vel,
+            beams: &beams,
+            mass: &mass,
+            gravity,
+        };
+        match extra {
+            Some(e) => s.step_with_forces(st, e, h),
+            None => s.step(st, h),
+        }
+        assert!(state_bits(pos, vel) == before, "the failed substep changed the state");
+        (s.check(), s)
+    };
+    // Gravity: 1e308 m/s^2 on 10 kg overflows.
+    let b = one_tet(1e6, 0.02, 0.0, 1.0, 10.0, Vec3::new(0.0, 10.0, 0.0));
+    let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 4]);
+    let (e, _) = run(&b, &mut pos, &mut vel, 1e308, None);
+    assert_eq!(e.as_deref(), Some("force on node 0 is not finite at substep 1 (from gravity)"));
+    // Beams: a node 1e200 m away (finite, past the node check) gives an infinite length.
+    let b = two_node_beam(2.0, 1.0, 1e3, 2.0);
+    let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 2]);
+    pos[1].x = 1e200;
+    let (e, _) = run(&b, &mut pos, &mut vel, 9.81, None);
+    assert_eq!(e.as_deref(), Some("force on node 0 is not finite at substep 1 (from beams)"));
+    // Tets: two tets; tet 0 compressed past yield, tet 1 with a node 1e305 m out (Je finite,
+    // mu Fe overflows). The flow of tet 0 must not be kept either.
+    let mut b = one_tet(1e6, 0.02, 0.0, 1.0, 1.0, Vec3::new(0.0, 10.0, 0.0));
+    for (i, q) in [Vec3::new(5.0, 10.0, 0.0), Vec3::new(6.0, 10.0, 0.0), Vec3::new(5.0, 11.0, 0.0), Vec3::new(5.0, 10.0, 1.0)].iter().enumerate() {
+        add_node(&mut b, 4 + i as u32, *q, 1.0);
+    }
+    add_tet(&mut b, [4, 5, 6, 7], "s");
+    let squeezed = |far: bool| {
+        let mut p = positions(&b);
+        p[1].x = 0.5;
+        if far {
+            p[5].x = 1e305;
+        }
+        p
+    };
+    let (mut pos, mut vel) = (squeezed(false), vec![Vec3::ZERO; 8]);
+    let mut s_ok = SolverM5::from_body(&b, h).unwrap();
+    let mass = vec![1.0; 8];
+    s_ok.step(
+        State {
+            pos: &mut pos,
+            vel: &mut vel,
+            beams: &[],
+            mass: &mass,
+            gravity: 0.0,
+        },
+        h,
+    );
+    assert_eq!(s_ok.check(), None);
+    assert!(s_ok.plastic_strain(0) > 0.0, "control: the squeezed tet yields");
+    let (mut pos, mut vel) = (squeezed(true), vec![Vec3::ZERO; 8]);
+    let (e, s) = run(&b, &mut pos, &mut vel, 0.0, None);
+    assert_eq!(e.as_deref(), Some("force on node 4 is not finite at substep 1 (from tets)"));
+    assert_eq!(s.plastic_strain(0), 0.0, "the flow of a failed substep was kept");
+    // Extra forces of step_with_forces.
+    let b = two_node_beam(2.0, 1.0, 1e3, 2.0);
+    let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 2]);
+    let extra = [Vec3::ZERO, Vec3::new(0.0, f64::INFINITY, 0.0)];
+    let (e, _) = run(&b, &mut pos, &mut vel, 9.81, Some(&extra));
+    assert_eq!(e.as_deref(), Some("force on node 1 is not finite at substep 1 (from extra forces)"));
+    // The update: finite force, finite state, but x + v h overflows (one free node, h = 1 s).
+    let mut b = empty_body();
+    add_node(&mut b, 0, Vec3::ZERO, 1.0);
+    let mut s = SolverM5::from_body(&b, 1.0).unwrap();
+    let (mut pos, mut vel) = (vec![Vec3::new(1.7e308, 0.0, 0.0)], vec![Vec3::new(1.7e308, 0.0, 0.0)]);
+    let before = state_bits(&pos, &vel);
+    s.step(
+        State {
+            pos: &mut pos,
+            vel: &mut vel,
+            beams: &[],
+            mass: &[1.0],
+            gravity: 0.0,
+        },
+        1.0,
+    );
+    assert!(state_bits(&pos, &vel) == before, "the failed update changed the state");
+    assert_eq!(s.check().as_deref(), Some("update of node 0 is not finite at substep 1"));
+}
+
+// ---------------------------------------------------------------------------------------
 // R1, R10: every refusal of the constructor
 
 fn refused(b: &Body, h: f64) -> String {
@@ -1346,9 +1534,11 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
     far.nodes[1].pos.x = 1e300;
     far.nodes[2].pos.y = 1e300;
     far.nodes[3].pos.z = 1e300;
+    // Since round 3 the coordinate bound refuses this first (the tet's own size check stays
+    // behind it, for a bound that is ever raised).
     assert_eq!(
         refused(&far, 1e-5),
-        "tet 0 (0 1 2 3): its size is not finite"
+        "node 1: its position (1e300, 1e1, 0e0) is beyond MAX_COORD_M = 1000000 m in a coordinate"
     );
     let mut same = good();
     same.tets.push(Tet {
