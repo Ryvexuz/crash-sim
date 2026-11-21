@@ -944,8 +944,9 @@ fn frame_invariance_and_rigid_spin_has_no_damping_force() {
 // R4e, R10: the inverted-tet rule
 
 /// Two tets sharing the face 0 1 2; node 4 (apex of tet 1) is driven through the face by its
-/// start velocity. The run ends with exactly `tet 1 inverted or collapsed at substep <n>: Je =
-/// <value>`, no later than the free-flight substep plus 2, and no NaN enters the state.
+/// start velocity. The run ends with exactly `tet 1 inverted or collapsed at the updated
+/// positions of substep <n>: Je = <value>`, no later than the free-flight substep plus 2, and no
+/// NaN enters the state.
 #[test]
 fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
     let mut b = empty_body();
@@ -997,7 +998,9 @@ fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
         }
     }
     let e = err.expect("the run never failed");
-    let prefix = "tet 1 inverted or collapsed at substep ";
+    // Since round 5 the rule is applied to the positions a substep is about to write, so the
+    // collapse is found there, in the substep that would have made it.
+    let prefix = "tet 1 inverted or collapsed at the updated positions of substep ";
     assert!(e.starts_with(prefix), "{e}");
     let rest = &e[prefix.len()..];
     let (n, je) = rest.split_once(": Je = ").expect("`: Je = ` in the error");
@@ -1589,6 +1592,100 @@ fn construction_refuses_every_non_finite_bound_input() {
             "{e}"
         );
     }
+}
+
+/// Round 5 (q-20261121-040727), point 1: an apex that crosses its opposite face within one
+/// substep. One substep per output step, so the substep that inverts the tet is the last one
+/// before `Sim::check`: the new positions' Je is checked before they are written, the run ends
+/// with the named error, and the state is bit-identical to the state before the substep.
+#[test]
+fn a_tet_inverted_within_one_substep_is_caught_on_the_updated_positions() {
+    let b = one_tet(10.0, 0.5, 0.0, 1.0, 1.0, Vec3::new(0.0, 100.0, 0.0));
+    let cfg = Config {
+        dt: 2e-4,
+        substeps: 1,
+        gravity: 0.0,
+        duration: 1.0,
+        ..Config::default()
+    };
+    let h = cfg.dt / cfg.substeps as f64;
+    let m5 = SolverM5::from_body(&b, h).unwrap();
+    let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
+    // 1e4 m/s down (MAX_SPEED_MPS): the apex moves 2 m in the substep, from z = 1 to z = -1.
+    sim.vel[3] = Vec3::new(0.0, 0.0, -solver_m5::MAX_SPEED_MPS);
+    let before = state_bits(&sim.pos, &sim.vel);
+    sim.advance();
+    let e = sim.check().expect_err("the inverted tet passed Sim::check");
+    assert!(
+        e.starts_with("tet 0 inverted or collapsed at the updated positions of substep 1: Je = -"),
+        "{e}"
+    );
+    assert!(state_bits(&sim.pos, &sim.vel) == before, "the failed substep changed the state");
+}
+
+/// Round 5, point 2: no non-finite value is ever written into the working force array. Each
+/// contribution, and the sum it would make, is checked before it is added; the solver's
+/// `debug_assert!` after each source (tests build in debug) checks the whole array, so a
+/// violation panics here. Two finite beam forces of 1.2e308 N on one node (4e307 N/m, 3 m
+/// stretch each, 1e300 kg nodes, stable at h = 1e-4) whose sum overflows; and a beam whose
+/// length overflows (a node 1e200 m away in the state).
+#[test]
+fn an_overflowing_beam_never_reaches_the_force_array() {
+    let mut b = empty_body();
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: 4e307,
+        damping: 0.0,
+        yield_strain: None,
+        break_strain: None,
+    });
+    add_node(&mut b, 0, Vec3::new(0.0, 10.0, 0.0), 1e300);
+    add_node(&mut b, 1, Vec3::new(3.5, 10.0, 0.0), 1e300);
+    add_node(&mut b, 2, Vec3::new(3.5, 10.0, 1e-3), 1e300);
+    for c in [1, 2] {
+        b.beams.push(BodyBeam {
+            a: 0,
+            b: c,
+            material: "m".into(),
+            rest: 0.5,
+        });
+    }
+    let cfg = Config {
+        dt: 1e-3,
+        substeps: 10,
+        gravity: 9.81,
+        duration: 1.0,
+        ..Config::default()
+    };
+    let m5 = SolverM5::from_body(&b, cfg.dt / cfg.substeps as f64).unwrap();
+    let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
+    let before = state_bits(&sim.pos, &sim.vel);
+    sim.advance();
+    assert_eq!(
+        sim.check(),
+        Err("force on node 0 is not finite at substep 1 (from beams)".to_string())
+    );
+    assert!(state_bits(&sim.pos, &sim.vel) == before);
+
+    let b = two_node_beam(2.0, 1.0, 1e3, 2.0);
+    let mut s = SolverM5::from_body(&b, 1e-5).unwrap();
+    let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 2]);
+    pos[1].x = 1e200;
+    let beams = Body::build(&b).beams;
+    s.step(
+        State {
+            pos: &mut pos,
+            vel: &mut vel,
+            beams: &beams,
+            mass: &[1.0, 1.0],
+            gravity: 9.81,
+        },
+        1e-5,
+    );
+    assert_eq!(
+        s.check().as_deref(),
+        Some("force on node 0 is not finite at substep 1 (from beams)")
+    );
 }
 
 // ---------------------------------------------------------------------------------------

@@ -1084,8 +1084,18 @@ impl SolverM5 {
                     self.c_node[nodes[a]] += v * c_scale * t.g_rest[a] * t.g_rest_sum;
                 }
             }
+            // Checked with the sums it would make before it is written (the four nodes of a
+            // tet are distinct, so each sum reads the array as it is now).
+            let sums = [0, 1, 2, 3].map(|a| force[nodes[a]] + f[a]);
+            if let Some(a) = (0..4).find(|&a| !(finite(f[a]) && finite(sums[a]))) {
+                self.fail(format!(
+                    "force on node {} is not finite at substep {n} (from tets)",
+                    self.node_ids[nodes[a]]
+                ));
+                return;
+            }
             for a in 0..4 {
-                force[nodes[a]] += f[a];
+                force[nodes[a]] = sums[a];
             }
             self.pending[ti] = (b, fp, e_c);
         }
@@ -1155,7 +1165,21 @@ impl SolverM5 {
         let v: &[Vec3] = if extra.is_some() { &kicked } else { vel };
         let mut force = std::mem::take(&mut self.force);
         force.clear();
-        force.extend(mass.iter().map(|&m| Vec3::new(0.0, -gravity * m, 0.0)));
+        // Each contribution is computed in a local value and checked, with the sum it would
+        // make, before it is written: the working array never holds a non-finite value (the
+        // `debug_assert!`s check that; `check_forces` stays as the backstop).
+        for (i, &m) in mass.iter().enumerate() {
+            let g = Vec3::new(0.0, -gravity * m, 0.0);
+            if !finite(g) {
+                self.fail(format!(
+                    "force on node {} is not finite at substep {n} (from gravity)",
+                    self.node_ids[i]
+                ));
+                return;
+            }
+            force.push(g);
+        }
+        debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (gravity)");
         if !self.check_forces(&force, "gravity") {
             return;
         }
@@ -1169,14 +1193,25 @@ impl SolverM5 {
             let rel_v = (v[bm.b] - v[bm.a]).dot(dir);
             let mag = bm.stiffness * (len - bm.rest) + bm.damping * rel_v;
             let f = dir * mag;
-            force[bm.a] += f;
-            force[bm.b] += -f;
+            let (fa, fb) = (force[bm.a] + f, force[bm.b] + -f);
+            if !(finite(f) && finite(fa) && finite(fb)) {
+                let at = if finite(f) && finite(fa) { bm.b } else { bm.a };
+                self.fail(format!(
+                    "force on node {} is not finite at substep {n} (from beams)",
+                    self.node_ids[at]
+                ));
+                return;
+            }
+            force[bm.a] = fa;
+            force[bm.b] = fb;
         }
+        debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (beams)");
         if !self.check_forces(&force, "beams") {
             return;
         }
         if !self.tets.is_empty() {
             self.add_tet_forces(pos, v, &mut force);
+            debug_assert!(force.iter().all(|&f| finite(f)), "a non-finite value is in the force array (tets)");
             if !self.check_forces(&force, "tets") {
                 return;
             }
@@ -1199,6 +1234,21 @@ impl SolverM5 {
                 self.node_ids[i]
             ));
             return;
+        }
+        // The R4e rule again on the positions about to be written, with the plastic state about
+        // to be kept: an apex that crosses its face within this substep is caught here, before
+        // `Sim::check` could see an inverted tet.
+        for ti in 0..self.tets.len() {
+            let t = &self.tets[ti];
+            let x0 = np[t.nodes[0]];
+            let d = [np[t.nodes[1]] - x0, np[t.nodes[2]] - x0, np[t.nodes[3]] - x0];
+            let je = det(&cols_times(d, &self.pending[ti].0));
+            if !(je.is_finite() && je > J_MIN_FAIL) {
+                self.fail(format!(
+                    "tet {ti} inverted or collapsed at the updated positions of substep {n}: Je = {je}"
+                ));
+                break;
+            }
         }
         if !self.tets.is_empty() {
             self.stiffness_verdict(h);
