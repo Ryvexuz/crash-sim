@@ -582,7 +582,11 @@ impl SolverM5 {
             };
             // The format's ranges, again for a body built in code: a NaN or negative number
             // here would silently weaken the stability bound.
-            if !(m.stiffness.is_finite() && m.stiffness > 0.0 && m.damping.is_finite() && m.damping >= 0.0) {
+            if !(m.stiffness.is_finite()
+                && m.stiffness > 0.0
+                && m.damping.is_finite()
+                && m.damping >= 0.0)
+            {
                 return Err(format!(
                     "beam {i}: its material `{}` has stiffness {} and damping {}; they must be finite, stiffness > 0 and damping >= 0",
                     m.name, m.stiffness, m.damping
