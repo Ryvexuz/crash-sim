@@ -1,6 +1,6 @@
 bsn 2
 material chassis stiffness 300000 damping 200 yield_strain 0.02
-material crush stiffness 62820512.821 damping 1883.279 yield_strain 0.00167
+material crush stiffness 62820512.821 damping 1989.176 yield_strain 0.00167
 node 0 -2.261 0.55 -0.844 mass 18.25
 node 1 -2.261 1.95 -0.844 mass 14.75
 node 2 -2.261 0.55 -0.75425 mass 18.25
@@ -244,7 +244,7 @@ beam 27 29 chassis
 beam 27 32 chassis
 beam 27 33 chassis
 beam 27 34 chassis
-beam 27 35 crush
+beam 27 35 chassis
 beam 27 36 chassis
 beam 27 37 chassis
 beam 28 29 chassis
@@ -261,7 +261,7 @@ beam 29 31 chassis
 beam 29 34 chassis
 beam 29 35 chassis
 beam 29 36 chassis
-beam 29 37 crush
+beam 29 37 chassis
 beam 29 38 chassis
 beam 29 39 chassis
 beam 30 31 chassis
@@ -300,7 +300,7 @@ beam 35 37 chassis
 beam 35 40 chassis
 beam 35 41 chassis
 beam 35 42 chassis
-beam 35 43 crush
+beam 35 43 chassis
 beam 35 44 chassis
 beam 35 45 chassis
 beam 36 37 chassis
@@ -317,7 +317,7 @@ beam 37 39 chassis
 beam 37 42 chassis
 beam 37 43 chassis
 beam 37 44 chassis
-beam 37 45 crush
+beam 37 45 chassis
 beam 37 46 chassis
 beam 37 47 chassis
 beam 38 39 chassis

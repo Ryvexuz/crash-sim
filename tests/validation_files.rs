@@ -294,7 +294,12 @@ fn check_share(a: &Crush, b: &Crush) -> Result<(), String> {
         ("P2 yield_strain", a.p2_yield_strain, b.p2_yield_strain),
         ("P3 damping_ratio", a.p3_damping_ratio, b.p3_damping_ratio),
     ] {
-        let rel = (x - y).abs() / x.abs().max(y.abs());
+        // Exactly equal values agree; this also keeps 0 against 0 from becoming 0 / 0 = NaN.
+        let rel = if x == y {
+            0.0
+        } else {
+            (x - y).abs() / x.abs().max(y.abs())
+        };
         if rel.is_nan() || rel > SHARE_REL_TOL {
             return Err(format!(
                 "{name}: {x} against {y}, relative difference {rel} is above {SHARE_REL_TOL}"
@@ -402,6 +407,30 @@ fn crush_beams_one_length() {
         assert!(c.n_beams >= 2, "{name}: fewer than 2 crush beams");
         check_one_length(&c).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
+}
+
+/// Two exactly equal values agree, zero included: the sweep's grid has damping ratio 0, so both
+/// cars can carry P3 = 0, and 0 against 0 must not become a NaN relative difference.
+#[test]
+fn check_share_accepts_equal_values_zero_included() {
+    let f = files();
+    let a = crush_of(&body_of(&f.car_a), f.steel_e).unwrap();
+    let zero = Crush {
+        p3_damping_ratio: 0.0,
+        ..a
+    };
+    check_share(&zero, &zero).unwrap();
+    check_share(&a, &a).unwrap();
+    // Equal zeros still do not hide a real difference in another quantity.
+    let off = Crush {
+        p1_area_m2: zero.p1_area_m2 * 1.01,
+        ..zero
+    };
+    let e = check_share(&zero, &off).unwrap_err();
+    assert!(e.contains("P1 area_m2"), "{e}");
+    // Zero against a non-zero value is a difference (relative difference 1).
+    let e = check_share(&zero, &a).unwrap_err();
+    assert!(e.contains("P3 damping_ratio"), "{e}");
 }
 
 /// Every check, run on a deliberately wrong copy of the real files, must fail with its own words.
