@@ -1030,8 +1030,8 @@ fn validation_checks_reject_wrong_copies() {
         .find(|m| m.name == CRUSH_FRONT)
         .unwrap()
         .yield_strain = Some(0.02);
-    let e = check_inside_ranges(&crush_of(&b, f.steel_e, CRUSH_FRONT).unwrap(), &f.doc)
-        .unwrap_err();
+    let e =
+        check_inside_ranges(&crush_of(&b, f.steel_e, CRUSH_FRONT).unwrap(), &f.doc).unwrap_err();
     assert!(e.contains("crush.yield_strain"), "{e}");
     let mut b = body_of(&f.car_a);
     b.beams
@@ -1045,7 +1045,11 @@ fn validation_checks_reject_wrong_copies() {
     // before t-20261121-231938, in strength); the stage names swapped (the strong stage in
     // front); a file without the front stage; a doc without the ratio line.
     let mut b = body_of(&f.car_a);
-    let rear = b.materials.iter_mut().find(|m| m.name == CRUSH_REAR).unwrap();
+    let rear = b
+        .materials
+        .iter_mut()
+        .find(|m| m.name == CRUSH_REAR)
+        .unwrap();
     rear.stiffness /= 2.0;
     let e = check_stages(&b, f.steel_e, &f.doc).unwrap_err();
     assert!(e.contains("strength ratio"), "{e}");
@@ -1069,7 +1073,10 @@ fn validation_checks_reject_wrong_copies() {
     assert!(e.contains("no beam uses the material `crush_front`"), "{e}");
     let r =
         std::panic::catch_unwind(|| check_stages(&body_of(&f.car_a), f.steel_e, "nothing here\n"));
-    assert!(r.is_err(), "a doc without the stage ratio line was accepted");
+    assert!(
+        r.is_err(),
+        "a doc without the stage ratio line was accepted"
+    );
     // The wall load: the layout before t-20261121-204929 (the four roof-level beams over the
     // wheel mounts crush beams again, each of its own segment's stage, the rest of the file
     // unchanged) loads the wall above the centre of gravity and pitches the car onto the ground.
