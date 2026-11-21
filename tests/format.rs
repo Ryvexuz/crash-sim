@@ -1,8 +1,8 @@
-//! The `.bsn` format (versions 1 and 2): round trips, the scenario files, and every refusal by name.
+//! The `.bsn` format (versions 1, 2 and 3): round trips, the scenario files, and every refusal by name.
 //! Each refusal test checks the line, the column where the token is at fault, and the words
 //! of the message, so a parser that refuses for the wrong reason or at the wrong place fails.
 
-use crash_sim::format::{parse, write, Body, BodyBeam, Controls, Group, Material, Node, ParseError, Plane, Suspension, Tyre, Velocity, Wheel};
+use crash_sim::format::{parse, write, Body, BodyBeam, Controls, Group, Material, Node, ParseError, Plane, Solid, Suspension, Tet, Tyre, Velocity, Wheel, TET_MIN_SHAPE, TET_MIN_VOLUME};
 use crash_sim::vec3::Vec3;
 use crash_sim::{Config, Sim, BEAM_DAMPING, BEAM_STIFFNESS, NODE_MASS};
 
@@ -256,26 +256,89 @@ fn random_body(rng: &mut Rng) -> Body {
             drag_area,
         });
     }
-    Body { materials, nodes, beams, groups, velocities, wheels, suspensions, tyres, controls, planes }
+    // version 3, drawn last so the draws above are those of the version 2 generator
+    let (mut solids, mut tets) = (Vec::new(), Vec::new());
+    if rng.below(2) == 0 {
+        for i in 0..1 + rng.below(3) {
+            let damping_ratio = match rng.below(3) {
+                0 => 0.0,
+                1 => 1.0,
+                _ => rng.below(1001) as f64 / 1000.0,
+            };
+            solids.push(Solid { name: format!("s{i}"), plateau_stress: rng.positive(), yield_strain: (1 + rng.below(999_999)) as f64 / 1e6, damping_ratio });
+        }
+        if nodes.len() >= 4 {
+            for _ in 0..rng.below(24) {
+                let mut pick: Vec<usize> = Vec::new();
+                while pick.len() < 4 {
+                    let i = rng.below(nodes.len() as u64) as usize;
+                    if !pick.contains(&i) {
+                        pick.push(i);
+                    }
+                }
+                if let Some(ids) = good_tet(&nodes, &pick) {
+                    let mut set = ids;
+                    set.sort_unstable();
+                    let taken = tets.iter().any(|t: &Tet| {
+                        let mut s = t.nodes;
+                        s.sort_unstable();
+                        s == set
+                    });
+                    if !taken {
+                        tets.push(Tet { nodes: ids, solid: format!("s{}", rng.below(solids.len() as u64)) });
+                    }
+                }
+            }
+        }
+    }
+    Body { materials, solids, nodes, beams, tets, groups, velocities, wheels, suspensions, tyres, controls, planes }
+}
+
+/// The node ids of `pick`, ordered to a positive volume, when the four nodes make a tet that
+/// passes the volume and shape minimums by a factor of 1000 (so the parser's rounding cannot
+/// decide it); None otherwise. The volume is this test's own determinant, written out.
+fn good_tet(nodes: &[Node], pick: &[usize]) -> Option<[u32; 4]> {
+    let p: Vec<[f64; 3]> = pick.iter().map(|&i| [nodes[i].pos.x, nodes[i].pos.y, nodes[i].pos.z]).collect();
+    let e = |k: usize| [p[k][0] - p[0][0], p[k][1] - p[0][1], p[k][2] - p[0][2]];
+    let (u, v, w) = (e(1), e(2), e(3));
+    let det = u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0]);
+    let volume = det / 6.0;
+    let mut longest = 0.0f64;
+    for i in 0..4 {
+        for j in i + 1..4 {
+            let d = [p[j][0] - p[i][0], p[j][1] - p[i][1], p[j][2] - p[i][2]];
+            longest = longest.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
+        }
+    }
+    let ok = volume.is_finite() && longest.is_finite() && volume.abs() >= 1e3 * TET_MIN_VOLUME && volume.abs() / longest / longest / longest >= 1e3 * TET_MIN_SHAPE;
+    if !ok {
+        return None;
+    }
+    let ids = [nodes[pick[0]].id, nodes[pick[1]].id, nodes[pick[2]].id, nodes[pick[3]].id];
+    // an odd permutation (swap the last two) turns a negative tet positive
+    Some(if volume > 0.0 { ids } else { [ids[0], ids[1], ids[3], ids[2]] })
 }
 
 #[test]
 fn parse_of_write_gives_the_same_body() {
     let mut rng = Rng(12345);
-    let (mut with_rest, mut with_car) = (0, 0);
+    let (mut with_rest, mut with_car, mut with_tets) = (0, 0, 0);
     for case in 0..500 {
         let body = random_body(&mut rng);
         let text = write(&body);
         let back = parse(&text).unwrap_or_else(|e| panic!("case {case}: {e}\n{text}"));
         assert_eq!(back, body, "case {case}\n{text}");
         assert_eq!(write(&back), text, "case {case}: write is not stable");
-        with_rest += text.matches(" rest ").count() - text.matches("
-suspension ").count();
-        with_car += usize::from(text.starts_with("bsn 2
-"));
+        with_rest += text.matches(" rest ").count() - text.matches("\nsuspension ").count();
+        // a car with tets is written as version 3, so count the controls line, not the header
+        with_car += usize::from(text.contains("\ncontrols "));
+        with_tets += text.matches("\ntet ").count();
+        assert_eq!(text.starts_with("bsn 3\n"), !body.solids.is_empty() || !body.tets.is_empty(), "case {case}: header");
     }
     assert!(with_rest > 50, "the generator should exercise explicit rest lengths ({with_rest})");
     assert!(with_car > 150, "the generator should exercise the car sections ({with_car})");
+    println!("random bodies: {with_rest} explicit rest lengths, {with_car} cars, {with_tets} tets");
+    assert!(with_tets > 100, "the generator should exercise tets ({with_tets})");
 }
 
 #[test]
@@ -1321,7 +1384,7 @@ fn refuse_tet_whose_volume_is_not_finite() {
     let far = v3("").replacen("node 1 1 0 0 ", "node 1 1e308 0 0 ", 1).replacen("node 0 0 0 0 ", "node 0 -1e308 0 0 ", 1);
     // the beam 0-1 overflows first, so give it a rest length
     let far = far.replacen("beam 0 1 m\n", "beam 0 1 m rest 1\n", 1);
-    expect_after(&far, 10, "tet ", "tet 0 1 2 3: its rest volume is not finite");
+    expect_after(&far, 10, "tet ", "tet 0 1 2 3: its size is not finite (rest volume inf");
 }
 
 #[test]

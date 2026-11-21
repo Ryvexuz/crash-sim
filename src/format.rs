@@ -1,5 +1,6 @@
-//! The `.bsn` text format (versions 1 and 2): a node-beam body, and from version 2 a car on
-//! it (wheels, suspension, tyres, controls), as data. The grammar is in docs/FORMAT.md. The
+//! The `.bsn` text format (versions 1, 2 and 3): a node-beam body, from version 2 a car on
+//! it (wheels, suspension, tyres, controls), and from version 3 solids and the tetrahedra made
+//! of them (docs/M5-SOLVER.md section 9), as data. The grammar is in docs/FORMAT.md. The
 //! parser is strict: every malformed input is a `ParseError` naming the line (and the column
 //! when a token is at fault), never a silent default.
 //!
@@ -11,10 +12,20 @@ use crate::Beam;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-/// The newest version this parser reads. Every older version (1) still loads: version 2 only
-/// adds the car sections, so one parser reads both, and a version 1 file may not use them
-/// (docs/FORMAT.md, "Versions").
-pub const VERSION: u32 = 2;
+/// The newest version this parser reads. Every older version still loads: version 2 only adds
+/// the car sections and version 3 only the `solid` and `tet` lines, so one parser reads all
+/// three, and a file may not use a line newer than its version (docs/FORMAT.md, "Versions").
+pub const VERSION: u32 = 3;
+
+/// The smallest rest volume (m^3) a `tet` may have: 1 mm^3 (inclusive). A tet below it is
+/// refused by name, which also refuses four coplanar or collinear nodes (volume 0).
+pub const TET_MIN_VOLUME: f64 = 1e-9;
+
+/// The smallest shape ratio a `tet` may have: its rest volume over the cube of its longest
+/// edge. A regular tet has 0.118 and each of the 6 tets of a cube cut along its diagonal 0.032;
+/// below this a tet is a sliver, which also catches four nodes that are coplanar in decimal
+/// but whose rounded coordinates leave a volume above `TET_MIN_VOLUME` at a large size.
+pub const TET_MIN_SHAPE: f64 = 1e-6;
 
 /// Why a file was refused. `line` is 1-based; `column` is the 1-based character column of the
 /// offending token when there is one.
@@ -47,6 +58,30 @@ pub struct Material {
     pub yield_strain: Option<f64>,
     /// Strain beyond which a beam breaks (used from nb-35 on).
     pub break_strain: Option<f64>,
+}
+
+/// A solid (version 3): the material of a set of tets. Units in docs/FORMAT.md; the law that
+/// uses them is m5's (docs/M5-SOLVER.md section 8). `Body::build` and `Sim` do not read it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Solid {
+    pub name: String,
+    /// Crush stress of the solid at zero compaction (Pa), > 0.
+    pub plateau_stress: f64,
+    /// Elastic strain at which the solid starts crushing (1), > 0 and < 1.
+    pub yield_strain: f64,
+    /// Damping ratio (1), >= 0 and <= 1.
+    pub damping_ratio: f64,
+}
+
+/// A linear tetrahedron (version 3) on four nodes of the body. Its rest shape is the nodes'
+/// positions in the file, oriented so that its rest volume
+/// `(b - a) . ((c - a) x (d - a)) / 6` is positive. `Body::build` and `Sim` do not read it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tet {
+    /// Node ids, in file order: four distinct declared nodes.
+    pub nodes: [u32; 4],
+    /// Name of a solid of the body.
+    pub solid: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,8 +200,12 @@ pub struct Controls {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub materials: Vec<Material>,
+    /// Version 3: in file order, names unique.
+    pub solids: Vec<Solid>,
     pub nodes: Vec<Node>,
     pub beams: Vec<BodyBeam>,
+    /// Version 3: in file order, no two on the same set of nodes.
+    pub tets: Vec<Tet>,
     pub groups: Vec<Group>,
     pub velocities: Vec<Velocity>,
     /// Version 2: in file order. Every wheel has exactly one suspension and one tyre, and a
@@ -219,7 +258,7 @@ impl Body {
 
     /// Positions, start velocities, beams (stiffness and damping from the material) and
     /// masses, node indices in file order. The chassis only: wheels are built by the vehicle
-    /// code (nb-39).
+    /// code (nb-39). Solids and tets are not built (they add no mass and no beam).
     pub fn build(&self) -> Built {
         let idx: HashMap<u32, usize> = self.nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         let mut vel = vec![Vec3::ZERO; self.nodes.len()];
@@ -378,13 +417,27 @@ fn positive(t: &Toks, col: usize, what: &str, v: f64) -> Result<(), ParseError> 
 }
 
 /// The line keywords in the order they must come.
-const SECTIONS: [&str; 10] = ["material", "node", "beam", "group", "velocity", "wheel", "suspension", "tyre", "controls", "plane"];
+const SECTIONS: [&str; 12] = ["material", "solid", "node", "beam", "tet", "group", "velocity", "wheel", "suspension", "tyre", "controls", "plane"];
 
 /// Keywords a version 1 file may not use.
 const CAR_SECTIONS: [&str; 4] = ["wheel", "suspension", "tyre", "controls"];
 
+/// Keywords a version 1 or 2 file may not use.
+const SOLID_SECTIONS: [&str; 2] = ["solid", "tet"];
+
 fn section_rank(keyword: &str) -> Option<usize> {
     SECTIONS.iter().position(|k| *k == keyword)
+}
+
+/// The lowest version whose files may use this keyword.
+fn needs_version(keyword: &str) -> u32 {
+    if SOLID_SECTIONS.contains(&keyword) {
+        3
+    } else if CAR_SECTIONS.contains(&keyword) {
+        2
+    } else {
+        1
+    }
 }
 
 /// Line and name column of each wheel, and the wheels that have a suspension or a tyre, for
@@ -401,7 +454,7 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
     let err = |line: usize, column: Option<usize>, message: String| ParseError { line, column, message };
 
     if text.is_empty() {
-        return Err(err(1, None, "empty file: the first line must be `bsn 1` or `bsn 2`".into()));
+        return Err(err(1, None, format!("empty file: the first line must be {HEADERS}")));
     }
     if !text.ends_with('\n') {
         let last = text.split('\n').count();
@@ -411,8 +464,10 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
 
     let mut body = Body {
         materials: Vec::new(),
+        solids: Vec::new(),
         nodes: Vec::new(),
         beams: Vec::new(),
+        tets: Vec::new(),
         groups: Vec::new(),
         velocities: Vec::new(),
         wheels: Vec::new(),
@@ -423,6 +478,8 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
     };
     let mut node_ids: HashMap<u32, usize> = HashMap::new();
     let mut beam_pairs: HashSet<(u32, u32)> = HashSet::new();
+    let mut solid_names: HashSet<String> = HashSet::new();
+    let mut tet_sets: HashSet<[u32; 4]> = HashSet::new();
     let mut velocity_nodes: HashSet<u32> = HashSet::new();
     let mut car = CarLines::default();
     let mut version = 0u32;
@@ -461,17 +518,18 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
             None => {
                 return Err(t.err(
                     Some(kc),
-                    format!("unknown keyword `{kw}` (expected material, node, beam, group, velocity, wheel, suspension, tyre, controls or plane)"),
+                    format!("unknown keyword `{kw}` (expected material, solid, node, beam, tet, group, velocity, wheel, suspension, tyre, controls or plane)"),
                 ));
             }
         };
-        if version < 2 && CAR_SECTIONS.contains(&kw) {
-            return Err(t.err(Some(kc), format!("`{kw}` needs version 2: this file is `bsn {version}`")));
+        let needed = needs_version(kw);
+        if version < needed {
+            return Err(t.err(Some(kc), format!("`{kw}` needs version {needed}: this file is `bsn {version}`")));
         }
         if this_rank < rank {
             return Err(t.err(
                 Some(kc),
-                format!("`{kw}` after a later section: lines come in the order material, node, beam, group, velocity, wheel, suspension, tyre, controls, plane"),
+                format!("`{kw}` after a later section: lines come in the order material, solid, node, beam, tet, group, velocity, wheel, suspension, tyre, controls, plane"),
             ));
         }
         rank = this_rank;
@@ -510,6 +568,15 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
                 }
                 t.done()?;
                 body.materials.push(Material { name: name.to_string(), stiffness, damping, yield_strain, break_strain });
+            }
+            "solid" => {
+                let solid = parse_solid(&mut t, &solid_names)?;
+                solid_names.insert(solid.name.clone());
+                body.solids.push(solid);
+            }
+            "tet" => {
+                let tet = parse_tet(&mut t, &body, &node_ids, &solid_names, &mut tet_sets)?;
+                body.tets.push(tet);
             }
             "node" => {
                 let (ic, id) = t.id("node id")?;
@@ -645,6 +712,91 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
     Ok(body)
 }
 
+/// `solid <name> plateau_stress <Pa> yield_strain <e> damping_ratio <z>` (version 3), with
+/// Pa > 0, 0 < e < 1 and 0 <= z <= 1; `number` refuses NaN and infinities by name.
+fn parse_solid(t: &mut Toks, names: &HashSet<String>) -> Result<Solid, ParseError> {
+    let (nc, name) = t.name("solid name")?;
+    if names.contains(name) {
+        return Err(t.err(Some(nc), format!("duplicate solid `{name}`")));
+    }
+    let (_, plateau_stress) = t.positive_field("plateau_stress", "plateau_stress")?;
+    t.keyword("yield_strain")?;
+    let (yc, yield_strain) = t.number("yield_strain")?;
+    if !(yield_strain > 0.0 && yield_strain < 1.0) {
+        return Err(t.err(Some(yc), format!("yield_strain {yield_strain} must be > 0 and < 1")));
+    }
+    t.keyword("damping_ratio")?;
+    let (zc, damping_ratio) = t.number("damping_ratio")?;
+    if !(0.0..=1.0).contains(&damping_ratio) {
+        return Err(t.err(Some(zc), format!("damping_ratio {damping_ratio} must be >= 0 and <= 1")));
+    }
+    t.done()?;
+    Ok(Solid { name: name.to_string(), plateau_stress, yield_strain, damping_ratio })
+}
+
+/// `tet <a> <b> <c> <d> <solid>` (version 3): four distinct nodes declared above, a solid
+/// declared above, no other tet on the same set of nodes (in any order), a finite size, a rest
+/// volume `(b - a) . ((c - a) x (d - a)) / 6` of at least `TET_MIN_VOLUME` in size, a shape
+/// ratio (that volume over the cube of the longest edge) of at least `TET_MIN_SHAPE`, and a
+/// positive volume (the orientation). The checks run in that order.
+fn parse_tet(
+    t: &mut Toks,
+    body: &Body,
+    node_ids: &HashMap<u32, usize>,
+    solids: &HashSet<String>,
+    sets: &mut HashSet<[u32; 4]>,
+) -> Result<Tet, ParseError> {
+    let mut ids = [0u32; 4];
+    let mut cols = [0usize; 4];
+    for (k, what) in ["tet node a", "tet node b", "tet node c", "tet node d"].into_iter().enumerate() {
+        (cols[k], ids[k]) = t.id(what)?;
+    }
+    let (sc, solid) = t.name("tet solid")?;
+    for k in 0..4 {
+        if !node_ids.contains_key(&ids[k]) {
+            return Err(t.err(Some(cols[k]), format!("tet to missing node {}", ids[k])));
+        }
+        if ids[..k].contains(&ids[k]) {
+            return Err(t.err(Some(cols[k]), format!("tet lists node {} twice", ids[k])));
+        }
+    }
+    if !solids.contains(solid) {
+        return Err(t.err(Some(sc), format!("tet uses unknown solid `{solid}`")));
+    }
+    t.done()?;
+    let label = format!("tet {} {} {} {}", ids[0], ids[1], ids[2], ids[3]);
+    let at = Some(cols[0]);
+    let mut set = ids;
+    set.sort_unstable();
+    if sets.contains(&set) {
+        return Err(t.err(at, format!("duplicate tet: nodes {} {} {} {} already form a tet", ids[0], ids[1], ids[2], ids[3])));
+    }
+    let p = ids.map(|id| body.nodes[node_ids[&id]].pos);
+    let volume = (p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0;
+    let mut longest = 0.0f64;
+    for (i, j) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
+        longest = longest.max((p[j] - p[i]).length());
+    }
+    if !volume.is_finite() || !longest.is_finite() {
+        return Err(t.err(at, format!("{label}: its size is not finite (rest volume {volume}, longest edge {longest}): the nodes are too far apart")));
+    }
+    if volume.abs() < TET_MIN_VOLUME {
+        return Err(t.err(at, format!("{label}: its rest volume {volume} is below the minimum {TET_MIN_VOLUME} m^3")));
+    }
+    // divided edge by edge, so that a large but well-shaped tet does not overflow the cube
+    if volume.abs() / longest / longest / longest < TET_MIN_SHAPE {
+        return Err(t.err(
+            at,
+            format!("{label} is too flat: its rest volume {volume} is below {TET_MIN_SHAPE} times the cube of its longest edge {longest}"),
+        ));
+    }
+    if volume < 0.0 {
+        return Err(t.err(at, format!("{label} is inverted: its rest volume {volume} is negative (swap two of its nodes)")));
+    }
+    sets.insert(set);
+    Ok(Tet { nodes: ids, solid: solid.to_string() })
+}
+
 /// `wheel <name> mount <id> [<id> ...] radius <r> width <w> mass <m> inertia <i>
 /// steerable <yes|no> driven <yes|no> braked <yes|no>`
 fn parse_wheel(t: &mut Toks, body: &Body, node_ids: &HashMap<u32, usize>) -> Result<Wheel, ParseError> {
@@ -775,20 +927,23 @@ fn parse_controls(t: &mut Toks, body: &Body, kc: usize) -> Result<Controls, Pars
     })
 }
 
-/// The version on line 1, 1 or 2.
+/// The headers this parser reads, for messages.
+const HEADERS: &str = "`bsn 1`, `bsn 2` or `bsn 3`";
+
+/// The version on line 1, 1 to `VERSION`.
 fn parse_header(line: &str) -> Result<u32, ParseError> {
     let err = |column: Option<usize>, message: String| ParseError { line: 1, column, message };
     let rest = match line.strip_prefix("bsn ") {
         Some(r) => r,
-        None => return Err(err(None, format!("the first line must be `bsn 1` or `bsn 2`, found `{line}`"))),
+        None => return Err(err(None, format!("the first line must be {HEADERS}, found `{line}`"))),
     };
     match parse_id(rest) {
         Some(v) if (1..=VERSION).contains(&v) => Ok(v),
-        Some(v) => Err(err(Some(5), format!("unknown version {v}: this parser reads versions 1 and 2"))),
+        Some(v) => Err(err(Some(5), format!("unknown version {v}: this parser reads versions 1, 2 and 3"))),
         None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => {
-            Err(err(Some(5), format!("unknown version {rest}: this parser reads versions 1 and 2")))
+            Err(err(Some(5), format!("unknown version {rest}: this parser reads versions 1, 2 and 3")))
         }
-        None => Err(err(Some(5), format!("version `{rest}` is not a version number (the first line must be `bsn 1` or `bsn 2`)"))),
+        None => Err(err(Some(5), format!("version `{rest}` is not a version number (the first line must be {HEADERS})"))),
     }
 }
 
@@ -804,14 +959,22 @@ fn yes_no(b: bool) -> &'static str {
 }
 
 /// The canonical text of a body (the one `parse` reads back to an equal body). The header is
-/// the lowest version that holds the body: `bsn 1` without car sections, `bsn 2` with them. A
-/// beam's rest length is written only when it is not exactly the distance between its nodes.
-/// Panics if the body is not one `parse` could produce (a beam naming a missing node, for
-/// example).
+/// the lowest version that holds the body: `bsn 3` with a solid or a tet, else `bsn 2` with car
+/// sections, else `bsn 1`. A beam's rest length is written only when it is not exactly the
+/// distance between its nodes. Panics if the body is not one `parse` could produce (a beam
+/// naming a missing node, for example).
 pub fn write(body: &Body) -> String {
     let pos: HashMap<u32, Vec3> = body.nodes.iter().map(|n| (n.id, n.pos)).collect();
     let has_car = !body.wheels.is_empty() || !body.suspensions.is_empty() || !body.tyres.is_empty() || body.controls.is_some();
-    let mut s = format!("bsn {}\n", if has_car { 2 } else { 1 });
+    let has_solids = !body.solids.is_empty() || !body.tets.is_empty();
+    let version = if has_solids {
+        3
+    } else if has_car {
+        2
+    } else {
+        1
+    };
+    let mut s = format!("bsn {version}\n");
     for m in &body.materials {
         s.push_str(&format!("material {} stiffness {} damping {}", m.name, m.stiffness, m.damping));
         if let Some(y) = m.yield_strain {
@@ -821,6 +984,12 @@ pub fn write(body: &Body) -> String {
             s.push_str(&format!(" break_strain {b}"));
         }
         s.push('\n');
+    }
+    for m in &body.solids {
+        s.push_str(&format!(
+            "solid {} plateau_stress {} yield_strain {} damping_ratio {}\n",
+            m.name, m.plateau_stress, m.yield_strain, m.damping_ratio
+        ));
     }
     for n in &body.nodes {
         s.push_str(&format!("node {} {} {} {} mass {}\n", n.id, n.pos.x, n.pos.y, n.pos.z, n.mass));
@@ -832,6 +1001,10 @@ pub fn write(body: &Body) -> String {
             s.push_str(&format!(" rest {}", b.rest));
         }
         s.push('\n');
+    }
+    for t in &body.tets {
+        let [a, b, c, d] = t.nodes;
+        s.push_str(&format!("tet {a} {b} {c} {d} {}\n", t.solid));
     }
     for g in &body.groups {
         s.push_str(&format!("group {}", g.name));
