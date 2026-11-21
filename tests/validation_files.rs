@@ -10,7 +10,14 @@
 //!   the two cars within 1e-9 relative.
 //! - `crush_physics_inside_frozen_ranges`: P1 to P3 of both files lie inside the `frozen: range`
 //!   lines of docs/STAGE6-M4-M5.md, read from that file at run time.
-//! - `crush_beams_one_length`: the `crush` beams of each file have one rest length within 5%.
+//! - `crush_beams_one_length`: the beams of each crush stage of each file have one rest length
+//!   within 5%.
+//!
+//! The crush zone has two stages since t-20261121-231938 (docs/STAGE6-M4-M5.md, "The two-stage
+//! crumple zone"): `crush_front` (stations 4 to 5, hit first) and `crush_rear` (stations 3 to 4).
+//! The three gate 4.2 checks above run on each stage. `crush_rear_stronger_than_front_by_frozen_ratio`
+//! checks that both stages exist, in that order along x, with the rear's plateau strength (P1 x P2)
+//! `frozen: crush.rear_to_front_strength` times the front's.
 //!
 //! `cabin_gap_capacity_at_least_factor_times_needed` (t-20261121-225636) checks the fixed-strength
 //! passenger cell: its weakest station gap carries at least `frozen: cabin.capacity_factor` times
@@ -20,9 +27,9 @@
 //! deliberately wrong copies and requires each to fail, so a check that cannot fail is caught.
 //!
 //! P1 to P3 are computed back from the file as docs/STAGE6-M4-M5.md ("What is calibrated") defines
-//! them: P1 = k L_c / E, P2 = yield_strain, P3 = c / (2 sqrt(k m_c)), with L_c the mean rest length
-//! of the `crush` beams, m_c the mean mass of the distinct nodes at their ends and E the
-//! `frozen: steel_E_pa` line.
+//! them, per crush stage: P1 = k L_c / E, P2 = yield_strain, P3 = c / (2 sqrt(k m_c)), with L_c the
+//! mean rest length of that stage's beams, m_c the mean mass of the distinct nodes at their ends
+//! and E the `frozen: steel_E_pa` line.
 
 use crash_sim::format::{parse, Body};
 use crash_sim::vec3::Vec3;
@@ -41,6 +48,16 @@ const SPEED_REL_TOL: f64 = 1e-12;
 /// 56.1), recorded in validation/CAR_B.md. It is a constant here because this file never opens
 /// the second test's reference files.
 const SECOND_SPEED_KMH: f64 = 56.1;
+/// docs/STAGE6-M4-M5.md, "The two-stage crumple zone": the weak first stage (stations 4 to 5, the
+/// front segment, hit first) and the stronger second stage (stations 3 to 4).
+const CRUSH_FRONT: &str = "crush_front";
+const CRUSH_REAR: &str = "crush_rear";
+const CRUSH_STAGES: [&str; 2] = [CRUSH_FRONT, CRUSH_REAR];
+
+/// A beam of either crush stage.
+fn is_crush(material: &str) -> bool {
+    CRUSH_STAGES.contains(&material)
+}
 
 fn read(rel: &str) -> String {
     let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
@@ -92,26 +109,25 @@ struct Crush {
     mean_len: f64,
 }
 
-/// P1 to P3 and the beam lengths of the `crush` material of a car, computed back from its numbers.
-fn crush_of(body: &Body, steel_e: f64) -> Result<Crush, String> {
+/// P1 to P3 and the beam lengths of one crush stage (material `name`) of a car, computed back from
+/// its numbers.
+fn crush_of(body: &Body, steel_e: f64, name: &str) -> Result<Crush, String> {
     let mat = body
         .materials
         .iter()
-        .find(|m| m.name == "crush")
-        .ok_or("no material `crush`")?;
+        .find(|m| m.name == name)
+        .ok_or(format!("no material `{name}`"))?;
     let yield_strain = mat
         .yield_strain
-        .ok_or("material `crush` has no yield_strain")?;
+        .ok_or(format!("material `{name}` has no yield_strain"))?;
     if mat.break_strain.is_some() {
-        return Err("material `crush` has a break_strain (docs/STAGE6-M4-M5.md: none)".into());
+        return Err(format!(
+            "material `{name}` has a break_strain (docs/STAGE6-M4-M5.md: none)"
+        ));
     }
-    let beams: Vec<_> = body
-        .beams
-        .iter()
-        .filter(|b| b.material == "crush")
-        .collect();
+    let beams: Vec<_> = body.beams.iter().filter(|b| b.material == name).collect();
     if beams.is_empty() {
-        return Err("no beam uses the material `crush`".into());
+        return Err(format!("no beam uses the material `{name}`"));
     }
     let mut ends: Vec<u32> = beams.iter().flat_map(|b| [b.a, b.b]).collect();
     ends.sort_unstable();
@@ -231,7 +247,7 @@ fn check_wall_embeds_car(car_text: &str, wall_text: &str, speed_kmh: f64) -> Res
         return Err("an empty front, rear or sensor group".into());
     }
     // The sensor is outside the crush zone: none of its nodes is the end of a crush beam.
-    for b in car.beams.iter().filter(|b| b.material == "crush") {
+    for b in car.beams.iter().filter(|b| is_crush(&b.material)) {
         for end in [b.a, b.b] {
             if group("sensor")?.contains(&end) {
                 return Err(format!("sensor node {end} is inside the crush zone"));
@@ -357,30 +373,27 @@ fn validation_wall_b_embeds_validation_car_b() {
 #[test]
 fn validation_files_share_crush_physics() {
     let f = files();
-    let a = crush_of(&body_of(&f.car_a), f.steel_e).unwrap();
-    let b = crush_of(&body_of(&f.car_b), f.steel_e).unwrap();
-    println!("A: {a:?}\nB: {b:?}");
-    check_share(&a, &b).unwrap();
-    // The two cars have different lengths and node masses, so the shared physics is not shared
-    // raw numbers: the check is not vacuous only if the raw stiffness differs.
-    let (ka, kb) = (
-        body_of(&f.car_a)
-            .materials
-            .iter()
-            .find(|m| m.name == "crush")
-            .unwrap()
-            .stiffness,
-        body_of(&f.car_b)
-            .materials
-            .iter()
-            .find(|m| m.name == "crush")
-            .unwrap()
-            .stiffness,
-    );
-    assert_ne!(
-        ka, kb,
-        "the two files have the same crush stiffness, so L_c is not what differs"
-    );
+    for stage in CRUSH_STAGES {
+        let a = crush_of(&body_of(&f.car_a), f.steel_e, stage).unwrap();
+        let b = crush_of(&body_of(&f.car_b), f.steel_e, stage).unwrap();
+        println!("{stage} A: {a:?}\n{stage} B: {b:?}");
+        check_share(&a, &b).unwrap_or_else(|e| panic!("{stage}: {e}"));
+        // The two cars have different lengths and node masses, so the shared physics is not
+        // shared raw numbers: the check is not vacuous only if the raw stiffness differs.
+        let k = |t: &str| {
+            body_of(t)
+                .materials
+                .iter()
+                .find(|m| m.name == stage)
+                .unwrap()
+                .stiffness
+        };
+        assert_ne!(
+            k(&f.car_a),
+            k(&f.car_b),
+            "{stage}: the two files have the same stiffness, so L_c is not what differs"
+        );
+    }
 }
 
 #[test]
@@ -390,9 +403,11 @@ fn crush_physics_inside_frozen_ranges() {
         ("validation_car.bsn", &f.car_a),
         ("validation_car_b.bsn", &f.car_b),
     ] {
-        let c = crush_of(&body_of(text), f.steel_e).unwrap();
-        println!("{name}: {c:?}");
-        check_inside_ranges(&c, &f.doc).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for stage in CRUSH_STAGES {
+            let c = crush_of(&body_of(text), f.steel_e, stage).unwrap();
+            println!("{name} {stage}: {c:?}");
+            check_inside_ranges(&c, &f.doc).unwrap_or_else(|e| panic!("{name} {stage}: {e}"));
+        }
     }
 }
 
@@ -403,13 +418,96 @@ fn crush_beams_one_length() {
         ("validation_car.bsn", &f.car_a),
         ("validation_car_b.bsn", &f.car_b),
     ] {
-        let c = crush_of(&body_of(text), f.steel_e).unwrap();
-        println!(
-            "{name}: {} crush beams, {} to {} m",
-            c.n_beams, c.shortest, c.longest
-        );
-        assert!(c.n_beams >= 2, "{name}: fewer than 2 crush beams");
-        check_one_length(&c).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for stage in CRUSH_STAGES {
+            let c = crush_of(&body_of(text), f.steel_e, stage).unwrap();
+            println!(
+                "{name}: {} {stage} beams, {} to {} m",
+                c.n_beams, c.shortest, c.longest
+            );
+            assert!(c.n_beams >= 2, "{name}: fewer than 2 {stage} beams");
+            check_one_length(&c).unwrap_or_else(|e| panic!("{name} {stage}: {e}"));
+        }
+    }
+}
+
+/// docs/STAGE6-M4-M5.md, "The two-stage crumple zone": both stages exist; every `crush_front`
+/// beam lies at or ahead of every `crush_rear` beam along x, and the front stage reaches the
+/// front-most node (it is hit first); and the rear stage's plateau strength (P1 x P2, the beam's
+/// yield force over E) is `frozen: crush.rear_to_front_strength` times the front's, within
+/// `SHARE_REL_TOL` (the files print their numbers to a few decimals).
+fn check_stages(body: &Body, steel_e: f64, doc: &str) -> Result<String, String> {
+    let ratio = frozen(doc, "crush.rear_to_front_strength");
+    if ratio.len() != 1 {
+        return Err(format!(
+            "`frozen: crush.rear_to_front_strength` has {} numbers, not 1",
+            ratio.len()
+        ));
+    }
+    let ratio = ratio[0];
+    let front = crush_of(body, steel_e, CRUSH_FRONT)?;
+    let rear = crush_of(body, steel_e, CRUSH_REAR)?;
+    let x_of = |id: u32| {
+        body.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.pos.x)
+            .ok_or(format!("no node {id}"))
+    };
+    let span = |stage: &str| -> Result<(f64, f64), String> {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for b in body.beams.iter().filter(|b| b.material == stage) {
+            for end in [b.a, b.b] {
+                let x = x_of(end)?;
+                (lo, hi) = (lo.min(x), hi.max(x));
+            }
+        }
+        Ok((lo, hi))
+    };
+    let ((f_lo, f_hi), (r_lo, r_hi)) = (span(CRUSH_FRONT)?, span(CRUSH_REAR)?);
+    if f_lo < r_hi {
+        return Err(format!(
+            "the `{CRUSH_FRONT}` beams (x {f_lo}..{f_hi}) are not all at or ahead of the `{CRUSH_REAR}` beams (x {r_lo}..{r_hi})"
+        ));
+    }
+    let front_x = body
+        .nodes
+        .iter()
+        .map(|n| n.pos.x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if f_hi != front_x {
+        return Err(format!(
+            "the `{CRUSH_FRONT}` beams end at x {f_hi}, not at the front-most node x {front_x}"
+        ));
+    }
+    let (sf, sr) = (
+        front.p1_area_m2 * front.p2_yield_strain,
+        rear.p1_area_m2 * rear.p2_yield_strain,
+    );
+    let got = sr / sf;
+    let rel = (got - ratio).abs() / ratio;
+    let report = format!(
+        "{CRUSH_FRONT} x {f_lo:.4}..{f_hi:.4}, P1 x P2 {sf:e}; {CRUSH_REAR} x {r_lo:.4}..{r_hi:.4}, P1 x P2 {sr:e}; rear / front {got}, frozen {ratio}"
+    );
+    // NaN fails too.
+    if rel.is_nan() || rel > SHARE_REL_TOL {
+        return Err(format!(
+            "the strength ratio rear / front is {got}, not the frozen {ratio}\n{report}"
+        ));
+    }
+    Ok(report)
+}
+
+/// The two-stage crumple zone of both cars (validation/CAR.md, "The two-stage crumple zone").
+#[test]
+fn crush_rear_stronger_than_front_by_frozen_ratio() {
+    let f = files();
+    for (name, text) in [
+        ("validation_car.bsn", &f.car_a),
+        ("validation_car_b.bsn", &f.car_b),
+    ] {
+        let r = check_stages(&body_of(text), f.steel_e, &f.doc)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        println!("{name}: {r}");
     }
 }
 
@@ -418,7 +516,7 @@ fn crush_beams_one_length() {
 #[test]
 fn check_share_accepts_equal_values_zero_included() {
     let f = files();
-    let a = crush_of(&body_of(&f.car_a), f.steel_e).unwrap();
+    let a = crush_of(&body_of(&f.car_a), f.steel_e, CRUSH_FRONT).unwrap();
     let zero = Crush {
         p3_damping_ratio: 0.0,
         ..a
@@ -454,7 +552,8 @@ struct CellGap {
 }
 
 /// The gaps of the passenger cell: the stations (distinct node x) at or behind the rearmost end
-/// of a `crush` beam (the front axle station), and each gap between neighbouring stations.
+/// of a crush beam of either stage (the front axle station), and each gap between neighbouring
+/// stations.
 fn cabin_gaps_of(body: &Body) -> Result<Vec<CellGap>, String> {
     let x_of = |id: u32| {
         body.nodes
@@ -464,11 +563,11 @@ fn cabin_gaps_of(body: &Body) -> Result<Vec<CellGap>, String> {
             .ok_or(format!("no node {id}"))
     };
     let mut cell_x = f64::INFINITY;
-    for b in body.beams.iter().filter(|b| b.material == "crush") {
+    for b in body.beams.iter().filter(|b| is_crush(&b.material)) {
         cell_x = cell_x.min(x_of(b.a)?).min(x_of(b.b)?);
     }
     if !cell_x.is_finite() {
-        return Err("no beam uses the material `crush`".into());
+        return Err(format!("no beam uses a crush material {CRUSH_STAGES:?}"));
     }
     let mut stations: Vec<f64> = body
         .nodes
@@ -882,7 +981,7 @@ fn check_wall_load(w: &WallLoad) -> Result<(), String> {
 #[test]
 fn validation_checks_reject_wrong_copies() {
     let f = files();
-    let good_a = crush_of(&body_of(&f.car_a), f.steel_e).unwrap();
+    let good_a = crush_of(&body_of(&f.car_a), f.steel_e, CRUSH_REAR).unwrap();
     let sp = speed_a();
 
     // The wall file: a wall too far ahead; a second plane; a changed car line; a wrong speed.
@@ -906,51 +1005,87 @@ fn validation_checks_reject_wrong_copies() {
     let e = check_wall_embeds_car(&f.car_b, &f.wall_a, sp).unwrap_err();
     assert!(e.contains("byte for byte"), "{e}");
 
-    // The crush physics: a stiffness 1% off, a beam 20% longer, a yield strain outside the range.
+    // The crush physics (the rear stage): a stiffness 1% off, a beam 20% longer, a yield strain
+    // outside the range.
     let mut b = body_of(&f.car_b);
     b.materials
         .iter_mut()
-        .find(|m| m.name == "crush")
+        .find(|m| m.name == CRUSH_REAR)
         .unwrap()
         .stiffness *= 1.01;
-    let off = crush_of(&b, f.steel_e).unwrap();
+    let off = crush_of(&b, f.steel_e, CRUSH_REAR).unwrap();
     let e = check_share(&good_a, &off).unwrap_err();
     assert!(e.contains("P1 area_m2"), "{e}");
     let mut b = body_of(&f.car_b);
     b.materials
         .iter_mut()
-        .find(|m| m.name == "crush")
+        .find(|m| m.name == CRUSH_REAR)
         .unwrap()
         .damping *= 1.01;
-    let e = check_share(&good_a, &crush_of(&b, f.steel_e).unwrap()).unwrap_err();
+    let e = check_share(&good_a, &crush_of(&b, f.steel_e, CRUSH_REAR).unwrap()).unwrap_err();
     assert!(e.contains("P3 damping_ratio"), "{e}");
     let mut b = body_of(&f.car_a);
     b.materials
         .iter_mut()
-        .find(|m| m.name == "crush")
+        .find(|m| m.name == CRUSH_FRONT)
         .unwrap()
         .yield_strain = Some(0.02);
-    let e = check_inside_ranges(&crush_of(&b, f.steel_e).unwrap(), &f.doc).unwrap_err();
+    let e = check_inside_ranges(&crush_of(&b, f.steel_e, CRUSH_FRONT).unwrap(), &f.doc)
+        .unwrap_err();
     assert!(e.contains("crush.yield_strain"), "{e}");
     let mut b = body_of(&f.car_a);
     b.beams
         .iter_mut()
-        .find(|x| x.material == "crush")
+        .find(|x| x.material == CRUSH_FRONT)
         .unwrap()
         .rest *= 1.2;
-    let e = check_one_length(&crush_of(&b, f.steel_e).unwrap()).unwrap_err();
+    let e = check_one_length(&crush_of(&b, f.steel_e, CRUSH_FRONT).unwrap()).unwrap_err();
     assert!(e.contains("spread"), "{e}");
+    // The two stages: a rear stage only as strong as the front (the one-material crush zone
+    // before t-20261121-231938, in strength); the stage names swapped (the strong stage in
+    // front); a file without the front stage; a doc without the ratio line.
+    let mut b = body_of(&f.car_a);
+    let rear = b.materials.iter_mut().find(|m| m.name == CRUSH_REAR).unwrap();
+    rear.stiffness /= 2.0;
+    let e = check_stages(&b, f.steel_e, &f.doc).unwrap_err();
+    assert!(e.contains("strength ratio"), "{e}");
+    let mut b = body_of(&f.car_a);
+    for beam in b.beams.iter_mut() {
+        if beam.material == CRUSH_FRONT {
+            beam.material = CRUSH_REAR.into();
+        } else if beam.material == CRUSH_REAR {
+            beam.material = CRUSH_FRONT.into();
+        }
+    }
+    let e = check_stages(&b, f.steel_e, &f.doc).unwrap_err();
+    assert!(e.contains("are not all at or ahead of"), "{e}");
+    let mut b = body_of(&f.car_a);
+    for beam in b.beams.iter_mut() {
+        if is_crush(&beam.material) {
+            beam.material = "crush".into();
+        }
+    }
+    let e = check_stages(&b, f.steel_e, &f.doc).unwrap_err();
+    assert!(e.contains("no beam uses the material `crush_front`"), "{e}");
+    let r =
+        std::panic::catch_unwind(|| check_stages(&body_of(&f.car_a), f.steel_e, "nothing here\n"));
+    assert!(r.is_err(), "a doc without the stage ratio line was accepted");
     // The wall load: the layout before t-20261121-204929 (the four roof-level beams over the
-    // wheel mounts `crush` again, the rest of the file unchanged) loads the wall above the
-    // centre of gravity and pitches the car onto the ground.
+    // wheel mounts crush beams again, each of its own segment's stage, the rest of the file
+    // unchanged) loads the wall above the centre of gravity and pitches the car onto the ground.
     let mut b = body_of(&f.wall_a);
     let mut changed = 0;
     for beam in b.beams.iter_mut() {
-        if [(27, 35), (29, 37), (35, 43), (37, 45)].contains(&(beam.a, beam.b)) {
-            assert_eq!(beam.material, "chassis");
-            beam.material = "crush".into();
-            changed += 1;
-        }
+        let stage = if [(27, 35), (29, 37)].contains(&(beam.a, beam.b)) {
+            CRUSH_REAR
+        } else if [(35, 43), (37, 45)].contains(&(beam.a, beam.b)) {
+            CRUSH_FRONT
+        } else {
+            continue;
+        };
+        assert_eq!(beam.material, "chassis");
+        beam.material = stage.into();
+        changed += 1;
     }
     assert_eq!(changed, 4);
     let w = wall_load_of(&b, &f.doc);
