@@ -48,7 +48,8 @@ const EIGEN_ROUNDING: f64 = 1e-13;
 // Small matrix helpers
 
 fn det(m: &Mat3) -> f64 {
-    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
@@ -183,7 +184,7 @@ pub fn lockup_strain(zone_mass: f64, zone_volume: f64) -> f64 {
 /// `W = mu/2 (tr(Fe^T Fe) - 3) - mu ln Je + lambda/2 (ln Je)^2`, infinite unless `Je > 0`.
 pub fn energy_density(fe: &Mat3, law: &Law) -> f64 {
     let je = det(fe);
-    if !(je > 0.0) {
+    if je.is_nan() || je <= 0.0 {
         return f64::INFINITY;
     }
     let c = ata(fe);
@@ -268,7 +269,11 @@ pub fn sym_eigen(m: &Mat3) -> Eigen {
         let off: f64 = (0..3).filter(|&j| j != i).map(|j| a[i][j].abs()).sum();
         lower = lower.min(values[i] - off);
     }
-    Eigen { values, vectors: v, lower: lower - EIGEN_ROUNDING * size }
+    Eigen {
+        values,
+        vectors: v,
+        lower: lower - EIGEN_ROUNDING * size,
+    }
 }
 
 /// The closed-form upper bound (Pa) on the size of the elastic tangent `d2W/dFe2` (as an
@@ -277,7 +282,7 @@ pub fn sym_eigen(m: &Mat3) -> Eigen {
 ///     |dFe : A : dFe| <= (mu + (3 lambda + |mu - lambda ln Je|) / s_min^2) |dFe|^2
 /// (docs/PHYSICS.md "Solids", R5). Infinite when `lower` is not a positive number.
 fn bound_from(lower: f64, ln_je: f64, law: &Law) -> f64 {
-    if !(lower > 0.0) {
+    if lower.is_nan() || lower <= 0.0 {
         return f64::INFINITY;
     }
     law.mu + (3.0 * law.lambda + (law.mu - law.lambda * ln_je).abs()) / lower
@@ -323,7 +328,7 @@ pub fn return_map(fe: &Mat3, e_c: f64, law: &Law) -> Option<Flow> {
 }
 
 fn flow_from(eig: &Eigen, ln_je: f64, e_c: f64, law: &Law) -> Option<Flow> {
-    if !(e_c < law.e_max) {
+    if e_c.is_nan() || e_c >= law.e_max {
         return None;
     }
     let mut k = 0;
@@ -333,12 +338,12 @@ fn flow_from(eig: &Eigen, ln_je: f64, e_c: f64, law: &Law) -> Option<Flow> {
         }
     }
     let l1 = eig.values[k];
-    if !(l1 > 0.0) {
+    if l1.is_nan() || l1 <= 0.0 {
         return None;
     }
     let tau1 = law.mu * (l1 - 1.0) + law.lambda * ln_je;
     let g0 = tau1 + law.sigma_y(e_c);
-    if !(g0 < 0.0) {
+    if g0.is_nan() || g0 >= 0.0 {
         return None;
     }
     let g = |d: f64| {
@@ -401,7 +406,11 @@ pub fn cut_cell(c: [u32; 8]) -> [[u32; 4]; 6] {
     let mut tets = [[0u32; 4]; 6];
     for (t, (axes, even)) in tets.iter_mut().zip(ORDERS) {
         let (p, q) = (axes[0], axes[0] | axes[1]);
-        *t = if even { [c[0], c[p], c[q], c[7]] } else { [c[0], c[q], c[p], c[7]] };
+        *t = if even {
+            [c[0], c[p], c[q], c[7]]
+        } else {
+            [c[0], c[q], c[p], c[7]]
+        };
     }
     tets
 }
@@ -488,7 +497,9 @@ impl SolverM5 {
             ));
         }
         if !(h.is_finite() && h > 0.0) {
-            return Err(format!("physics step h = {h} s must be a positive finite number"));
+            return Err(format!(
+                "physics step h = {h} s must be a positive finite number"
+            ));
         }
         let n = body.nodes.len();
         for nd in &body.nodes {
@@ -496,16 +507,28 @@ impl SolverM5 {
                 return Err(format!("node {}: its position is not finite", nd.id));
             }
             if !(nd.mass.is_finite() && nd.mass > 0.0) {
-                return Err(format!("node {}: its mass {} must be a positive finite number", nd.id, nd.mass));
+                return Err(format!(
+                    "node {}: its mass {} must be a positive finite number",
+                    nd.id, nd.mass
+                ));
             }
         }
         // Node id -> index (file order) by a sorted list: no hash map, O(n log n).
-        let mut ids: Vec<(u32, usize)> = body.nodes.iter().enumerate().map(|(i, nd)| (nd.id, i)).collect();
+        let mut ids: Vec<(u32, usize)> = body
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, nd)| (nd.id, i))
+            .collect();
         ids.sort_unstable();
         if let Some(w) = ids.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(format!("node id {} is given twice", w[0].0));
         }
-        let index = |id: u32| ids.binary_search_by_key(&id, |&(i, _)| i).ok().map(|k| ids[k].1);
+        let index = |id: u32| {
+            ids.binary_search_by_key(&id, |&(i, _)| i)
+                .ok()
+                .map(|k| ids[k].1)
+        };
 
         let mut beam_k = vec![0.0f64; n];
         let mut beam_c = vec![0.0f64; n];
@@ -514,7 +537,10 @@ impl SolverM5 {
                 return Err(format!("beam {i} is on a missing node"));
             };
             let Some(m) = body.materials.iter().find(|m| m.name == b.material) else {
-                return Err(format!("beam {i} names a missing material `{}`", b.material));
+                return Err(format!(
+                    "beam {i} names a missing material `{}`",
+                    b.material
+                ));
             };
             beam_k[a] += 2.0 * m.stiffness;
             beam_k[c] += 2.0 * m.stiffness;
@@ -527,13 +553,22 @@ impl SolverM5 {
                 return Err(format!("solid `{}` is given twice", s.name));
             }
             if !(s.plateau_stress.is_finite() && s.plateau_stress > 0.0) {
-                return Err(format!("solid `{}`: plateau_stress {} must be a positive finite number", s.name, s.plateau_stress));
+                return Err(format!(
+                    "solid `{}`: plateau_stress {} must be a positive finite number",
+                    s.name, s.plateau_stress
+                ));
             }
             if !(s.yield_strain > 0.0 && s.yield_strain < 1.0) {
-                return Err(format!("solid `{}`: yield_strain {} must be > 0 and < 1", s.name, s.yield_strain));
+                return Err(format!(
+                    "solid `{}`: yield_strain {} must be > 0 and < 1",
+                    s.name, s.yield_strain
+                ));
             }
             if !(0.0..=1.0).contains(&s.damping_ratio) {
-                return Err(format!("solid `{}`: damping_ratio {} must be >= 0 and <= 1", s.name, s.damping_ratio));
+                return Err(format!(
+                    "solid `{}`: damping_ratio {} must be >= 0 and <= 1",
+                    s.name, s.damping_ratio
+                ));
             }
         }
 
@@ -549,7 +584,10 @@ impl SolverM5 {
         let mut sets: Vec<[usize; 4]> = Vec::with_capacity(body.tets.len());
         let mut node_solid: Vec<Option<usize>> = vec![None; n];
         for (t, tet) in body.tets.iter().enumerate() {
-            let label = format!("tet {t} ({} {} {} {})", tet.nodes[0], tet.nodes[1], tet.nodes[2], tet.nodes[3]);
+            let label = format!(
+                "tet {t} ({} {} {} {})",
+                tet.nodes[0], tet.nodes[1], tet.nodes[2], tet.nodes[3]
+            );
             let Some(solid) = body.solids.iter().position(|s| s.name == tet.solid) else {
                 return Err(format!("{label}: unknown solid `{}`", tet.solid));
             };
@@ -575,7 +613,9 @@ impl SolverM5 {
                 return Err(format!("{label} is too flat: its rest volume {volume} is below {TET_MIN_SHAPE} times the cube of its longest edge {longest}"));
             }
             if volume < 0.0 {
-                return Err(format!("{label} is inverted: its rest volume {volume} is negative"));
+                return Err(format!(
+                    "{label} is inverted: its rest volume {volume} is negative"
+                ));
             }
             let mut set = nodes;
             set.sort_unstable();
@@ -603,16 +643,29 @@ impl SolverM5 {
                     dm_inv[i][j] = cof[j][i] / dd;
                 }
             }
-            raw.push(Raw { nodes, solid, volume, face, dm_inv });
+            raw.push(Raw {
+                nodes,
+                solid,
+                volume,
+                face,
+                dm_inv,
+            });
         }
 
         // The zone (the frozen lock-up line): the nodes of at least one tet, and the tets.
-        let zone_mass: f64 = (0..n).filter(|&i| node_solid[i].is_some()).map(|i| body.nodes[i].mass).sum();
+        let zone_mass: f64 = (0..n)
+            .filter(|&i| node_solid[i].is_some())
+            .map(|i| body.nodes[i].mass)
+            .sum();
         let zone_volume: f64 = raw.iter().map(|r| r.volume).sum();
-        let eps_d = if raw.is_empty() { LOCKUP_CAP } else { lockup_strain(zone_mass, zone_volume) };
+        let eps_d = if raw.is_empty() {
+            LOCKUP_CAP
+        } else {
+            lockup_strain(zone_mass, zone_volume)
+        };
         let mut laws = Vec::with_capacity(body.solids.len());
         for s in &body.solids {
-            if !raw.is_empty() && !(eps_d > s.yield_strain) {
+            if !raw.is_empty() && (eps_d.is_nan() || eps_d <= s.yield_strain) {
                 return Err(format!(
                     "solid `{}`: the zone's lock-up strain eps_D = {eps_d} (zone mass {zone_mass} kg, zone volume {zone_volume} m^3) is not above its yield_strain {}, so it could never crush",
                     s.name, s.yield_strain
@@ -620,9 +673,17 @@ impl SolverM5 {
             }
             laws.push(Law::new(s.plateau_stress, s.yield_strain, eps_d));
         }
-        let rho = if raw.is_empty() { 0.0 } else { zone_mass / zone_volume };
+        let rho = if raw.is_empty() {
+            0.0
+        } else {
+            zone_mass / zone_volume
+        };
 
-        let m_min = body.nodes.iter().map(|nd| nd.mass).fold(f64::INFINITY, f64::min);
+        let m_min = body
+            .nodes
+            .iter()
+            .map(|nd| nd.mass)
+            .fold(f64::INFINITY, f64::min);
         let mut k_at = beam_k.clone();
         let mut c_at = beam_c.clone();
         let mut tets = Vec::with_capacity(raw.len());
@@ -633,10 +694,19 @@ impl SolverM5 {
             // face), with the dilatational wave speed of the zone's mean density.
             let alt = 3.0 * r.volume / r.face;
             let modulus = law.lambda + 2.0 * law.mu;
-            let eta = if zeta > 0.0 { 2.0 * zeta * alt * (modulus * rho).sqrt() } else { 0.0 };
+            let eta = if zeta > 0.0 {
+                2.0 * zeta * alt * (modulus * rho).sqrt()
+            } else {
+                0.0
+            };
             let rows = [row(&r.dm_inv, 0), row(&r.dm_inv, 1), row(&r.dm_inv, 2)];
             let g0 = -(rows[0] + rows[1] + rows[2]);
-            let g_rest = [g0.length(), rows[0].length(), rows[1].length(), rows[2].length()];
+            let g_rest = [
+                g0.length(),
+                rows[0].length(),
+                rows[1].length(),
+                rows[2].length(),
+            ];
             let g_rest_sum = g_rest.iter().sum::<f64>();
             // R5a: the tangent at rest, 2 mu + 3 lambda (bound_from at Fe = I), times the headroom.
             let a_rest = STIFFNESS_HEADROOM * (2.0 * law.mu + 3.0 * law.lambda);
@@ -662,7 +732,8 @@ impl SolverM5 {
         let g = c_at.iter().cloned().fold(0.0, f64::max) / m_min;
         let w2 = if w2.is_finite() { w2 } else { 0.0 };
         let g = if g.is_finite() { g } else { 0.0 };
-        if !(h * h * w2 + 2.0 * h * g < 4.0) {
+        let x = h * h * w2 + 2.0 * h * g;
+        if x.is_nan() || x >= 4.0 {
             let limit = 4.0 / (g + (g * g + 4.0 * w2).sqrt());
             return Err(format!(
                 "physics step h = dt/substeps = {h:.6} s reaches the m5 stability limit {limit:.6} s (h^2*w2 + 2*h*g < 4 with the Gershgorin bounds w2 = {w2}, g = {g}, the tet tangent at rest times {STIFFNESS_HEADROOM}); raise --substeps or lower --dt"
@@ -742,7 +813,11 @@ impl SolverM5 {
 
     fn trial_fe(&self, t: &TetEl, pos: &[Vec3]) -> Mat3 {
         let x0 = pos[t.nodes[0]];
-        let d = [pos[t.nodes[1]] - x0, pos[t.nodes[2]] - x0, pos[t.nodes[3]] - x0];
+        let d = [
+            pos[t.nodes[1]] - x0,
+            pos[t.nodes[2]] - x0,
+            pos[t.nodes[3]] - x0,
+        ];
         cols_times(d, &t.b)
     }
 
@@ -772,12 +847,18 @@ impl SolverM5 {
             let t = &self.tets[ti];
             let law = self.laws[t.solid];
             let x0 = pos[t.nodes[0]];
-            let d = [pos[t.nodes[1]] - x0, pos[t.nodes[2]] - x0, pos[t.nodes[3]] - x0];
+            let d = [
+                pos[t.nodes[1]] - x0,
+                pos[t.nodes[2]] - x0,
+                pos[t.nodes[3]] - x0,
+            ];
             let fe_trial = cols_times(d, &t.b);
             let je_trial = det(&fe_trial);
             // R4e: the inverted-tet rule, on the trial Fe, before anything else.
             if !(je_trial.is_finite() && je_trial > J_MIN_FAIL) {
-                self.fail(format!("tet {ti} inverted or collapsed at substep {n}: Je = {je_trial}"));
+                self.fail(format!(
+                    "tet {ti} inverted or collapsed at substep {n}: Je = {je_trial}"
+                ));
                 continue;
             }
             let eig = sym_eigen(&ata(&fe_trial));
@@ -809,7 +890,11 @@ impl SolverM5 {
                 // Q3: sigma_v = eta D with D = sym(Fdot F^-1) of the total F; P_v = J sigma_v F^-T
                 // = sigma_v cof(F); its rows act through the rest gradients (rows of dm_inv).
                 let v0 = vel[t.nodes[0]];
-                let dv = [vel[t.nodes[1]] - v0, vel[t.nodes[2]] - v0, vel[t.nodes[3]] - v0];
+                let dv = [
+                    vel[t.nodes[1]] - v0,
+                    vel[t.nodes[2]] - v0,
+                    vel[t.nodes[3]] - v0,
+                ];
                 let ft = cols_times(d, &t.dm_inv);
                 let fdot = cols_times(dv, &t.dm_inv);
                 let cof = cofactor(&ft);
@@ -818,7 +903,10 @@ impl SolverM5 {
                 for i in 0..3 {
                     for j in 0..3 {
                         // F^-1 = cof^T / J, so (Fdot F^-1)_ij = sum_k Fdot_ik cof_jk / J
-                        l[i][j] = (fdot[i][0] * cof[j][0] + fdot[i][1] * cof[j][1] + fdot[i][2] * cof[j][2]) / jt;
+                        l[i][j] = (fdot[i][0] * cof[j][0]
+                            + fdot[i][1] * cof[j][1]
+                            + fdot[i][2] * cof[j][2])
+                            / jt;
                     }
                 }
                 let mut sig = [[0.0; 3]; 3];
@@ -839,10 +927,19 @@ impl SolverM5 {
             }
             // R5b: this tet's share of the Gershgorin sums, from the current state.
             let a_bound = bound_from(eig.lower, ln_je, &law);
-            let gn = [(rows[0] + rows[1] + rows[2]).length(), rows[0].length(), rows[1].length(), rows[2].length()];
+            let gn = [
+                (rows[0] + rows[1] + rows[2]).length(),
+                rows[0].length(),
+                rows[1].length(),
+                rows[2].length(),
+            ];
             let gsum: f64 = gn.iter().sum();
             // J |F^-1|^2 <= Je e^-e_c e^(2 e_c) / s_min(Fe)^2 (|Fp^-1| <= e^e_c).
-            let c_scale = if t.eta > 0.0 { t.eta * je * e_c.exp() / eig.lower } else { 0.0 };
+            let c_scale = if t.eta > 0.0 {
+                t.eta * je * e_c.exp() / eig.lower
+            } else {
+                0.0
+            };
             let nodes = t.nodes;
             for a in 0..4 {
                 self.k_node[nodes[a]] += v * a_bound * gn[a] * gsum;
@@ -863,16 +960,25 @@ impl SolverM5 {
         let w2 = kmax / self.m_min;
         let g = cmax / self.m_min;
         let x = h * h * w2 + 2.0 * h * g;
-        // NaN or infinity fails too: `!(x < 4)`.
-        if !(x < 4.0) {
-            self.fail(format!("stiffness bound exceeded at substep {n}: h omega = {}", x.sqrt()));
+        // NaN or infinity fails too.
+        if x.is_nan() || x >= 4.0 {
+            self.fail(format!(
+                "stiffness bound exceeded at substep {n}: h omega = {}",
+                x.sqrt()
+            ));
         }
     }
 }
 
 impl Solver for SolverM5 {
     fn step(&mut self, s: State<'_>, h: f64) {
-        let State { pos, vel, beams, mass, gravity } = s;
+        let State {
+            pos,
+            vel,
+            beams,
+            mass,
+            gravity,
+        } = s;
         self.substep += 1;
         let n = self.substep;
         if pos.len() != self.n_nodes || vel.len() != self.n_nodes || mass.len() != self.n_nodes {
@@ -884,7 +990,10 @@ impl Solver for SolverM5 {
             return;
         }
         if h != self.h {
-            self.fail(format!("the m5 solver was built for h = {} s but substep {n} has h = {h} s", self.h));
+            self.fail(format!(
+                "the m5 solver was built for h = {} s but substep {n} has h = {h} s",
+                self.h
+            ));
             return;
         }
         // Gravity and the beams: the arithmetic and order of `SymplecticEuler`.

@@ -57,11 +57,13 @@ fn minv(m: &M) -> M {
         a[i][3 + i] = 1.0;
     }
     for col in 0..3 {
-        let p = (col..3).max_by(|&x, &y| a[x][col].abs().total_cmp(&a[y][col].abs())).unwrap();
+        let p = (col..3)
+            .max_by(|&x, &y| a[x][col].abs().total_cmp(&a[y][col].abs()))
+            .unwrap();
         a.swap(col, p);
         let d = a[col][col];
-        for j in 0..6 {
-            a[col][j] /= d;
+        for x in a[col].iter_mut() {
+            *x /= d;
         }
         for r in 0..3 {
             if r != col {
@@ -164,7 +166,11 @@ fn nh_p(f: &M, mu: f64, lam: f64) -> M {
 fn eig_sym(mut a: Vec<Vec<f64>>) -> Vec<f64> {
     let n = a.len();
     for _ in 0..100 {
-        let off: f64 = (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).filter(|(i, j)| i != j).map(|(i, j)| a[i][j] * a[i][j]).sum();
+        let off: f64 = (0..n)
+            .flat_map(|i| (0..n).map(move |j| (i, j)))
+            .filter(|(i, j)| i != j)
+            .map(|(i, j)| a[i][j] * a[i][j])
+            .sum();
         let diag: f64 = (0..n).map(|i| a[i][i] * a[i][i]).sum();
         if off <= 1e-30 * diag {
             break;
@@ -178,10 +184,10 @@ fn eig_sym(mut a: Vec<Vec<f64>>) -> Vec<f64> {
                 let t = th.signum() / (th.abs() + (th * th + 1.0).sqrt());
                 let c = 1.0 / (t * t + 1.0).sqrt();
                 let s = t * c;
-                for k in 0..n {
-                    let (akp, akq) = (a[k][p], a[k][q]);
-                    a[k][p] = c * akp - s * akq;
-                    a[k][q] = s * akp + c * akq;
+                for ak in a.iter_mut() {
+                    let (akp, akq) = (ak[p], ak[q]);
+                    ak[p] = c * akp - s * akq;
+                    ak[q] = s * akp + c * akq;
                 }
                 for k in 0..n {
                     let (apk, aqk) = (a[p][k], a[q][k]);
@@ -215,7 +221,11 @@ impl Rng {
     }
     fn unit(&mut self) -> Vec3 {
         loop {
-            let v = Vec3::new(self.range(-1.0, 1.0), self.range(-1.0, 1.0), self.range(-1.0, 1.0));
+            let v = Vec3::new(
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+            );
             let l = v.length();
             if l > 0.1 && l < 1.0 {
                 return v * (1.0 / l);
@@ -250,7 +260,12 @@ fn empty_body() -> Body {
 }
 
 fn solid(name: &str, plateau: f64, yield_strain: f64, damping: f64) -> Solid {
-    Solid { name: name.into(), plateau_stress: plateau, yield_strain, damping_ratio: damping }
+    Solid {
+        name: name.into(),
+        plateau_stress: plateau,
+        yield_strain,
+        damping_ratio: damping,
+    }
 }
 
 fn add_node(b: &mut Body, id: u32, p: Vec3, mass: f64) {
@@ -260,11 +275,19 @@ fn add_node(b: &mut Body, id: u32, p: Vec3, mass: f64) {
 fn add_beam(b: &mut Body, a: u32, c: u32, material: &str) {
     let pa = b.nodes.iter().find(|n| n.id == a).unwrap().pos;
     let pc = b.nodes.iter().find(|n| n.id == c).unwrap().pos;
-    b.beams.push(BodyBeam { a, b: c, material: material.into(), rest: (pa - pc).length() });
+    b.beams.push(BodyBeam {
+        a,
+        b: c,
+        material: material.into(),
+        rest: (pa - pc).length(),
+    });
 }
 
 fn add_tet(b: &mut Body, n: [u32; 4], s: &str) {
-    b.tets.push(Tet { nodes: n, solid: s.into() });
+    b.tets.push(Tet {
+        nodes: n,
+        solid: s.into(),
+    });
 }
 
 /// One tet on the unit right corner: nodes 0..3 at the origin and on the three axes, times
@@ -272,7 +295,12 @@ fn add_tet(b: &mut Body, n: [u32; 4], s: &str) {
 fn one_tet(plateau: f64, yield_strain: f64, damping: f64, size: f64, mass: f64, at: Vec3) -> Body {
     let mut b = empty_body();
     b.solids.push(solid("s", plateau, yield_strain, damping));
-    let p = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(size, 0.0, 0.0), Vec3::new(0.0, size, 0.0), Vec3::new(0.0, 0.0, size)];
+    let p = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(size, 0.0, 0.0),
+        Vec3::new(0.0, size, 0.0),
+        Vec3::new(0.0, 0.0, size),
+    ];
     for (i, q) in p.iter().enumerate() {
         add_node(&mut b, i as u32, *q + at, mass);
     }
@@ -384,7 +412,10 @@ fn m5_constants_are_the_frozen_lines() {
         lines[0][want.len()..].to_string()
     };
     assert_eq!(line("m5_max_tets").parse::<usize>().unwrap(), M5_MAX_TETS);
-    assert_eq!(line("poisson_ratio").parse::<f64>().unwrap(), solver_m5::POISSON_RATIO);
+    assert_eq!(
+        line("poisson_ratio").parse::<f64>().unwrap(),
+        solver_m5::POISSON_RATIO
+    );
     let lockup = line("lockup");
     let want = format!(
         "eps_D = min({}, 1 - {} phi_zone); phi_zone = zone_mass / (zone_volume * {});",
@@ -392,9 +423,14 @@ fn m5_constants_are_the_frozen_lines() {
         solver_m5::LOCKUP_SLOPE,
         solver_m5::STEEL_DENSITY
     );
-    assert!(lockup.starts_with(&want), "lock-up line `{lockup}` does not start `{want}`");
+    assert!(
+        lockup.starts_with(&want),
+        "lock-up line `{lockup}` does not start `{want}`"
+    );
     assert!(lockup.ends_with("flow stops at e_c = eps_D - sqrt(eps_D yield_strain)"));
-    assert!(line("m5_method").contains("an inverted tet or an exceeded stiffness bound ends the run with a named error"));
+    assert!(line("m5_method").contains(
+        "an inverted tet or an exceeded stiffness bound ends the run with a named error"
+    ));
     // R4e: the failure constant of decision 6 of the note.
     assert_eq!(J_MIN_FAIL, 0.05);
 }
@@ -420,12 +456,23 @@ fn a_body_with_tets_is_refused_by_a_solver_without_solids() {
     b.solids.push(solid("s", 1e5, 0.02, 0.0));
     add_grid(&mut b, 1, 1, 1, 1.0, Vec3::new(0.0, 5.0, 0.0), 1.0);
     add_tet_cells(&mut b, 0..1, 1, 1, "s");
-    let cfg = Config { dt: 0.001, substeps: 10, ..Config::default() };
+    let cfg = Config {
+        dt: 0.001,
+        substeps: 10,
+        ..Config::default()
+    };
     let want = "the body has 6 tets, which this solver does not simulate (they would be dropped): tets are simulated by `solver_m5::SolverM5` (docs/PHYSICS.md, \"Solids\")";
-    let e = Sim::from_body_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler)).err().unwrap();
+    let e = Sim::from_body_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler))
+        .err()
+        .unwrap();
     assert_eq!(e, want);
     assert_eq!(Sim::from_body(cfg.clone(), &b).err().unwrap(), want);
-    assert_eq!(Sim::from_car_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler)).err().unwrap(), want);
+    assert_eq!(
+        Sim::from_car_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler))
+            .err()
+            .unwrap(),
+        want
+    );
     // The m5 solver takes it.
     let m5 = SolverM5::from_body(&b, cfg.dt / cfg.substeps as f64).unwrap();
     assert!(Sim::from_body_with_solver(cfg, &b, Box::new(m5)).is_ok());
@@ -442,7 +489,11 @@ fn piola_and_energy_are_the_neo_hookean_formulas() {
     let mut rng = Rng(0x5eed_0001);
     for _ in 0..300 {
         // stretches 0.3 to 3, a shear, two rotations
-        let s = [rng.range(0.3f64.ln(), 3f64.ln()).exp(), rng.range(0.3f64.ln(), 3f64.ln()).exp(), rng.range(0.3f64.ln(), 3f64.ln()).exp()];
+        let s = [
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+        ];
         let mut shear = eye();
         shear[0][1] = rng.range(-1.0, 1.0);
         let d: M = [[s[0], 0.0, 0.0], [0.0, s[1], 0.0], [0.0, 0.0, s[2]]];
@@ -452,13 +503,19 @@ fn piola_and_energy_are_the_neo_hookean_formulas() {
         let scale = fnorm(&q);
         for i in 0..3 {
             for j in 0..3 {
-                assert!((p[i][j] - q[i][j]).abs() <= ROUND * scale, "P differs at {i}{j}: {} vs {}", p[i][j], q[i][j]);
+                assert!(
+                    (p[i][j] - q[i][j]).abs() <= ROUND * scale,
+                    "P differs at {i}{j}: {} vs {}",
+                    p[i][j],
+                    q[i][j]
+                );
             }
         }
         let w = solver_m5::energy_density(&f, &law);
         let wt = nh_w(&f, mu, lam);
         // W is a sum of terms of size mu |F|^2: compare against that scale.
-        let wscale = mu * fnorm(&f).powi(2) + lam * mdet(&f).ln().powi(2) + mu * mdet(&f).ln().abs();
+        let wscale =
+            mu * fnorm(&f).powi(2) + lam * mdet(&f).ln().powi(2) + mu * mdet(&f).ln().abs();
         assert!((w - wt).abs() <= ROUND * wscale, "W {w} vs {wt}");
     }
     // Not a positive volume: infinite energy.
@@ -484,7 +541,11 @@ fn piola_matches_linear_elasticity_at_small_strain() {
     for i in 0..3 {
         for j in 0..3 {
             let lin = eps * (mu * (e[i][j] + e[j][i]) + if i == j { lam * tr } else { 0.0 });
-            assert!((p[i][j] - lin).abs() <= SMALL_STRAIN * eps * (mu + lam), "P{i}{j} {} vs linear {lin}", p[i][j]);
+            assert!(
+                (p[i][j] - lin).abs() <= SMALL_STRAIN * eps * (mu + lam),
+                "P{i}{j} {} vs linear {lin}",
+                p[i][j]
+            );
         }
     }
 }
@@ -511,20 +572,32 @@ fn compressive_force_grows_without_bound_as_je_goes_to_zero() {
         pos[1] = at + Vec3::new(j, 0.0, 0.0); // F = diag(j, 1, 1)
         let f = s.tet_forces(&pos, &[Vec3::ZERO; 4]);
         assert_eq!(s.check(), None);
-        assert!(f[1].x > last, "the force must keep growing as Je falls ({} after {last})", f[1].x);
+        assert!(
+            f[1].x > last,
+            "the force must keep growing as Je falls ({} after {last})",
+            f[1].x
+        );
         last = f[1].x;
         if (s.plastic_strain(0) - e_max).abs() <= LAW {
             // f_1 = -V P e1, V = 1/6.
             let je = j * e_max.exp();
             let p11 = (mu * je + (lam * je.ln() - mu) / je) * e_max.exp();
             let want = -p11 / 6.0;
-            assert!((f[1].x - want).abs() <= LAW * want.abs(), "Je {je}: f {} vs {want}", f[1].x);
+            assert!(
+                (f[1].x - want).abs() <= LAW * want.abs(),
+                "Je {je}: f {} vs {want}",
+                f[1].x
+            );
             checked += 1;
         }
     }
     assert!(checked >= 80, "only {checked} locked points");
     // f_1 = -P11 / 6: near J_MIN_FAIL the stress is over 10 times the plateau.
-    assert!(6.0 * last > 10.0 * plateau, "near J_MIN_FAIL the stress {} is not far above the plateau", 6.0 * last);
+    assert!(
+        6.0 * last > 10.0 * plateau,
+        "near J_MIN_FAIL the stress {} is not far above the plateau",
+        6.0 * last
+    );
     let law = law_of(plateau, ys);
     let mut last = 0.0;
     let mut svk_last = f64::INFINITY;
@@ -537,8 +610,14 @@ fn compressive_force_grows_without_bound_as_je_goes_to_zero() {
         assert!(svk < svk_last, "SVK falls toward zero");
         svk_last = svk;
     }
-    assert!(svk_last < 1e-5 * mu, "SVK's stress at Je = 1e-6 is {svk_last}");
-    assert!(last > 1e5 * plateau, "at Je = 1e-6 the stress {last} is far above any yield stress");
+    assert!(
+        svk_last < 1e-5 * mu,
+        "SVK's stress at Je = 1e-6 is {svk_last}"
+    );
+    assert!(
+        last > 1e5 * plateau,
+        "at Je = 1e-6 the stress {last} is far above any yield stress"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -599,27 +678,47 @@ fn confined_compression_plateau_unload_and_lockup() {
         x -= 1e-3;
         let (tau, e_c) = eval(&mut s, x);
         assert_eq!(s.check(), None);
-        assert!(e_c >= last_ec - LAW, "e_c must not fall while loading: {e_c} after {last_ec}");
+        assert!(
+            e_c >= last_ec - LAW,
+            "e_c must not fall while loading: {e_c} after {last_ec}"
+        );
         let detfp = mdet(&as_m(&s.fp(0)));
-        assert!(detfp <= last_detfp, "det Fp must never increase: {detfp} after {last_detfp}");
+        assert!(
+            detfp <= last_detfp,
+            "det Fp must never increase: {detfp} after {last_detfp}"
+        );
         last_detfp = detfp;
         if e_c > LAW {
             first_yield.get_or_insert(x);
             // det Fp = e^-e_c (each flow takes e^-d off it).
-            assert!((detfp - (-e_c).exp()).abs() <= LAW, "det Fp {detfp} vs e^-e_c {}", (-e_c).exp());
+            assert!(
+                (detfp - (-e_c).exp()).abs() <= LAW,
+                "det Fp {detfp} vs e^-e_c {}",
+                (-e_c).exp()
+            );
             if e_c < e_max - LAW {
-                assert!((-tau - sigma_y(e_c)).abs() <= LAW * sigma_y(e_c), "tau {tau} vs sigma_y {}", sigma_y(e_c));
+                assert!(
+                    (-tau - sigma_y(e_c)).abs() <= LAW * sigma_y(e_c),
+                    "tau {tau} vs sigma_y {}",
+                    sigma_y(e_c)
+                );
                 if sigma_y(e_c) <= plateau * (1.0 + R4_PLATEAU) {
                     assert!((-tau / plateau - 1.0).abs() <= R4_PLATEAU);
                     plateau_points += 1;
                 }
             } else {
                 // Locked: e_c stays at e_max and the stress climbs above the yield stress.
-                assert!((e_c - e_max).abs() <= LAW, "lock-up e_c {e_c} vs e_max {e_max}");
+                assert!(
+                    (e_c - e_max).abs() <= LAW,
+                    "lock-up e_c {e_c} vs e_max {e_max}"
+                );
                 if locked_at.is_none() {
                     locked_at = Some(x);
                 } else {
-                    assert!(-tau > sigma_y(e_max), "past lock-up the stress {tau} is elastic, above sigma_y(e_max)");
+                    assert!(
+                        -tau > sigma_y(e_max),
+                        "past lock-up the stress {tau} is elastic, above sigma_y(e_max)"
+                    );
                 }
             }
         } else {
@@ -628,7 +727,10 @@ fn confined_compression_plateau_unload_and_lockup() {
         last_ec = e_c;
     }
     assert!(first_yield.is_some(), "the tet never yielded");
-    assert!(plateau_points >= 3, "only {plateau_points} points on the plateau");
+    assert!(
+        plateau_points >= 3,
+        "only {plateau_points} points on the plateau"
+    );
     assert!(locked_at.is_some(), "the tet never locked up");
     assert!((s.plastic_strain(0) - e_max).abs() <= LAW);
 
@@ -637,10 +739,16 @@ fn confined_compression_plateau_unload_and_lockup() {
     for _ in 0..50 {
         x += 2e-3;
         let (tau, e_c) = eval(&mut s, x);
-        assert!((e_c - e_fixed).abs() <= LAW, "unloading moved e_c: {e_c} vs {e_fixed}");
+        assert!(
+            (e_c - e_fixed).abs() <= LAW,
+            "unloading moved e_c: {e_c} vs {e_fixed}"
+        );
         let se = x * e_fixed.exp();
         let want = mu * (se * se - 1.0) + lam * se.ln();
-        assert!((tau - want).abs() <= LAW * plateau, "unloading tau {tau} vs elastic {want}");
+        assert!(
+            (tau - want).abs() <= LAW * plateau,
+            "unloading tau {tau} vs elastic {want}"
+        );
     }
 }
 
@@ -667,7 +775,11 @@ fn tension_never_yields() {
     let law = law_of(plateau, ys);
     let mut rng = Rng(0x5eed_0002);
     for _ in 0..300 {
-        let d: M = [[rng.range(1.0, 3.0), 0.0, 0.0], [0.0, rng.range(1.0, 3.0), 0.0], [0.0, 0.0, rng.range(1.0, 3.0)]];
+        let d: M = [
+            [rng.range(1.0, 3.0), 0.0, 0.0],
+            [0.0, rng.range(1.0, 3.0), 0.0],
+            [0.0, 0.0, rng.range(1.0, 3.0)],
+        ];
         let f = mmul(&mmul(&rng.rotation(), &d), &rng.rotation());
         assert_eq!(solver_m5::return_map(&f, 0.0, &law), None);
     }
@@ -688,10 +800,20 @@ fn return_mapping_signs_bracket_and_dissipation() {
     for _ in 0..2000 {
         // One compressed direction, the others at or above 1: the flow (which never takes s1
         // past 1) keeps it the smallest stretch, so this file's own eigen-solve finds it.
-        let d: M = [[rng.range(0.6, 1.0), 0.0, 0.0], [0.0, rng.range(1.0, 1.05), 0.0], [0.0, 0.0, rng.range(1.0, 1.05)]];
+        let d: M = [
+            [rng.range(0.6, 1.0), 0.0, 0.0],
+            [0.0, rng.range(1.0, 1.05), 0.0],
+            [0.0, 0.0, rng.range(1.0, 1.05)],
+        ];
         let f = mmul(&mmul(&rng.rotation(), &d), &rng.rotation());
-        let e_c = if rng.next() < 0.2 { rng.range(0.9 * e_max, e_max) } else { rng.range(0.0, e_max) };
-        let Some(fl) = solver_m5::return_map(&f, e_c, &law) else { continue };
+        let e_c = if rng.next() < 0.2 {
+            rng.range(0.9 * e_max, e_max)
+        } else {
+            rng.range(0.0, e_max)
+        };
+        let Some(fl) = solver_m5::return_map(&f, e_c, &law) else {
+            continue;
+        };
         flowed += 1;
         let fe2 = solver_m5::apply_flow(&f, &fl);
         let s1 = smallest_stretch2(&f).sqrt();
@@ -701,7 +823,10 @@ fn return_mapping_signs_bracket_and_dissipation() {
         assert!(tau < 0.0, "a flow needs a compressive tau1: {tau}");
         assert!(fl.d > 0.0);
         assert!(s1b > s1, "s1 must grow: {s1} -> {s1b}");
-        assert!(taub.abs() < tau.abs(), "|tau1| must shrink: {tau} -> {taub}");
+        assert!(
+            taub.abs() < tau.abs(),
+            "|tau1| must shrink: {tau} -> {taub}"
+        );
         assert!(fl.g0 < 0.0);
         if fl.capped {
             assert!(fl.g_hi < 0.0);
@@ -710,13 +835,23 @@ fn return_mapping_signs_bracket_and_dissipation() {
         } else {
             assert!(fl.g_hi >= 0.0);
             // The root: the stress sits on the yield surface at e_c + d.
-            assert!((taub + sigma_y(e_c + fl.d)).abs() <= LAW * sigma_y(e_c + fl.d), "tau1' {taub} vs -sigma_y {}", sigma_y(e_c + fl.d));
+            assert!(
+                (taub + sigma_y(e_c + fl.d)).abs() <= LAW * sigma_y(e_c + fl.d),
+                "tau1' {taub} vs -sigma_y {}",
+                sigma_y(e_c + fl.d)
+            );
             solved += 1;
         }
         // Dissipation: the elastic energy goes down.
-        assert!(nh_w(&fe2, mu, lam) <= nh_w(&f, mu, lam), "a plastic update raised the energy");
+        assert!(
+            nh_w(&fe2, mu, lam) <= nh_w(&f, mu, lam),
+            "a plastic update raised the energy"
+        );
     }
-    assert!(flowed >= 500 && capped >= 10 && solved >= 100, "too few cases: {flowed} flowed, {capped} capped, {solved} solved");
+    assert!(
+        flowed >= 500 && capped >= 10 && solved >= 100,
+        "too few cases: {flowed} flowed, {capped} capped, {solved} solved"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -749,12 +884,20 @@ fn patch_test_uniform_strain_leaves_interior_node_unloaded() {
     let fmax = forces.iter().map(|x| x.length()).fold(0.0, f64::max);
     let interior = b.nodes.iter().position(|n| n.id == gid(1, 1, 1)).unwrap();
     assert!(fmax > 0.0);
-    assert!(forces[interior].length() <= CANCEL * fmax, "interior node force {:?}", forces[interior]);
+    assert!(
+        forces[interior].length() <= CANCEL * fmax,
+        "interior node force {:?}",
+        forces[interior]
+    );
     // A uniform velocity gradient (stretch rate) leaves it unloaded by the damping too.
     let l: M = [[3.0, 1.0, 0.0], [1.0, -2.0, 0.5], [0.0, 0.5, 1.0]];
     let vel: Vec<Vec3> = rest.iter().map(|x| mvec(&l, *x - c)).collect();
     let damped = s.tet_forces(&pos, &vel);
-    let dmax = damped.iter().zip(&forces).map(|(a, b)| (*a - *b).length()).fold(0.0, f64::max);
+    let dmax = damped
+        .iter()
+        .zip(&forces)
+        .map(|(a, b)| (*a - *b).length())
+        .fold(0.0, f64::max);
     assert!(dmax > 0.0, "the damping did not act");
     assert!(damped[interior].length() <= CANCEL * fmax.max(dmax));
 }
@@ -770,13 +913,19 @@ fn frame_invariance_and_rigid_spin_has_no_damping_force() {
     let rpos: Vec<Vec3> = pos.iter().map(|x| c + mvec(&r, *x - c)).collect();
     let mut s = SolverM5::from_body(&b, 1e-7).unwrap();
     let (e0, e1) = (s.elastic_energy(&pos), s.elastic_energy(&rpos));
-    assert!((e0 - e1).abs() <= ROUND * e0, "rotation changed the energy: {e0} vs {e1}");
+    assert!(
+        (e0 - e1).abs() <= ROUND * e0,
+        "rotation changed the energy: {e0} vs {e1}"
+    );
     let zero = vec![Vec3::ZERO; pos.len()];
     let f0 = s.tet_forces(&pos, &zero);
     let f1 = s.tet_forces(&rpos, &zero);
     let fmax = f0.iter().map(|x| x.length()).fold(0.0, f64::max);
     for (a, b) in f0.iter().zip(&f1) {
-        assert!((mvec(&r, *a) - *b).length() <= CANCEL * fmax, "forces do not rotate with the body");
+        assert!(
+            (mvec(&r, *a) - *b).length() <= CANCEL * fmax,
+            "forces do not rotate with the body"
+        );
     }
     // A rigid spin of the undeformed block: no elastic and no damping force.
     let w = Vec3::new(10.0, -20.0, 5.0);
@@ -784,7 +933,10 @@ fn frame_invariance_and_rigid_spin_has_no_damping_force() {
     let spin = s.tet_forces(&rest, &vel);
     let ref_scale = fmax;
     for x in &spin {
-        assert!(x.length() <= CANCEL * ref_scale, "a rigid spin gave force {x:?}");
+        assert!(
+            x.length() <= CANCEL * ref_scale,
+            "a rigid spin gave force {x:?}"
+        );
     }
 }
 
@@ -800,13 +952,25 @@ fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
     // A very soft solid (E = 20 Pa), so the tet's resistance hardly slows the node.
     b.solids.push(solid("s", 10.0, 0.5, 0.0));
     let at = Vec3::new(0.0, 100.0, 0.0);
-    let p = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0)];
+    let p = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    ];
     for (i, q) in p.iter().enumerate() {
         add_node(&mut b, i as u32, *q + at, 1.0);
     }
     add_tet(&mut b, [0, 2, 1, 3], "s"); // below the face z = 0
     add_tet(&mut b, [0, 1, 2, 4], "s"); // above it
-    let cfg = Config { dt: 0.001, substeps: 10, gravity: 0.0, duration: 1.0, ..Config::default() };
+    let cfg = Config {
+        dt: 0.001,
+        substeps: 10,
+        gravity: 0.0,
+        duration: 1.0,
+        ..Config::default()
+    };
     let h = cfg.dt / cfg.substeps as f64;
     let m5 = SolverM5::from_body(&b, h).unwrap();
     let mut sim = Sim::from_body_with_solver(cfg.clone(), &b, Box::new(m5)).unwrap();
@@ -822,7 +986,10 @@ fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
     for step in 0..1000 {
         sim.advance();
         match sim.check() {
-            Ok(()) => assert!(((step + 1) * 10) < n_free + 10, "no error long after the free-flight substep"),
+            Ok(()) => assert!(
+                ((step + 1) * 10) < n_free + 10,
+                "no error long after the free-flight substep"
+            ),
             Err(e) => {
                 err = Some(e);
                 break;
@@ -836,9 +1003,18 @@ fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
     let (n, je) = rest.split_once(": Je = ").expect("`: Je = ` in the error");
     let n: u64 = n.parse().unwrap();
     let je: f64 = je.parse().unwrap();
-    assert!(n >= n_free - 1 && n <= n_free + 2, "substep {n}, free flight {n_free}");
+    assert!(
+        n >= n_free - 1 && n <= n_free + 2,
+        "substep {n}, free flight {n_free}"
+    );
     assert!(je <= J_MIN_FAIL && je.is_finite(), "Je = {je}");
-    assert!(sim.pos.iter().chain(&sim.vel).all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()), "a NaN entered the state");
+    assert!(
+        sim.pos
+            .iter()
+            .chain(&sim.vel)
+            .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()),
+        "a NaN entered the state"
+    );
 }
 
 /// R4e: a NaN node ends the run with the same named error (through the solver and through
@@ -852,16 +1028,41 @@ fn a_nan_node_ends_the_run_with_the_named_error() {
     let mut vel = vec![Vec3::ZERO; 4];
     pos[2].y = f64::NAN;
     let mass = vec![1.0; 4];
-    s.step(State { pos: &mut pos, vel: &mut vel, beams: &[], mass: &mass, gravity: 0.0 }, 1e-5);
-    assert_eq!(s.check(), Some("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string()));
-    assert!(vel.iter().all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()), "a NaN entered the force array");
+    s.step(
+        State {
+            pos: &mut pos,
+            vel: &mut vel,
+            beams: &[],
+            mass: &mass,
+            gravity: 0.0,
+        },
+        1e-5,
+    );
+    assert_eq!(
+        s.check(),
+        Some("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string())
+    );
+    assert!(
+        vel.iter()
+            .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()),
+        "a NaN entered the force array"
+    );
 
-    let cfg = Config { dt: 1e-4, substeps: 10, gravity: 0.0, duration: 1.0, ..Config::default() };
+    let cfg = Config {
+        dt: 1e-4,
+        substeps: 10,
+        gravity: 0.0,
+        duration: 1.0,
+        ..Config::default()
+    };
     let m5 = SolverM5::from_body(&b, cfg.dt / cfg.substeps as f64).unwrap();
     let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
     sim.pos[2].x = f64::NAN;
     sim.advance();
-    assert_eq!(sim.check(), Err("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string()));
+    assert_eq!(
+        sim.check(),
+        Err("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string())
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -890,7 +1091,10 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
     assert!(refused(&over, 1e-5).starts_with("the body has 301 tets"));
 
     for h in [0.0, -1e-5, f64::NAN, f64::INFINITY] {
-        assert!(refused(&good(), h).ends_with("s must be a positive finite number"), "h = {h}");
+        assert!(
+            refused(&good(), h).ends_with("s must be a positive finite number"),
+            "h = {h}"
+        );
     }
 
     let mut nan = good();
@@ -898,30 +1102,92 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
     assert_eq!(refused(&nan, 1e-5), "node 3: its position is not finite");
     let mut heavy = good();
     heavy.nodes[1].mass = 0.0;
-    assert_eq!(refused(&heavy, 1e-5), "node 1: its mass 0 must be a positive finite number");
+    assert_eq!(
+        refused(&heavy, 1e-5),
+        "node 1: its mass 0 must be a positive finite number"
+    );
     let mut twice = good();
     twice.nodes[2].id = 1;
     assert_eq!(refused(&twice, 1e-5), "node id 1 is given twice");
 
     let mut beamy = good();
-    beamy.materials.push(Material { name: "m".into(), stiffness: 1e3, damping: 0.0, yield_strain: None, break_strain: None });
-    beamy.beams.push(BodyBeam { a: 0, b: 9, material: "m".into(), rest: 1.0 });
+    beamy.materials.push(Material {
+        name: "m".into(),
+        stiffness: 1e3,
+        damping: 0.0,
+        yield_strain: None,
+        break_strain: None,
+    });
+    beamy.beams.push(BodyBeam {
+        a: 0,
+        b: 9,
+        material: "m".into(),
+        rest: 1.0,
+    });
     assert_eq!(refused(&beamy, 1e-5), "beam 0 is on a missing node");
-    beamy.beams[0] = BodyBeam { a: 0, b: 1, material: "nope".into(), rest: 1.0 };
-    assert_eq!(refused(&beamy, 1e-5), "beam 0 names a missing material `nope`");
+    beamy.beams[0] = BodyBeam {
+        a: 0,
+        b: 1,
+        material: "nope".into(),
+        rest: 1.0,
+    };
+    assert_eq!(
+        refused(&beamy, 1e-5),
+        "beam 0 names a missing material `nope`"
+    );
 
     let mut dup = good();
     dup.solids.push(solid("s", 1e6, 0.02, 0.0));
     assert_eq!(refused(&dup, 1e-5), "solid `s` is given twice");
     for (p, y, z, want) in [
-        (0.0, 0.02, 0.0, "solid `s`: plateau_stress 0 must be a positive finite number"),
-        (f64::NAN, 0.02, 0.0, "solid `s`: plateau_stress NaN must be a positive finite number"),
-        (1e6, 0.0, 0.0, "solid `s`: yield_strain 0 must be > 0 and < 1"),
-        (1e6, 1.0, 0.0, "solid `s`: yield_strain 1 must be > 0 and < 1"),
-        (1e6, f64::NAN, 0.0, "solid `s`: yield_strain NaN must be > 0 and < 1"),
-        (1e6, 0.02, -0.1, "solid `s`: damping_ratio -0.1 must be >= 0 and <= 1"),
-        (1e6, 0.02, 1.5, "solid `s`: damping_ratio 1.5 must be >= 0 and <= 1"),
-        (1e6, 0.02, f64::NAN, "solid `s`: damping_ratio NaN must be >= 0 and <= 1"),
+        (
+            0.0,
+            0.02,
+            0.0,
+            "solid `s`: plateau_stress 0 must be a positive finite number",
+        ),
+        (
+            f64::NAN,
+            0.02,
+            0.0,
+            "solid `s`: plateau_stress NaN must be a positive finite number",
+        ),
+        (
+            1e6,
+            0.0,
+            0.0,
+            "solid `s`: yield_strain 0 must be > 0 and < 1",
+        ),
+        (
+            1e6,
+            1.0,
+            0.0,
+            "solid `s`: yield_strain 1 must be > 0 and < 1",
+        ),
+        (
+            1e6,
+            f64::NAN,
+            0.0,
+            "solid `s`: yield_strain NaN must be > 0 and < 1",
+        ),
+        (
+            1e6,
+            0.02,
+            -0.1,
+            "solid `s`: damping_ratio -0.1 must be >= 0 and <= 1",
+        ),
+        (
+            1e6,
+            0.02,
+            1.5,
+            "solid `s`: damping_ratio 1.5 must be >= 0 and <= 1",
+        ),
+        (
+            1e6,
+            0.02,
+            f64::NAN,
+            "solid `s`: damping_ratio NaN must be >= 0 and <= 1",
+        ),
     ] {
         let mut b = good();
         b.solids[0] = solid("s", p, y, z);
@@ -941,28 +1207,53 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
     // Zero volume (four coplanar nodes) and collinear nodes.
     let mut flat = good();
     flat.nodes[3].pos = at + Vec3::new(1.0, 1.0, 0.0);
-    assert!(refused(&flat, 1e-5).starts_with("tet 0 (0 1 2 3): its rest volume 0 is below the minimum"), "{}", refused(&flat, 1e-5));
+    assert!(
+        refused(&flat, 1e-5).starts_with("tet 0 (0 1 2 3): its rest volume 0 is below the minimum"),
+        "{}",
+        refused(&flat, 1e-5)
+    );
     let mut line = good();
     line.nodes[2].pos = at + Vec3::new(2.0, 0.0, 0.0);
     line.nodes[3].pos = at + Vec3::new(3.0, 0.0, 0.0);
-    assert!(refused(&line, 1e-5).starts_with("tet 0 (0 1 2 3): its rest volume 0 is below the minimum"));
+    assert!(
+        refused(&line, 1e-5).starts_with("tet 0 (0 1 2 3): its rest volume 0 is below the minimum")
+    );
     // A sliver: volume above the minimum only because it is large.
     let mut sliver = good();
-    for (i, q) in [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1000.0, 0.0, 0.0), Vec3::new(0.0, 1000.0, 0.0), Vec3::new(0.0, 0.0, 1e-4)].iter().enumerate() {
+    for (i, q) in [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1000.0, 0.0, 0.0),
+        Vec3::new(0.0, 1000.0, 0.0),
+        Vec3::new(0.0, 0.0, 1e-4),
+    ]
+    .iter()
+    .enumerate()
+    {
         sliver.nodes[i].pos = *q;
     }
     assert!(refused(&sliver, 1e-5).starts_with("tet 0 (0 1 2 3) is too flat"));
     let mut inv = good();
     inv.tets[0].nodes = [0, 2, 1, 3];
-    assert!(refused(&inv, 1e-5).starts_with("tet 0 (0 2 1 3) is inverted: its rest volume -0.16666"));
+    assert!(
+        refused(&inv, 1e-5).starts_with("tet 0 (0 2 1 3) is inverted: its rest volume -0.16666")
+    );
     let mut far = good();
     far.nodes[1].pos.x = 1e300;
     far.nodes[2].pos.y = 1e300;
     far.nodes[3].pos.z = 1e300;
-    assert_eq!(refused(&far, 1e-5), "tet 0 (0 1 2 3): its size is not finite");
+    assert_eq!(
+        refused(&far, 1e-5),
+        "tet 0 (0 1 2 3): its size is not finite"
+    );
     let mut same = good();
-    same.tets.push(Tet { nodes: [0, 2, 3, 1], solid: "s".into() });
-    assert_eq!(refused(&same, 1e-5), "tet 1 (0 2 3 1) is on the same four nodes as tet 0");
+    same.tets.push(Tet {
+        nodes: [0, 2, 3, 1],
+        solid: "s".into(),
+    });
+    assert_eq!(
+        refused(&same, 1e-5),
+        "tet 1 (0 2 3 1) is on the same four nodes as tet 0"
+    );
 
     // A node shared by tets of two solids.
     let mut two = good();
@@ -970,7 +1261,10 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
     add_node(&mut two, 4, at + Vec3::new(1.0, 1.0, 1.0), 1.0);
     add_tet(&mut two, [1, 2, 3, 4], "u");
     let e = refused(&two, 1e-5);
-    assert_eq!(e, "tet 1 (1 2 3 4): node 1 is shared by tets of two solids, `s` and `u`");
+    assert_eq!(
+        e,
+        "tet 1 (1 2 3 4): node 1 is shared by tets of two solids, `s` and `u`"
+    );
 
     // A zone so dense its lock-up strain is not above the yield strain: phi = 4 m / (V 7850).
     let mut dense = good();
@@ -1016,18 +1310,28 @@ fn tangent_bound_covers_the_finite_difference_tangent() {
     let at_rest = fd_max(&eye());
     let bound_rest = solver_m5::tangent_bound(&eye(), &law);
     assert!((at_rest - (2.0 * mu + 3.0 * lam)).abs() <= FD * at_rest);
-    assert!(bound_rest >= at_rest * (1.0 - FD) && bound_rest <= at_rest * (1.0 + FD), "bound at rest {bound_rest} vs {at_rest}");
+    assert!(
+        bound_rest >= at_rest * (1.0 - FD) && bound_rest <= at_rest * (1.0 + FD),
+        "bound at rest {bound_rest} vs {at_rest}"
+    );
     let mut rng = Rng(0x5eed_0004);
     let mut worst = f64::INFINITY;
     for _ in 0..200 {
-        let s = [rng.range(0.3f64.ln(), 3f64.ln()).exp(), rng.range(0.3f64.ln(), 3f64.ln()).exp(), rng.range(0.3f64.ln(), 3f64.ln()).exp()];
+        let s = [
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+            rng.range(0.3f64.ln(), 3f64.ln()).exp(),
+        ];
         let mut shear = eye();
         shear[0][2] = rng.range(-1.0, 1.0);
         let d: M = [[s[0], 0.0, 0.0], [0.0, s[1], 0.0], [0.0, 0.0, s[2]]];
         let f = mmul(&mmul(&rng.rotation(), &mmul(&shear, &d)), &rng.rotation());
         let exact = fd_max(&f);
         let bound = solver_m5::tangent_bound(&f, &law);
-        assert!(bound >= exact * (1.0 - FD), "bound {bound} below the tangent's {exact} at F = {f:?}");
+        assert!(
+            bound >= exact * (1.0 - FD),
+            "bound {bound} below the tangent's {exact} at F = {f:?}"
+        );
         worst = worst.min(bound / exact);
     }
     assert!(worst.is_finite() && worst >= 1.0 - FD);
@@ -1051,8 +1355,16 @@ fn step_limit_closed_form_below_runs_above_is_refused() {
     assert!((probe.step_limit() - limit).abs() <= ROUND * limit);
 
     let e = refused(&b, limit * 1.001);
-    assert!(e.starts_with("physics step h = dt/substeps = ") && e.contains("reaches the m5 stability limit") && e.ends_with("raise --substeps or lower --dt"), "{e}");
-    assert!(SolverM5::from_body(&b, limit).is_err(), "h = limit itself is refused (h omega < 2 is strict)");
+    assert!(
+        e.starts_with("physics step h = dt/substeps = ")
+            && e.contains("reaches the m5 stability limit")
+            && e.ends_with("raise --substeps or lower --dt"),
+        "{e}"
+    );
+    assert!(
+        SolverM5::from_body(&b, limit).is_err(),
+        "h = limit itself is refused (h omega < 2 is strict)"
+    );
 
     let h = limit * 0.999;
     let mut s = SolverM5::from_body(&b, h).unwrap();
@@ -1063,7 +1375,16 @@ fn step_limit_closed_form_below_runs_above_is_refused() {
     let mass = vec![m; 4];
     let e0 = 0.5 * m * vel[1].dot(vel[1]);
     for k in 0..10_000 {
-        s.step(State { pos: &mut pos, vel: &mut vel, beams: &[], mass: &mass, gravity: 0.0 }, h);
+        s.step(
+            State {
+                pos: &mut pos,
+                vel: &mut vel,
+                beams: &[],
+                mass: &mass,
+                gravity: 0.0,
+            },
+            h,
+        );
         if k % 100 == 0 {
             assert_eq!(s.check(), None, "substep {k}");
         }
@@ -1077,7 +1398,11 @@ fn step_limit_closed_form_below_runs_above_is_refused() {
     let cap = e0 * (1.0 + q) / (1.0 - q) * (1.0 + R9_NONLINEAR);
     let ke: f64 = vel.iter().map(|v| 0.5 * m * v.dot(*v)).sum();
     let eel = s.elastic_energy(&pos);
-    assert!(ke + eel <= cap, "energy {} after 10 000 substeps above {cap} (start {e0})", ke + eel);
+    assert!(
+        ke + eel <= cap,
+        "energy {} after 10 000 substeps above {cap} (start {e0})",
+        ke + eel
+    );
 }
 
 /// R5b: a tet sheared during the run past the per-substep bound ends with exactly
@@ -1104,16 +1429,30 @@ fn a_tet_stretched_past_the_bound_ends_with_the_named_error() {
         let a = mu + (3.0 * lam + mu) / (smin * smin);
         h * h * (a * s3 * (3.0 + s3) / 6.0) >= 4.0
     };
-    let k_pred = (0..1000u64).find(|&k| trips(0.01 * k as f64)).expect("the closed form never trips");
+    let k_pred = (0..1000u64)
+        .find(|&k| trips(0.01 * k as f64))
+        .expect("the closed form never trips");
     let mut msg = None;
     for k in 0..1000u64 {
         let g = 0.01 * k as f64;
-        let mut pos: Vec<Vec3> = rest.iter().map(|x| {
-            let r = *x - at;
-            at + Vec3::new(r.x, r.y + g * r.x, r.z)
-        }).collect();
+        let mut pos: Vec<Vec3> = rest
+            .iter()
+            .map(|x| {
+                let r = *x - at;
+                at + Vec3::new(r.x, r.y + g * r.x, r.z)
+            })
+            .collect();
         let mut vel = vec![Vec3::ZERO; 4];
-        s.step(State { pos: &mut pos, vel: &mut vel, beams: &[], mass: &mass, gravity: 0.0 }, h);
+        s.step(
+            State {
+                pos: &mut pos,
+                vel: &mut vel,
+                beams: &[],
+                mass: &mass,
+                gravity: 0.0,
+            },
+            h,
+        );
         if let Some(e) = s.check() {
             msg = Some((k, e));
             break;
@@ -1126,9 +1465,19 @@ fn a_tet_stretched_past_the_bound_ends_with_the_named_error() {
     let n: u64 = n.parse().unwrap();
     let x: f64 = x.parse().unwrap();
     assert_eq!(n, k + 1, "the error names the substep it happened in");
-    assert_eq!(k, k_pred, "tripped at shear {} instead of the closed form's {}", 0.01 * k as f64, 0.01 * k_pred as f64);
+    assert_eq!(
+        k,
+        k_pred,
+        "tripped at shear {} instead of the closed form's {}",
+        0.01 * k as f64,
+        0.01 * k_pred as f64
+    );
     assert!(x >= 2.0, "h omega {x}");
-    assert!(k > 10, "it tripped at shear {}, before the shear had grown", 0.01 * k as f64);
+    assert!(
+        k > 10,
+        "it tripped at shear {}, before the shear had grown",
+        0.01 * k as f64
+    );
     assert_eq!(s.plastic_strain(0), 0.0);
 }
 
@@ -1158,22 +1507,38 @@ impl Solver for Counting {
 #[test]
 fn m5_solver_plugs_in() {
     let b = block_2x2x2(6.9e8, 0.69, 0.05);
-    let cfg = Config { dt: 1e-4, substeps: 100, gravity: 0.0, duration: 1.0, ..Config::default() };
+    let cfg = Config {
+        dt: 1e-4,
+        substeps: 100,
+        gravity: 0.0,
+        duration: 1.0,
+        ..Config::default()
+    };
     let h = cfg.dt / cfg.substeps as f64;
     let calls = Rc::new(Cell::new(0));
-    let solver = Counting { inner: SolverM5::from_body(&b, h).unwrap(), calls: calls.clone() };
+    let solver = Counting {
+        inner: SolverM5::from_body(&b, h).unwrap(),
+        calls: calls.clone(),
+    };
     let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(solver)).unwrap();
     for p in sim.pos.iter_mut() {
         p.x *= 1.001;
     }
-    let extent = |s: &Sim| s.pos.iter().map(|p| p.x).fold(f64::MIN, f64::max) - s.pos.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    let extent = |s: &Sim| {
+        s.pos.iter().map(|p| p.x).fold(f64::MIN, f64::max)
+            - s.pos.iter().map(|p| p.x).fold(f64::MAX, f64::min)
+    };
     let start = extent(&sim);
     for _ in 0..2 {
         sim.advance();
         sim.check().unwrap();
     }
     assert_eq!(calls.get(), 200);
-    assert!(extent(&sim) < start, "the stretched block did not contract: {} vs {start}", extent(&sim));
+    assert!(
+        extent(&sim) < start,
+        "the stretched block did not contract: {} vs {start}",
+        extent(&sim)
+    );
 }
 
 /// The CSV of a run, and the final positions and velocities as raw bits.
@@ -1184,7 +1549,12 @@ fn run_csv(mut sim: Sim, steps: u64) -> (String, Vec<u64>) {
         sim.check().unwrap();
         out.push(sim.sample());
     }
-    let bits = sim.pos.iter().chain(&sim.vel).flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()]).collect();
+    let bits = sim
+        .pos
+        .iter()
+        .chain(&sim.vel)
+        .flat_map(|v| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()])
+        .collect();
     (to_csv_with_broken(&out), bits)
 }
 
@@ -1194,13 +1564,25 @@ fn run_csv(mut sim: Sim, steps: u64) -> (String, Vec<u64>) {
 #[test]
 fn m5_same_input_same_bytes() {
     let mut b = block_2x2x2(1e6, 0.02, 0.05);
-    b.materials.push(Material { name: "m".into(), stiffness: 1e5, damping: 1.0, yield_strain: None, break_strain: None });
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: 1e5,
+        damping: 1.0,
+        yield_strain: None,
+        break_strain: None,
+    });
     add_grid(&mut b, 3, 2, 2, 0.2, Vec3::new(0.0, 100.0, 0.0), 1.0);
     b.nodes.sort_by_key(|n| n.id);
     b.nodes.dedup_by_key(|n| n.id);
     add_beam_cells(&mut b, 2..3, 2, 2, "m");
     let text = format::write(&b);
-    let cfg = Config { dt: 1e-4, substeps: 10, gravity: 9.81, duration: 1.0, ..Config::default() };
+    let cfg = Config {
+        dt: 1e-4,
+        substeps: 10,
+        gravity: 9.81,
+        duration: 1.0,
+        ..Config::default()
+    };
     let h = cfg.dt / cfg.substeps as f64;
     let run = || {
         let body = format::parse(&text).unwrap();
@@ -1215,7 +1597,10 @@ fn m5_same_input_same_bytes() {
     let (a, c) = (run(), run());
     assert!(a.0.lines().count() == 52);
     assert!(a.0 == c.0, "two runs of the same file differ");
-    assert!(a.1 == c.1, "two runs of the same file end in different bits");
+    assert!(
+        a.1 == c.1,
+        "two runs of the same file end in different bits"
+    );
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/scenarios/cube.bsn");
     let cube = format::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -1223,9 +1608,20 @@ fn m5_same_input_same_bytes() {
     let h = cfg.dt / cfg.substeps as f64;
     let steps = 500;
     let default = run_csv(Sim::from_body(cfg.clone(), &cube).unwrap(), steps);
-    let m5 = run_csv(Sim::from_body_with_solver(cfg.clone(), &cube, Box::new(SolverM5::from_body(&cube, h).unwrap())).unwrap(), steps);
+    let m5 = run_csv(
+        Sim::from_body_with_solver(
+            cfg.clone(),
+            &cube,
+            Box::new(SolverM5::from_body(&cube, h).unwrap()),
+        )
+        .unwrap(),
+        steps,
+    );
     assert_eq!(default.0.lines().count(), 502);
-    assert!(default.0 == m5.0, "the m5 solver with no tets differs from the default on the cube");
+    assert!(
+        default.0 == m5.0,
+        "the m5 solver with no tets differs from the default on the cube"
+    );
     assert!(default.1 == m5.1, "the final state differs in its bits");
 }
 
@@ -1246,17 +1642,26 @@ fn m5_coupling_creates_no_energy() {
     let c = 0.2;
     let mut b = empty_body();
     b.solids.push(solid("s", plateau, ys, 0.0));
-    b.materials.push(Material { name: "m".into(), stiffness: 1e11, damping: 0.0, yield_strain: None, break_strain: None });
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: 1e11,
+        damping: 0.0,
+        yield_strain: None,
+        break_strain: None,
+    });
     add_grid(&mut b, 4, 2, 2, c, Vec3::new(0.0, 100.0, 0.0), 1.0);
     add_tet_cells(&mut b, 0..2, 2, 2, "s");
     add_beam_cells(&mut b, 2..4, 2, 2, "m");
     assert_eq!(b.tets.len(), 48);
     let rest = positions(&b);
     let idx = |id: u32| b.nodes.iter().position(|n| n.id == id).unwrap();
-    let shared: Vec<usize> = (0..b.nodes.len()).filter(|&i| {
-        let id = b.nodes[i].id;
-        b.tets.iter().any(|t| t.nodes.contains(&id)) && b.beams.iter().any(|bm| bm.a == id || bm.b == id)
-    }).collect();
+    let shared: Vec<usize> = (0..b.nodes.len())
+        .filter(|&i| {
+            let id = b.nodes[i].id;
+            b.tets.iter().any(|t| t.nodes.contains(&id))
+                && b.beams.iter().any(|bm| bm.a == id || bm.b == id)
+        })
+        .collect();
     assert_eq!(shared.len(), 9);
 
     let probe = SolverM5::from_body(&b, 1e-15).unwrap();
@@ -1275,25 +1680,55 @@ fn m5_coupling_creates_no_energy() {
     let beams = crash_sim::format::Body::build(&b).beams;
 
     // This file's own energy: tets on their rest shape (no plastic flow at these strains).
-    let tet_rest: Vec<([usize; 4], M, f64)> = b.tets.iter().map(|t| {
-        let ns = t.nodes.map(idx);
-        let dm = [rest[ns[1]] - rest[ns[0]], rest[ns[2]] - rest[ns[0]], rest[ns[3]] - rest[ns[0]]];
-        let dmm: M = [[dm[0].x, dm[1].x, dm[2].x], [dm[0].y, dm[1].y, dm[2].y], [dm[0].z, dm[1].z, dm[2].z]];
-        (ns, minv(&dmm), mdet(&dmm) / 6.0)
-    }).collect();
+    let tet_rest: Vec<([usize; 4], M, f64)> = b
+        .tets
+        .iter()
+        .map(|t| {
+            let ns = t.nodes.map(idx);
+            let dm = [
+                rest[ns[1]] - rest[ns[0]],
+                rest[ns[2]] - rest[ns[0]],
+                rest[ns[3]] - rest[ns[0]],
+            ];
+            let dmm: M = [
+                [dm[0].x, dm[1].x, dm[2].x],
+                [dm[0].y, dm[1].y, dm[2].y],
+                [dm[0].z, dm[1].z, dm[2].z],
+            ];
+            (ns, minv(&dmm), mdet(&dmm) / 6.0)
+        })
+        .collect();
     let tet_energy = |pos: &[Vec3]| -> f64 {
-        tet_rest.iter().map(|(ns, dmi, v)| {
-            let d = [pos[ns[1]] - pos[ns[0]], pos[ns[2]] - pos[ns[0]], pos[ns[3]] - pos[ns[0]]];
-            let ds: M = [[d[0].x, d[1].x, d[2].x], [d[0].y, d[1].y, d[2].y], [d[0].z, d[1].z, d[2].z]];
-            v * nh_w(&mmul(&ds, dmi), mu, lam)
-        }).sum()
+        tet_rest
+            .iter()
+            .map(|(ns, dmi, v)| {
+                let d = [
+                    pos[ns[1]] - pos[ns[0]],
+                    pos[ns[2]] - pos[ns[0]],
+                    pos[ns[3]] - pos[ns[0]],
+                ];
+                let ds: M = [
+                    [d[0].x, d[1].x, d[2].x],
+                    [d[0].y, d[1].y, d[2].y],
+                    [d[0].z, d[1].z, d[2].z],
+                ];
+                v * nh_w(&mmul(&ds, dmi), mu, lam)
+            })
+            .sum()
     };
     let energy = |pos: &[Vec3], vel: &[Vec3]| -> (f64, f64) {
-        let ke: f64 = vel.iter().zip(&mass).map(|(v, m)| 0.5 * m * v.dot(*v)).sum();
-        let be: f64 = beams.iter().map(|bm| {
-            let st = (pos[bm.a] - pos[bm.b]).length() - bm.rest;
-            0.5 * bm.stiffness * st * st
-        }).sum();
+        let ke: f64 = vel
+            .iter()
+            .zip(&mass)
+            .map(|(v, m)| 0.5 * m * v.dot(*v))
+            .sum();
+        let be: f64 = beams
+            .iter()
+            .map(|bm| {
+                let st = (pos[bm.a] - pos[bm.b]).length() - bm.rest;
+                0.5 * bm.stiffness * st * st
+            })
+            .sum();
         let te = tet_energy(pos);
         (ke + be + te, te)
     };
@@ -1313,26 +1748,59 @@ fn m5_coupling_creates_no_energy() {
     let (p0, l0, ps, ls) = momentum(&pos, &vel);
     // Energy sits in the motion, the beams and the tets at the start (check definition: each
     // part is at least 1% of the total).
-    let ke0: f64 = vel.iter().zip(&mass).map(|(v, m)| 0.5 * m * v.dot(*v)).sum();
+    let ke0: f64 = vel
+        .iter()
+        .zip(&mass)
+        .map(|(v, m)| 0.5 * m * v.dot(*v))
+        .sum();
     let be0 = e0 - ke0 - te0;
-    assert!(ke0 > 0.01 * e0 && be0 > 0.01 * e0 && te0 > 0.01 * e0, "start energy: kinetic {ke0}, beams {be0}, tets {te0}");
+    assert!(
+        ke0 > 0.01 * e0 && be0 > 0.01 * e0 && te0 > 0.01 * e0,
+        "start energy: kinetic {ke0}, beams {be0}, tets {te0}"
+    );
     let cap = e0 * (1.0 + q) / (1.0 - q) * (1.0 + R9_NONLINEAR);
     let mut te_swing = 0.0f64;
     let mut e_max_seen = e0;
     for k in 0..20_000 {
-        s.step(State { pos: &mut pos, vel: &mut vel, beams: &beams, mass: &mass, gravity: 0.0 }, h);
+        s.step(
+            State {
+                pos: &mut pos,
+                vel: &mut vel,
+                beams: &beams,
+                mass: &mass,
+                gravity: 0.0,
+            },
+            h,
+        );
         let (e, te) = energy(&pos, &vel);
-        assert!(e <= cap, "substep {}: energy {e} above the bound {cap} (E0 {e0})", k + 1);
+        assert!(
+            e <= cap,
+            "substep {}: energy {e} above the bound {cap} (E0 {e0})",
+            k + 1
+        );
         e_max_seen = e_max_seen.max(e);
         te_swing = te_swing.max((te - te0).abs());
         let (p, l, _, _) = momentum(&pos, &vel);
-        assert!((p - p0).length() <= R9_MOMENTUM * ps, "substep {}: linear momentum moved by {}", k + 1, (p - p0).length());
-        assert!((l - l0).length() <= R9_MOMENTUM * ls, "substep {}: angular momentum moved by {}", k + 1, (l - l0).length());
+        assert!(
+            (p - p0).length() <= R9_MOMENTUM * ps,
+            "substep {}: linear momentum moved by {}",
+            k + 1,
+            (p - p0).length()
+        );
+        assert!(
+            (l - l0).length() <= R9_MOMENTUM * ls,
+            "substep {}: angular momentum moved by {}",
+            k + 1,
+            (l - l0).length()
+        );
     }
     assert_eq!(s.check(), None);
     assert_eq!(s.plastic_strain(0), 0.0);
     // Not vacuous: the tets' energy changed by much more than the allowance (a wave crossed).
-    assert!(te_swing > 0.1 * te0, "the tet energy barely moved: {te_swing} of {te0}");
+    assert!(
+        te_swing > 0.1 * te0,
+        "the tet energy barely moved: {te_swing} of {te0}"
+    );
     println!(
         "m5_coupling: h = {h:e} s, q = {q:.6}, E0 = {e0:e} J (tets {te0:e} J), max E / E0 = {:.9}, bound / E0 = {:.6}, largest tet energy swing / tet E0 = {:.4}",
         e_max_seen / e0,
@@ -1365,14 +1833,21 @@ fn cut_cell_is_six_positive_tets_and_conforming() {
             assert_ne!(a, c);
         }
     }
-    assert!((total - 1.0).abs() <= ROUND, "the tets fill {total} of the cell");
+    assert!(
+        (total - 1.0).abs() <= ROUND,
+        "the tets fill {total} of the cell"
+    );
     // Faces on the plane `axis = side` of a cell at offset `off`, as sorted corner positions.
     let faces_on = |off: [usize; 3], axis: usize, side: f64| -> Vec<[(i64, i64, i64); 3]> {
         let mut out = Vec::new();
         for t in solver_m5::cut_cell(corners(off[0], off[1], off[2])) {
-            let pts: Vec<(i64, i64, i64)> = t.iter().map(|&id| ((id / 100) as i64, ((id / 10) % 10) as i64, (id % 10) as i64)).collect();
+            let pts: Vec<(i64, i64, i64)> = t
+                .iter()
+                .map(|&id| ((id / 100) as i64, ((id / 10) % 10) as i64, (id % 10) as i64))
+                .collect();
             for skip in 0..4 {
-                let mut f: Vec<(i64, i64, i64)> = (0..4).filter(|&k| k != skip).map(|k| pts[k]).collect();
+                let mut f: Vec<(i64, i64, i64)> =
+                    (0..4).filter(|&k| k != skip).map(|k| pts[k]).collect();
                 let coord = |p: &(i64, i64, i64)| [p.0, p.1, p.2][axis] as f64;
                 if f.iter().all(|p| coord(p) == side) {
                     f.sort();
@@ -1389,7 +1864,10 @@ fn cut_cell_is_six_positive_tets_and_conforming() {
         let a = faces_on([0, 0, 0], axis, 1.0);
         let b = faces_on(next, axis, 1.0);
         assert_eq!(a.len(), 2, "a cell face is cut into two triangles");
-        assert_eq!(a, b, "the cells disagree on their shared face along axis {axis}");
+        assert_eq!(
+            a, b,
+            "the cells disagree on their shared face along axis {axis}"
+        );
     }
 }
 
