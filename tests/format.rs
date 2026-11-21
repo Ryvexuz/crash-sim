@@ -1807,8 +1807,17 @@ fn tiny_well_shaped_tets_either_side_of_the_minimum_volume() {
             .replacen("node 2 0 1 0 ", &format!("node 2 0 {e} 0 "), 1)
             .replacen("node 3 0 0 1 ", &format!("node 3 0 0 {e} "), 1)
     };
-    assert!(parse(&corner("0.0019")).is_ok(), "{:?}", parse(&corner("0.0019")).err());
-    expect_after(&corner("0.0018"), 10, "tet ", "is below the minimum 0.000000001 m^3");
+    assert!(
+        parse(&corner("0.0019")).is_ok(),
+        "{:?}",
+        parse(&corner("0.0019")).err()
+    );
+    expect_after(
+        &corner("0.0018"),
+        10,
+        "tet ",
+        "is below the minimum 0.000000001 m^3",
+    );
 }
 
 /// The caps of round 3, written out so this test fails if they change without it.
@@ -1817,16 +1826,31 @@ const CAP_TETS: usize = 1_000_000;
 
 #[test]
 fn refuse_more_solids_than_the_cap() {
-    assert_eq!((MAX_SOLIDS, MAX_TETS), (CAP_SOLIDS, CAP_TETS), "the caps changed: change this test too");
+    assert_eq!(
+        (MAX_SOLIDS, MAX_TETS),
+        (CAP_SOLIDS, CAP_TETS),
+        "the caps changed: change this test too"
+    );
     let mut text = String::from("bsn 3\n");
     for i in 0..CAP_SOLIDS + 1 {
-        text.push_str(&format!("solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"));
+        text.push_str(&format!(
+            "solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"
+        ));
     }
     text.push_str("node 0 0 0 0 mass 1\n");
     // the record after the cap, line 1 + cap + 1, at its keyword; every line above it passed
-    expect(&text, CAP_SOLIDS + 2, Some(1), &format!("too many solids: a body has at most {CAP_SOLIDS}"));
+    expect(
+        &text,
+        CAP_SOLIDS + 2,
+        Some(1),
+        &format!("too many solids: a body has at most {CAP_SOLIDS}"),
+    );
     // exactly the cap is accepted
-    let at_cap = text.replacen(&format!("solid s{CAP_SOLIDS} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"), "", 1);
+    let at_cap = text.replacen(
+        &format!("solid s{CAP_SOLIDS} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"),
+        "",
+        1,
+    );
     assert_eq!(parse(&at_cap).unwrap().solids.len(), CAP_SOLIDS);
 }
 
@@ -1837,7 +1861,8 @@ fn lattice(count: usize) -> String {
     let (nx, ny, nz) = (56usize, 56usize, 54usize);
     assert!(nx * ny * nz * 6 >= count);
     let id = |x: usize, y: usize, z: usize| x + (nx + 1) * (y + (ny + 1) * z);
-    let mut text = String::from("bsn 3\nsolid s plateau_stress 1 yield_strain 0.5 damping_ratio 0\n");
+    let mut text =
+        String::from("bsn 3\nsolid s plateau_stress 1 yield_strain 0.5 damping_ratio 0\n");
     for z in 0..=nz {
         for y in 0..=ny {
             for x in 0..=nx {
@@ -1845,7 +1870,14 @@ fn lattice(count: usize) -> String {
             }
         }
     }
-    let orders: [([usize; 3], bool); 6] = [([0, 1, 2], true), ([1, 2, 0], true), ([2, 0, 1], true), ([0, 2, 1], false), ([2, 1, 0], false), ([1, 0, 2], false)];
+    let orders: [([usize; 3], bool); 6] = [
+        ([0, 1, 2], true),
+        ([1, 2, 0], true),
+        ([2, 0, 1], true),
+        ([0, 2, 1], false),
+        ([2, 1, 0], false),
+        ([1, 0, 2], false),
+    ];
     let mut n = 0;
     'cells: for z in 0..nz {
         for y in 0..ny {
@@ -1875,11 +1907,19 @@ fn lattice(count: usize) -> String {
 fn refuse_more_tets_than_the_cap() {
     // a small lattice is valid: every tet positive and distinct
     let small = lattice(6 * 56 * 2);
-    assert_eq!(parse(&small).unwrap_or_else(|e| panic!("{e}")).tets.len(), 6 * 56 * 2);
+    assert_eq!(
+        parse(&small).unwrap_or_else(|e| panic!("{e}")).tets.len(),
+        6 * 56 * 2
+    );
     // cap + 1 tets: the last one is refused at its keyword, so the cap itself passed
     let text = lattice(CAP_TETS + 1);
     let last = text.split_terminator('\n').count();
-    expect(&text, last, Some(1), &format!("too many tets: a body has at most {CAP_TETS}"));
+    expect(
+        &text,
+        last,
+        Some(1),
+        &format!("too many tets: a body has at most {CAP_TETS}"),
+    );
 }
 
 #[test]
@@ -1901,7 +1941,12 @@ fn refuse_tet_whose_volume_is_not_finite() {
         .replacen("node 1 1 0 0 ", "node 1 1.2e103 0 0 ", 1)
         .replacen("node 2 0 1 0 ", "node 2 0 1.2e103 0 ", 1)
         .replacen("node 3 0 0 1 ", "node 3 0 0 1.2e103 ", 1);
-    expect_after(&vast, 10, "tet ", "tet 0 1 2 3: its size is not finite: its rest volume overflows f64");
+    expect_after(
+        &vast,
+        10,
+        "tet ",
+        "tet 0 1 2 3: its size is not finite: its rest volume overflows f64",
+    );
 }
 
 #[test]
