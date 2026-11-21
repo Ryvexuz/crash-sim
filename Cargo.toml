@@ -6,10 +6,8 @@ description = "Starter crash sim: a node-beam cube that falls and bounces, headl
 
 [dependencies]
 
-[profile.release]
-lto = "fat"
-codegen-units = 1
-
+# Release profile left at defaults: lto = "fat" + codegen-units = 1 was measured 2026-11-21 (task t-20261121-193206-2,
+# scratch/perfab/): box/cube/settle within noise, car +1.8% and +5.5% slower, build 3.34 s -> 7.84 s. Reverted.
 [lints.clippy]
 perf = { level = "deny", priority = -1 }
 
