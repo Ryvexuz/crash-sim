@@ -6,7 +6,7 @@ use std::process::exit;
 
 use crash_sim::input::{self, DriveParams, DriveRun, Script};
 use crash_sim::settle::{self, CarSetup, SettleParams};
-use crash_sim::{collide, Body};
+use crash_sim::{collide, pulse, reference, Body};
 
 /// Five optional numeric flags parsed together.
 type FiveOpt = (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
@@ -43,7 +43,73 @@ fn usage() -> ! {
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
     eprintln!("       crash-sim --body <file.bsn> [--input <file> [--drive-report ...]] --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
+    eprintln!("       crash-sim --body <file.bsn> --pulse-report <ref>.pulse.csv --duration <s> --dt <s> --substeps <n> --gravity <m/s^2> --pulse-sensor <group> --pulse-crush-groups <a>,<b> --pulse-cfc-shape <cfc> --pulse-cfc-int <cfc> --pulse-window <s> --pulse-threshold <m/s^2> --pulse-crush-tail <s> --setup-mass-tol <f> --setup-speed-tol <f> --margin-dv <f> --margin-peak <f> --margin-peak-time <s> --margin-duration <f> --margin-olc <f> --margin-static-crush <f> [--pulse-csv <path>] [--timing] [--solver node-beam]   (docs/STAGE6-M4-M5.md, \"The pulse report\")");
     exit(2)
+}
+
+/// The flags of `--pulse-report`, as given. Every one but `csv`, `timing` and `solver` is
+/// required (no default in code); `pulse_params` checks that and the values.
+#[derive(Default)]
+struct PulseFlags {
+    report: Option<String>,
+    csv: Option<String>,
+    timing: bool,
+    solver: Option<String>,
+    sensor: Option<String>,
+    crush: Option<(String, String)>,
+    cfc_shape: Option<f64>,
+    cfc_int: Option<f64>,
+    window: Option<f64>,
+    threshold: Option<f64>,
+    tail: Option<f64>,
+    mass_tol: Option<f64>,
+    speed_tol: Option<f64>,
+    margin_dv: Option<f64>,
+    margin_peak: Option<f64>,
+    margin_peak_time: Option<f64>,
+    margin_duration: Option<f64>,
+    margin_olc: Option<f64>,
+    margin_static: Option<f64>,
+}
+
+impl PulseFlags {
+    /// True if any pulse-report flag was given (so `--pulse-report` is then required).
+    fn any(&self) -> bool {
+        self.report.is_some()
+            || self.csv.is_some()
+            || self.timing
+            || self.solver.is_some()
+            || self.sensor.is_some()
+            || self.crush.is_some()
+            || [
+                self.cfc_shape,
+                self.cfc_int,
+                self.window,
+                self.threshold,
+                self.tail,
+                self.mass_tol,
+                self.speed_tol,
+                self.margin_dv,
+                self.margin_peak,
+                self.margin_peak_time,
+                self.margin_duration,
+                self.margin_olc,
+                self.margin_static,
+            ]
+            .iter()
+            .any(Option::is_some)
+    }
+}
+
+/// The next argument as text, or a usage error naming the flag.
+fn text_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
+    match args.next() {
+        Some(v) => v,
+        None => {
+            eprintln!("{flag} needs a value");
+            usage()
+        }
+    }
 }
 
 fn num<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, flag: &str) -> T {
@@ -100,6 +166,8 @@ fn main() {
     let mut slope_report = false;
     let (mut slope_from, mut slope_to): (Option<f64>, Option<f64>) = (None, None);
     let (mut by, mut hold, mut speed, mut rise, mut gain): FiveOpt = (None, None, None, None, None);
+    let mut pf = PulseFlags::default();
+    let (mut dt_given, mut substeps_given, mut gravity_given) = (false, false, false);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -107,8 +175,48 @@ fn main() {
                 duration_given = true;
                 cfg.duration = num(&mut args, "--duration")
             }
-            "--dt" => cfg.dt = num(&mut args, "--dt"),
-            "--substeps" => cfg.substeps = num(&mut args, "--substeps"),
+            "--dt" => {
+                dt_given = true;
+                cfg.dt = num(&mut args, "--dt")
+            }
+            "--substeps" => {
+                substeps_given = true;
+                cfg.substeps = num(&mut args, "--substeps")
+            }
+            "--pulse-report" => pf.report = Some(text_arg(&mut args, "--pulse-report")),
+            "--pulse-csv" => pf.csv = Some(text_arg(&mut args, "--pulse-csv")),
+            "--timing" => pf.timing = true,
+            "--solver" => pf.solver = Some(text_arg(&mut args, "--solver")),
+            "--pulse-sensor" => pf.sensor = Some(text_arg(&mut args, "--pulse-sensor")),
+            "--pulse-crush-groups" => {
+                let v = text_arg(&mut args, "--pulse-crush-groups");
+                match v.split_once(',') {
+                    Some((a, b)) if !a.is_empty() && !b.is_empty() && !b.contains(',') => {
+                        pf.crush = Some((a.to_string(), b.to_string()))
+                    }
+                    _ => {
+                        eprintln!("--pulse-crush-groups needs <a>,<b>");
+                        usage()
+                    }
+                }
+            }
+            "--pulse-cfc-shape" => pf.cfc_shape = Some(num(&mut args, "--pulse-cfc-shape")),
+            "--pulse-cfc-int" => pf.cfc_int = Some(num(&mut args, "--pulse-cfc-int")),
+            "--pulse-window" => pf.window = Some(num(&mut args, "--pulse-window")),
+            "--pulse-threshold" => pf.threshold = Some(num(&mut args, "--pulse-threshold")),
+            "--pulse-crush-tail" => pf.tail = Some(num(&mut args, "--pulse-crush-tail")),
+            "--setup-mass-tol" => pf.mass_tol = Some(num(&mut args, "--setup-mass-tol")),
+            "--setup-speed-tol" => pf.speed_tol = Some(num(&mut args, "--setup-speed-tol")),
+            "--margin-dv" => pf.margin_dv = Some(num(&mut args, "--margin-dv")),
+            "--margin-peak" => pf.margin_peak = Some(num(&mut args, "--margin-peak")),
+            "--margin-peak-time" => {
+                pf.margin_peak_time = Some(num(&mut args, "--margin-peak-time"))
+            }
+            "--margin-duration" => pf.margin_duration = Some(num(&mut args, "--margin-duration")),
+            "--margin-olc" => pf.margin_olc = Some(num(&mut args, "--margin-olc")),
+            "--margin-static-crush" => {
+                pf.margin_static = Some(num(&mut args, "--margin-static-crush"))
+            }
             "--drop-height" => {
                 cube_only = true;
                 cfg.drop_height = num(&mut args, "--drop-height")
@@ -139,7 +247,10 @@ fn main() {
             "--slope-report" => slope_report = true,
             "--slope-from" => slope_from = Some(num(&mut args, "--slope-from")),
             "--slope-to" => slope_to = Some(num(&mut args, "--slope-to")),
-            "--gravity" => cfg.gravity = num(&mut args, "--gravity"),
+            "--gravity" => {
+                gravity_given = true;
+                cfg.gravity = num(&mut args, "--gravity")
+            }
             "--no-tilt" => {
                 cube_only = true;
                 cfg.tilt = false
@@ -194,6 +305,62 @@ fn main() {
         }
         None => None,
     };
+    if pf.any() {
+        // The pulse report has its own path and replaces the CSV: it is run alone.
+        let Some(ref_path) = pf.report.clone() else {
+            eprintln!("--pulse-csv, --timing, --solver and the --pulse-*, --setup-* and --margin-* flags need --pulse-report");
+            usage()
+        };
+        let other = live
+            || input_path.is_some()
+            || summary
+            || events
+            || settle_report
+            || crumple_report
+            || drive_report
+            || trajectory_v2
+            || cube_only
+            || slope_grip.is_some()
+            || slope_report
+            || slope_from.is_some()
+            || slope_to.is_some()
+            || cmin.is_some()
+            || cmax.is_some()
+            || cdrift.is_some()
+            || crumple_groups.is_some()
+            || by.is_some()
+            || hold.is_some()
+            || speed.is_some()
+            || rise.is_some()
+            || gain.is_some()
+            || lap_heading.is_some()
+            || lap_path.is_some()
+            || lap_close.is_some()
+            || imp_min.is_some()
+            || imp_max.is_some();
+        if other {
+            eprintln!("--pulse-report takes only --body, the run flags (--duration, --dt, --substeps, --gravity) and its own flags");
+            usage()
+        }
+        let Some(b) = body.as_ref() else {
+            eprintln!("--pulse-report needs --body");
+            usage()
+        };
+        if !(duration_given && dt_given && substeps_given && gravity_given) {
+            eprintln!(
+                "--pulse-report needs --duration, --dt, --substeps and --gravity (no defaults)"
+            );
+            usage()
+        }
+        let params = match pulse_params(&pf, ref_path) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("crash-sim: {e}");
+                usage()
+            }
+        };
+        exit(run_pulse(&cfg, b, &params));
+    }
     if live {
         // The live run has its own path: the input comes from stdin, the length from the input.
         let other = input_path.is_some()
@@ -668,6 +835,591 @@ fn run_car(a: &CarArgs) -> i32 {
     }
     emit(&out);
     i32::from(failed)
+}
+
+// ---------------------------------------------------------------------------------------
+// The pulse report (docs/STAGE6-M4-M5.md, "The pulse report")
+
+/// Most substeps a pulse report run may take: the run keeps several f64 per substep, so a longer
+/// run is refused (exit 2) instead of exhausting memory. 5 million is 500 s at h = 0.1 ms.
+const PULSE_MAX_SUBSTEPS: u64 = 5_000_000;
+
+/// The checked flags of a pulse report. Every number is finite; see `pulse_params`.
+struct PulseParams {
+    ref_path: String,
+    csv: Option<String>,
+    timing: bool,
+    sensor: String,
+    crush: (String, String),
+    cfc_shape: f64,
+    cfc_int: f64,
+    window: f64,
+    threshold: f64,
+    tail: f64,
+    mass_tol: f64,
+    speed_tol: f64,
+    margin_dv: f64,
+    margin_peak: f64,
+    margin_peak_time: f64,
+    margin_duration: f64,
+    margin_olc: f64,
+    margin_static: f64,
+}
+
+/// Check the pulse flags: every required one is present, every number finite, and in its range.
+/// The error text is for a usage error (exit 2).
+fn pulse_params(f: &PulseFlags, ref_path: String) -> Result<PulseParams, String> {
+    if !ref_path.ends_with(".pulse.csv") {
+        return Err(format!(
+            "--pulse-report {ref_path}: the reference must be a path ending in .pulse.csv (its .meta is read beside it)"
+        ));
+    }
+    if let Some(s) = &f.solver {
+        if s != "node-beam" {
+            return Err(format!("--solver {s}: only `node-beam` is available here"));
+        }
+    }
+    fn need<T: Clone>(v: &Option<T>, flag: &str) -> Result<T, String> {
+        v.clone()
+            .ok_or_else(|| format!("--pulse-report needs {flag}"))
+    }
+    // (value, flag, lowest allowed, whether the lowest itself is allowed)
+    fn number(v: &Option<f64>, flag: &str, min: f64, min_ok: bool) -> Result<f64, String> {
+        let x = need(v, flag)?;
+        if x.is_finite() && (x > min || (min_ok && x == min)) {
+            Ok(x)
+        } else {
+            let rel = if min_ok { ">=" } else { ">" };
+            Err(format!("{flag} must be finite and {rel} {min}, got {x}"))
+        }
+    }
+    Ok(PulseParams {
+        ref_path,
+        csv: f.csv.clone(),
+        timing: f.timing,
+        sensor: need(&f.sensor, "--pulse-sensor")?,
+        crush: need(&f.crush, "--pulse-crush-groups")?,
+        cfc_shape: number(&f.cfc_shape, "--pulse-cfc-shape", 0.0, false)?,
+        cfc_int: number(&f.cfc_int, "--pulse-cfc-int", 0.0, false)?,
+        window: number(&f.window, "--pulse-window", 0.0, false)?,
+        threshold: number(&f.threshold, "--pulse-threshold", 0.0, true)?,
+        tail: number(&f.tail, "--pulse-crush-tail", 0.0, false)?,
+        mass_tol: number(&f.mass_tol, "--setup-mass-tol", 0.0, true)?,
+        speed_tol: number(&f.speed_tol, "--setup-speed-tol", 0.0, true)?,
+        margin_dv: number(&f.margin_dv, "--margin-dv", 0.0, false)?,
+        margin_peak: number(&f.margin_peak, "--margin-peak", 0.0, false)?,
+        margin_peak_time: number(&f.margin_peak_time, "--margin-peak-time", 0.0, false)?,
+        margin_duration: number(&f.margin_duration, "--margin-duration", 0.0, false)?,
+        margin_olc: number(&f.margin_olc, "--margin-olc", 0.0, false)?,
+        margin_static: number(&f.margin_static, "--margin-static-crush", 0.0, false)?,
+    })
+}
+
+/// What a pulse report produced.
+struct PulseOutcome {
+    /// Everything for stdout, ending with the `pulse:` line.
+    text: String,
+    /// The `--pulse-csv` file's text, when the car touched the wall.
+    csv: Option<String>,
+    /// `pulse: ok`.
+    ok: bool,
+    /// `(sim_s, wall_s)` of the solver loop, when it ran to the end.
+    timing: Option<(f64, f64)>,
+}
+
+/// Run the pulse report; print it; return the exit code: 0 ok, 1 a FAIL or an abort, 2 a refusal
+/// (usage, reference, setup), in which case nothing is printed on stdout.
+fn run_pulse(cfg: &Config, body: &Body, p: &PulseParams) -> i32 {
+    let out = match pulse_report(cfg, body, p) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("crash-sim: {e}");
+            return 2;
+        }
+    };
+    if let (Some(path), Some(csv)) = (&p.csv, &out.csv) {
+        if let Err(e) = std::fs::write(path, csv) {
+            eprintln!("crash-sim: --pulse-csv {path}: {e}");
+            return 1;
+        }
+    }
+    if let (true, Some((sim_s, wall_s))) = (p.timing, out.timing) {
+        eprintln!(
+            "timing: sim_s={sim_s:.4} wall_s={wall_s:.4} rtf={:.4}",
+            wall_s / sim_s
+        );
+    }
+    emit(&out.text);
+    i32::from(!out.ok)
+}
+
+/// The sensor group's mass-weighted mean x-velocity u (m/s).
+fn group_u(sim: &crash_sim::Sim, ix: &[usize]) -> f64 {
+    let (mut p, mut m) = (0.0, 0.0);
+    for &i in ix {
+        p += sim.mass[i] * sim.vel[i].x;
+        m += sim.mass[i];
+    }
+    p / m
+}
+
+/// Distance between the centroids of two node groups (m), as the crumple report measures it.
+fn group_len(sim: &crash_sim::Sim, a: &[usize], b: &[usize]) -> f64 {
+    let centroid = |ix: &[usize]| {
+        let mut s = crash_sim::vec3::Vec3::ZERO;
+        for &i in ix {
+            s += sim.pos[i];
+        }
+        s * (1.0 / ix.len() as f64)
+    };
+    (centroid(b) - centroid(a)).length()
+}
+
+/// True if any node is on or behind one of `planes[range]`, or any wheel (a tyre) is within its
+/// radius of one: the sim's contact test (`any_at_or_behind`) extended to the tyres.
+fn touches(sim: &crash_sim::Sim, range: std::ops::Range<usize>) -> bool {
+    let planes = &sim.planes[range];
+    if collide::any_at_or_behind(&sim.pos, planes) {
+        return true;
+    }
+    sim.car.as_ref().is_some_and(|c| {
+        c.wheels
+            .iter()
+            .any(|w| planes.iter().any(|pl| pl.distance(w.pos) <= w.p.radius))
+    })
+}
+
+/// The metrics of one filtered pulse window (docs: "Metrics"), as positive magnitudes.
+struct PulseMetrics {
+    dv: f64,
+    peak: f64,
+    peak_time: f64,
+    /// None when the pulse never reaches the threshold.
+    duration: Option<f64>,
+    /// None when the OLC occupant never completes its travel.
+    olc: Option<f64>,
+    dyn_crush: f64,
+}
+
+/// Metrics of `f60` (CFC shape) and `f180` (CFC int) windows sampled every `h` s from contact,
+/// with impact speed `v0` (m/s). The duration counts samples at or below -threshold, so the
+/// samples are clamped at 0 from above first (`pulse::duration` itself counts |sample|).
+fn pulse_metrics(
+    f60: &[f64],
+    f180: &[f64],
+    h: f64,
+    v0: f64,
+    threshold: f64,
+) -> Result<PulseMetrics, String> {
+    let e = |e: pulse::PulseError| e.to_string();
+    let dv = -pulse::delta_v(f180, h).map_err(e)?;
+    let (pk, pk_t) = pulse::peak(f60, h).map_err(e)?;
+    let below: Vec<f64> = f60.iter().map(|v| v.min(0.0)).collect();
+    let duration = pulse::duration(&below, h, threshold).map_err(e)?;
+    let olc = pulse::olc(f180, h, v0).map_err(e)?;
+    // Displacement toward the wall: x(t) = integral of (v0 + integral of a), trapezoid.
+    let (mut v, mut x, mut dyn_crush) = (v0, 0.0_f64, 0.0_f64);
+    for w in f180.windows(2) {
+        let vn = v + 0.5 * (w[0] + w[1]) * h;
+        x += 0.5 * (v + vn) * h;
+        v = vn;
+        dyn_crush = dyn_crush.max(x);
+    }
+    Ok(PulseMetrics {
+        dv,
+        peak: pk.abs(),
+        peak_time: pk_t,
+        duration,
+        olc,
+        dyn_crush,
+    })
+}
+
+/// The report. `Err` is a refusal (exit 2): a file the sim or reference cannot use, a rate under
+/// 10 x CFC, a window longer than either pulse. A FAIL or an abort is an `Ok` outcome with
+/// `ok == false` (exit 1).
+///
+/// Choices the docs leave open, fixed here:
+/// - Substep k (1-based) gives the sample a_k = (u_k - u_(k-1)) / h at t = k h; contact is the
+///   first substep k whose end has a node or tyre on or behind a body plane (the ground, the
+///   first plane, is not a wall), and sample j of the window, t = j h from contact, is a_(k + j).
+/// - The impact speed (setup line and OLC / dynamic crush start) is u just before the contact
+///   substep; with no contact it is the start speed, and only `no contact` follows.
+/// - `ground_contacts_in_window` counts substeps in the window with a node or tyre on or behind
+///   the ground; the FAIL line's `t` is the first of them, in seconds from contact.
+/// - Every line that can be computed is printed even when an earlier rule fails; the last line
+///   names the first rule that failed. A sim OLC or duration that does not exist counts as 0.
+/// - Static crush uses L at the start of the run for L(0), and the substeps with
+///   t >= run end - tail (to 1e-6 of h).
+fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutcome, String> {
+    // The reference: the pulse and its meta, both strict (reference.rs).
+    let meta_path = format!(
+        "{}.meta",
+        &p.ref_path[..p.ref_path.len() - ".pulse.csv".len()]
+    );
+    let refp = reference::load_pulse(&p.ref_path).map_err(|e| format!("reference: {e}"))?;
+    let meta = reference::load_meta(&meta_path).map_err(|e| format!("reference meta: {e}"))?;
+
+    // The sim's step, and the J211 rate rule for both pulses (n20-03's refusal).
+    let h = cfg.dt / cfg.substeps as f64;
+    for cfc in [p.cfc_shape, p.cfc_int] {
+        pulse::cfc_filter(&[0.0, 0.0], h, cfc).map_err(|e| format!("sim pulse: {e}"))?;
+        pulse::cfc_filter(&[0.0, 0.0], refp.dt, cfc).map_err(|e| format!("reference: {e}"))?;
+    }
+    // A huge --duration must be a refusal, not an overflow: the product saturates.
+    let n_sub = crash_sim::step_count(cfg).saturating_mul(u64::from(cfg.substeps));
+    if n_sub == 0 {
+        return Err("the run has no substep: raise --duration".into());
+    }
+    if n_sub > PULSE_MAX_SUBSTEPS {
+        return Err(format!(
+            "the run has {n_sub} substeps, over the limit of {PULSE_MAX_SUBSTEPS}: lower --duration or raise --dt"
+        ));
+    }
+    if p.tail > cfg.duration {
+        return Err(format!(
+            "--pulse-crush-tail {} s is longer than the run ({} s)",
+            p.tail, cfg.duration
+        ));
+    }
+
+    // Groups.
+    let group = |name: &str| -> Result<Vec<usize>, String> {
+        let g = body
+            .groups
+            .iter()
+            .find(|g| g.name == name)
+            .ok_or_else(|| format!("the body has no group `{name}`"))?;
+        Ok(g.nodes
+            .iter()
+            .map(|id| body.node_index(*id).expect("group names declared nodes"))
+            .collect())
+    };
+    let sensor = group(&p.sensor)?;
+    let crush_a = group(&p.crush.0)?;
+    let crush_b = group(&p.crush.1)?;
+
+    // The sim, built with the real config (so every refusal is the usual one), then stepped one
+    // substep at a time: with dt = h and one substep, `advance` is exactly one substep of the
+    // same length h (`cfg` is public).
+    let mut sim = crash_sim::Sim::from_car(cfg.clone(), body)?;
+    sim.cfg.dt = h;
+    sim.cfg.substeps = 1;
+    let wheel_mass: f64 = sim
+        .car
+        .as_ref()
+        .map_or(0.0, |c| c.wheels.iter().map(|w| w.p.mass).sum());
+    let sim_mass = sim.mass.iter().sum::<f64>() + wheel_mass;
+
+    let n = n_sub as usize;
+    let mut u = Vec::with_capacity(n + 1);
+    let mut len = Vec::with_capacity(n + 1);
+    let mut ground = Vec::with_capacity(n + 1);
+    u.push(group_u(&sim, &sensor));
+    len.push(group_len(&sim, &crush_a, &crush_b));
+    ground.push(false);
+    let mut contact: Option<usize> = None;
+    let started = std::time::Instant::now();
+    for k in 1..=n {
+        sim.advance();
+        if let Err(e) = sim.check() {
+            return Ok(PulseOutcome {
+                text: format!("pulse: FAIL unstable at t = {:.4} s: {e}\n", k as f64 * h),
+                csv: None,
+                ok: false,
+                timing: None,
+            });
+        }
+        u.push(group_u(&sim, &sensor));
+        len.push(group_len(&sim, &crush_a, &crush_b));
+        ground.push(touches(&sim, 0..1));
+        if contact.is_none() && touches(&sim, 1..sim.planes.len()) {
+            contact = Some(k);
+        }
+    }
+    let wall_s = started.elapsed().as_secs_f64();
+    let timing = Some((n as f64 * h, wall_s));
+
+    // The sim pulse: a_k = (u_k - u_(k-1)) / h at t = k h, k = 1..=n.
+    let accel: Vec<f64> = u.windows(2).map(|w| (w[1] - w[0]) / h).collect();
+
+    // Header and setup lines (rule 1).
+    let mut text = String::new();
+    text.push_str(&format!(
+        "pulse_ref={}\npulse_channel={}\n",
+        meta.test, meta.channel
+    ));
+    // The impact speed is the sensor group's u just before the contact substep (u_0 if there is
+    // no contact, where only the no-contact FAIL follows).
+    let v0 = u[contact.map_or(0, |k| k - 1)];
+    let rel = |sim: f64, r: f64| (sim - r) / r;
+    let mass_err = rel(sim_mass, meta.mass_kg);
+    let speed_kmh = v0 * 3.6;
+    let speed_err = rel(speed_kmh, meta.speed_kmh);
+    let mass_ok = mass_err.abs() <= p.mass_tol;
+    let speed_ok = speed_err.abs() <= p.speed_tol;
+    let tag = |ok: bool| if ok { "ok" } else { "FAIL" };
+    text.push_str(&format!(
+        "setup mass_kg sim={:.1} ref={:.1} err={:+.4} tol={:.4} {}\n",
+        sim_mass,
+        meta.mass_kg,
+        mass_err,
+        p.mass_tol,
+        tag(mass_ok)
+    ));
+    text.push_str(&format!(
+        "setup speed_kmh sim={:.2} ref={:.2} err={:+.4} tol={:.4} {}\n",
+        speed_kmh,
+        meta.speed_kmh,
+        speed_err,
+        p.speed_tol,
+        tag(speed_ok)
+    ));
+    let Some(kc) = contact else {
+        text.push_str("contact_s=none\npulse: FAIL no contact\n");
+        return Ok(PulseOutcome {
+            text,
+            csv: None,
+            ok: false,
+            timing,
+        });
+    };
+    text.push_str(&format!("contact_s={:.4}\n", kc as f64 * h));
+
+    // The window: samples j = 0..n_win at t = j h from contact, sim sample j being a_(kc + j).
+    // The step count is compared as a float first, so a huge window cannot overflow the count.
+    let window_steps = (p.window / h * (1.0 + 1e-9)).floor();
+    let n_win = if window_steps <= (n - kc) as f64 {
+        window_steps as usize + 1
+    } else {
+        usize::MAX
+    };
+    if n_win == usize::MAX || kc + n_win - 1 > n {
+        return Err(format!(
+            "--pulse-window {} s is longer than the sim pulse after contact (contact at {:.4} s, run {} s)",
+            p.window,
+            kc as f64 * h,
+            cfg.duration
+        ));
+    }
+    let ground_window = &ground[kc..kc + n_win];
+    let ground_count = ground_window.iter().filter(|&&g| g).count();
+    text.push_str(&format!("ground_contacts_in_window={ground_count}\n"));
+    let ground_first = ground_window.iter().position(|&g| g);
+
+    // Filters: each pulse over its whole record at its own rate, then the window.
+    let sim_fail = |mut text: String, what: &str, e: String| {
+        text.push_str(&format!("pulse: FAIL {what}: {e}\n"));
+        PulseOutcome {
+            text,
+            csv: None,
+            ok: false,
+            timing,
+        }
+    };
+    let f60 = match pulse::cfc_filter(&accel, h, p.cfc_shape) {
+        Ok(v) => v,
+        Err(e) => return Ok(sim_fail(text, "sim pulse", e.to_string())),
+    };
+    let f180 = match pulse::cfc_filter(&accel, h, p.cfc_int) {
+        Ok(v) => v,
+        Err(e) => return Ok(sim_fail(text, "sim pulse", e.to_string())),
+    };
+    let win = |v: &[f64]| v[kc - 1..kc - 1 + n_win].to_vec();
+    let (s60, s180) = (win(&f60), win(&f180));
+    let ref_window = |cfc: f64| -> Result<Vec<f64>, String> {
+        let filtered =
+            pulse::cfc_filter(&refp.accel, refp.dt, cfc).map_err(|e| format!("reference: {e}"))?;
+        let rec = reference::Pulse {
+            t0: refp.t0,
+            dt: refp.dt,
+            accel: filtered,
+        };
+        let r = reference::resample_at(&rec, 0.0, h, n_win).map_err(|e| {
+            format!(
+                "--pulse-window {} s does not fit the reference pulse: {e}",
+                p.window
+            )
+        })?;
+        Ok(r.accel)
+    };
+    let (r60, r180) = (ref_window(p.cfc_shape)?, ref_window(p.cfc_int)?);
+
+    let ref_v0 = meta.speed_kmh / 3.6;
+    let sm = match pulse_metrics(&s60, &s180, h, v0, p.threshold) {
+        Ok(m) => m,
+        Err(e) => return Ok(sim_fail(text, "sim metrics", e)),
+    };
+    let rm = pulse_metrics(&r60, &r180, h, ref_v0, p.threshold)
+        .map_err(|e| format!("reference metrics: {e}"))?;
+    let ref_dur = rm
+        .duration
+        .ok_or("the reference pulse never reaches --pulse-threshold")?;
+    let ref_olc = rm
+        .olc
+        .ok_or("the reference pulse has no OLC (the occupant never completes its travel)")?;
+    // A missing sim duration or OLC counts as 0 (a norm of 1 / margin, a FAIL).
+    let (sim_dur, sim_olc) = (sm.duration.unwrap_or(0.0), sm.olc.unwrap_or(0.0));
+
+    // Static crush: L(0) minus the mean of L over the last `tail` seconds of the run.
+    let t_end = n as f64 * h;
+    let tol = h * 1e-6;
+    let tail_len: Vec<f64> = len
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| *k as f64 * h >= t_end - p.tail - tol)
+        .map(|(_, l)| *l)
+        .collect();
+    let sim_static = len[0] - tail_len.iter().sum::<f64>() / tail_len.len() as f64;
+
+    // Gated metrics, in the printed order: (name, decimals, sim, ref, margin, absolute error?).
+    struct Row {
+        name: &'static str,
+        dec: usize,
+        sim: f64,
+        refv: f64,
+        margin: f64,
+        absolute: bool,
+    }
+    let mut rows = vec![
+        Row {
+            name: "dv_mps",
+            dec: 4,
+            sim: sm.dv,
+            refv: rm.dv,
+            margin: p.margin_dv,
+            absolute: false,
+        },
+        Row {
+            name: "peak_mps2",
+            dec: 1,
+            sim: sm.peak,
+            refv: rm.peak,
+            margin: p.margin_peak,
+            absolute: false,
+        },
+        Row {
+            name: "peak_time_s",
+            dec: 4,
+            sim: sm.peak_time,
+            refv: rm.peak_time,
+            margin: p.margin_peak_time,
+            absolute: true,
+        },
+        Row {
+            name: "duration_s",
+            dec: 4,
+            sim: sim_dur,
+            refv: ref_dur,
+            margin: p.margin_duration,
+            absolute: false,
+        },
+        Row {
+            name: "olc_mps2",
+            dec: 1,
+            sim: sim_olc,
+            refv: ref_olc,
+            margin: p.margin_olc,
+            absolute: false,
+        },
+    ];
+    if let Some(s) = meta.static_crush_m {
+        rows.push(Row {
+            name: "static_crush_m",
+            dec: 4,
+            sim: sim_static,
+            refv: s,
+            margin: p.margin_static,
+            absolute: false,
+        });
+    }
+    let mut norms = Vec::new();
+    let mut first_bad: Option<String> = None;
+    for r in &rows {
+        if !(r.refv.is_finite() && (r.absolute || r.refv > 0.0)) {
+            return Err(format!(
+                "the reference's {} is {}: a relative error needs a finite value above zero",
+                r.name, r.refv
+            ));
+        }
+        let err = if r.absolute {
+            r.sim - r.refv
+        } else {
+            (r.sim - r.refv) / r.refv
+        };
+        let norm = err.abs() / r.margin;
+        // A non-finite sim value is a FAIL, never an ok.
+        let ok = r.sim.is_finite() && norm <= 1.0;
+        if !ok && first_bad.is_none() {
+            first_bad = Some(if r.sim.is_finite() {
+                format!("{} norm={norm:.4}", r.name)
+            } else {
+                format!("{} is not finite", r.name)
+            });
+        }
+        norms.push(norm);
+        text.push_str(&format!(
+            "metric {} sim={:.d$} ref={:.d$} err={:+.4} norm={:.4} {}\n",
+            r.name,
+            r.sim,
+            r.refv,
+            err,
+            norm,
+            tag(ok),
+            d = r.dec
+        ));
+    }
+    if meta.static_crush_m.is_none() {
+        text.push_str(&format!(
+            "metric static_crush_m sim={sim_static:.4} ref=none\n"
+        ));
+    }
+    text.push_str(&format!(
+        "info dyn_crush_m sim={:.4} ref={:.4}\n",
+        sm.dyn_crush, rm.dyn_crush
+    ));
+    let score = norms.iter().sum::<f64>() / norms.len() as f64;
+    text.push_str(&format!("pulse_score={score:.4}\n"));
+
+    // The verdict: the first rule that fails, in the order of the docs.
+    let verdict = if !mass_ok {
+        Some(format!(
+            "setup mass_kg err={mass_err:+.4} tol={:.4}",
+            p.mass_tol
+        ))
+    } else if !speed_ok {
+        Some(format!(
+            "setup speed_kmh err={speed_err:+.4} tol={:.4}",
+            p.speed_tol
+        ))
+    } else if let Some(j) = ground_first {
+        Some(format!("ground contact at t={:.4}", j as f64 * h))
+    } else {
+        first_bad
+    };
+    let ok = verdict.is_none();
+    match verdict {
+        None => text.push_str("pulse: ok\n"),
+        Some(v) => text.push_str(&format!("pulse: FAIL {v}\n")),
+    }
+
+    // The CSV: the sim pulse from contact to the end of the run.
+    let mut csv = String::from("t_s,accel_mps2,accel_cfc60_mps2,accel_cfc180_mps2\n");
+    for j in kc - 1..accel.len() {
+        csv.push_str(&format!(
+            "{:.6},{:.4},{:.4},{:.4}\n",
+            (j + 1 - kc) as f64 * h,
+            accel[j],
+            f60[j],
+            f180[j]
+        ));
+    }
+    Ok(PulseOutcome {
+        text,
+        csv: Some(csv),
+        ok,
+        timing,
+    })
 }
 
 #[cfg(test)]
