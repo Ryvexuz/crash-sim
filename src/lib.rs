@@ -15,6 +15,7 @@ pub mod save;
 pub mod settings;
 pub mod settle;
 pub mod solver;
+pub mod solver_m5;
 pub mod speed_profile;
 pub mod statehash;
 pub mod track;
@@ -387,6 +388,14 @@ impl Sim {
         solver: Box<dyn Solver>,
         with_wheels: bool,
     ) -> Result<Sim, String> {
+        // The one point every body constructor passes through: a solver that does not simulate
+        // tets is refused a body that has them, as `from_body_with_solver` refuses wheels.
+        if !body.tets.is_empty() && !solver.handles_solids() {
+            return Err(format!(
+                "the body has {} tets, which this solver does not simulate (they would be dropped): tets are simulated by `solver_m5::SolverM5` (docs/PHYSICS.md, \"Solids\")",
+                body.tets.len()
+            ));
+        }
         let mut planes = vec![Plane::ground()];
         for p in &body.planes {
             planes.push(Plane::from_format(p)?);
@@ -640,8 +649,13 @@ impl Sim {
         Sample { t: self.step as f64 * self.cfg.dt, min_y, center_y, max_beam_strain, broken_beams: self.breaks.len() }
     }
 
-    /// Fail if any node position/velocity is non-finite or strain is NaN or above the limit.
+    /// Fail if the solver reports an error of its own (`Solver::check`, first: an m5 tet that
+    /// inverted or met a NaN node is named as such), or any node position/velocity is
+    /// non-finite or strain is NaN or above the limit.
     pub fn check(&self) -> Result<(), String> {
+        if let Some(e) = self.solver.check() {
+            return Err(e);
+        }
         let finite = |v: &Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
         if let Some(i) = self.pos.iter().position(|p| !finite(p)) {
             return Err(format!("node {i} position is not finite"));

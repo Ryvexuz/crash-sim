@@ -36,6 +36,21 @@ pub trait Solver {
         }
         self.step(state, h);
     }
+
+    /// True if this solver simulates a body's solids and tets (docs/PHYSICS.md "Solids"). A
+    /// solver that does not is refused a body with tets by `Sim`, because the tets would be
+    /// dropped. The default is false: a node-beam solver knows nothing of tets.
+    fn handles_solids(&self) -> bool {
+        false
+    }
+
+    /// The first error this solver found in its own working data (for the m5 solver: an
+    /// inverted or collapsed tet, or an exceeded stiffness bound), or None. `Sim::check` returns
+    /// it, so the run ends like it does on a beam strain. The default is None: a solver that
+    /// keeps no working data has nothing to report.
+    fn check(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Semi-implicit (symplectic) Euler. Contact with the ground and the walls is not here:
