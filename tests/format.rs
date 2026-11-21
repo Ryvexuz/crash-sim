@@ -1781,6 +1781,106 @@ fn huge_well_shaped_tet_is_not_refused_by_an_overflowing_cube() {
     assert_eq!(parse(&write(&body)).unwrap(), body);
 }
 
+/// The reviewer's tet (round 3): edges of 6e102 m on the axes. Its volume is
+/// (6e102)^3 / 6 = 3.6e307 m^3, finite, but the triple product before the / 6 is 2.16e308,
+/// above the largest f64 (1.8e308). It must be accepted, with that volume.
+#[test]
+fn huge_well_shaped_tet_whose_triple_product_overflows_is_accepted() {
+    let big = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 6e102 0 0 ", 1)
+        .replacen("node 2 0 1 0 ", "node 2 0 6e102 0 ", 1)
+        .replacen("node 3 0 0 1 ", "node 3 0 0 6e102 ", 1);
+    let body = parse(&big).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(body.tets.len(), 1);
+    // inverted, the same tet is refused as inverted (so its volume was computed, not skipped)
+    let inverted = big.replacen("tet 0 1 2 3 s", "tet 1 0 2 3 s", 1);
+    expect_after(&inverted, 10, "tet ", "is inverted: its rest volume -");
+}
+
+/// Tiny well-shaped tets on either side of the minimum volume 1e-9 m^3: edges of 1.9 mm on
+/// the axes give 1.9e-3^3 / 6 = 1.143e-9 m^3 (accepted) and 1.8 mm give 0.972e-9 (refused).
+#[test]
+fn tiny_well_shaped_tets_either_side_of_the_minimum_volume() {
+    let corner = |e: &str| {
+        v3("")
+            .replacen("node 1 1 0 0 ", &format!("node 1 {e} 0 0 "), 1)
+            .replacen("node 2 0 1 0 ", &format!("node 2 0 {e} 0 "), 1)
+            .replacen("node 3 0 0 1 ", &format!("node 3 0 0 {e} "), 1)
+    };
+    assert!(parse(&corner("0.0019")).is_ok(), "{:?}", parse(&corner("0.0019")).err());
+    expect_after(&corner("0.0018"), 10, "tet ", "is below the minimum 0.000000001 m^3");
+}
+
+/// The caps of round 3, written out so this test fails if they change without it.
+const CAP_SOLIDS: usize = 1000;
+const CAP_TETS: usize = 1_000_000;
+
+#[test]
+fn refuse_more_solids_than_the_cap() {
+    let mut text = String::from("bsn 3\n");
+    for i in 0..CAP_SOLIDS + 1 {
+        text.push_str(&format!("solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"));
+    }
+    text.push_str("node 0 0 0 0 mass 1\n");
+    // the record after the cap, line 1 + cap + 1, at its keyword; every line above it passed
+    expect(&text, CAP_SOLIDS + 2, Some(1), &format!("too many solids: a body has at most {CAP_SOLIDS}"));
+    // exactly the cap is accepted
+    let at_cap = text.replacen(&format!("solid s{CAP_SOLIDS} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"), "", 1);
+    assert_eq!(parse(&at_cap).unwrap().solids.len(), CAP_SOLIDS);
+}
+
+/// A conforming lattice of unit cubes, each cut into the 6 tets of its main diagonal (the
+/// Kuhn cut: 0, e_i, e_i + e_j, (1, 1, 1) for each order (i, j, k) of the axes, two nodes
+/// swapped for an odd order so every volume is +1/6), and the first `count` of them.
+fn lattice(count: usize) -> String {
+    let (nx, ny, nz) = (56usize, 56usize, 54usize);
+    assert!(nx * ny * nz * 6 >= count);
+    let id = |x: usize, y: usize, z: usize| x + (nx + 1) * (y + (ny + 1) * z);
+    let mut text = String::from("bsn 3\nsolid s plateau_stress 1 yield_strain 0.5 damping_ratio 0\n");
+    for z in 0..=nz {
+        for y in 0..=ny {
+            for x in 0..=nx {
+                text.push_str(&format!("node {} {x} {y} {z} mass 1\n", id(x, y, z)));
+            }
+        }
+    }
+    let orders: [([usize; 3], bool); 6] = [([0, 1, 2], true), ([1, 2, 0], true), ([2, 0, 1], true), ([0, 2, 1], false), ([2, 1, 0], false), ([1, 0, 2], false)];
+    let mut n = 0;
+    'cells: for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                for (order, even) in orders {
+                    let mut p = [x, y, z];
+                    let a = id(p[0], p[1], p[2]);
+                    p[order[0]] += 1;
+                    let b = id(p[0], p[1], p[2]);
+                    p[order[1]] += 1;
+                    let c = id(p[0], p[1], p[2]);
+                    let d = id(x + 1, y + 1, z + 1);
+                    let (b, c) = if even { (b, c) } else { (c, b) };
+                    text.push_str(&format!("tet {a} {b} {c} {d} s\n"));
+                    n += 1;
+                    if n == count {
+                        break 'cells;
+                    }
+                }
+            }
+        }
+    }
+    text
+}
+
+#[test]
+fn refuse_more_tets_than_the_cap() {
+    // a small lattice is valid: every tet positive and distinct
+    let small = lattice(6 * 56 * 2);
+    assert_eq!(parse(&small).unwrap_or_else(|e| panic!("{e}")).tets.len(), 6 * 56 * 2);
+    // cap + 1 tets: the last one is refused at its keyword, so the cap itself passed
+    let text = lattice(CAP_TETS + 1);
+    let last = text.split_terminator('\n').count();
+    expect(&text, last, Some(1), &format!("too many tets: a body has at most {CAP_TETS}"));
+}
+
 #[test]
 fn refuse_tet_whose_volume_is_not_finite() {
     let far = v3("")
@@ -1860,11 +1960,11 @@ fn hostile_solid_and_tet_input_is_refused_or_bounded() {
     // a 50 MB solid name on a tet line is an unknown solid, refused by name
     let text = v3_with("tet 0 1 2 3 s", &format!("tet 0 1 2 3 s{huge}"));
     assert_eq!(refuse(&text).line, 10);
-    // a flood: many solids and many tets, each tet on fresh nodes, parses (solid and tet
-    // lookups are by hash, so the time is linear in the lines)
+    // a flood: the most solids a body may have and many tets, each tet on fresh nodes, parses
+    // (solid and tet lookups are by hash, so the time is linear in the lines)
     let n = 20_000;
     let mut text = String::from("bsn 3\n");
-    for i in 0..n {
+    for i in 0..CAP_SOLIDS {
         text.push_str(&format!(
             "solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"
         ));
@@ -1880,13 +1980,13 @@ fn hostile_solid_and_tet_input_is_refused_or_bounded() {
             4 * i + 1,
             4 * i + 2,
             4 * i + 3,
-            n - 1 - i
+            (n - 1 - i) % CAP_SOLIDS
         ));
     }
     let body = parse(&text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(write(&body), text);
     // the same flood with one duplicate at the very end is refused on its line
-    let last = 1 + n + 4 * n + n + 1;
+    let last = 1 + CAP_SOLIDS + 4 * n + n + 1;
     let dup = format!("{text}tet 1 2 3 0 s0\n");
     let e = refuse(&dup);
     assert_eq!(e.line, last);
