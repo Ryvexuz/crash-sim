@@ -99,9 +99,16 @@ fn lines_starting<'a>(text: &'a str, prefix: &str) -> Vec<&'a str> {
 fn race_lines(text: &str) -> Vec<&str> {
     text.lines()
         .filter(|l| {
-            ["track ", "start ", "checkpoint ", "lap ", "final ", "race: "]
-                .iter()
-                .any(|p| l.starts_with(p))
+            [
+                "track ",
+                "start ",
+                "checkpoint ",
+                "lap ",
+                "final ",
+                "race: ",
+            ]
+            .iter()
+            .any(|p| l.starts_with(p))
         })
         .collect()
 }
@@ -128,7 +135,10 @@ fn oval_script_gives_counted_laps() {
             "race: laps_valid=2 laps_invalid=0 best_lap_s={}",
             [field(laps[0], "time_s"), field(laps[1], "time_s")]
                 .iter()
-                .min_by(|a, b| a.parse::<f64>().unwrap().total_cmp(&b.parse::<f64>().unwrap()))
+                .min_by(|a, b| a
+                    .parse::<f64>()
+                    .unwrap()
+                    .total_cmp(&b.parse::<f64>().unwrap()))
                 .unwrap()
         )
     );
@@ -176,7 +186,10 @@ fn oval_lap_is_valid_and_above_floors() {
         let (time, vmax) = (num(l, "time_s"), num(l, "max_speed_kmh"));
         assert!(time * vmax / 3.6 >= path - 2.0, "timing consistency: {l}");
         let span = num(l, "end_t") - num(l, "start_t");
-        assert!((time - span).abs() <= 0.0006, "time_s against end_t - start_t: {l}");
+        assert!(
+            (time - span).abs() <= 0.0006,
+            "time_s against end_t - start_t: {l}"
+        );
         // time_s has 3 decimals: the whole millisecond is the integer round(span * 1000).
         let ms = field(l, "time_s").replace('.', "").parse::<i64>().unwrap();
         assert!((ms as f64 - span * 1000.0).abs() <= 0.6, "{l}");
@@ -187,14 +200,21 @@ fn oval_lap_is_valid_and_above_floors() {
 /// no checkpoint crossed in order, so the lap ends but is not valid.
 #[test]
 fn script_that_cuts_a_checkpoint_gives_no_counted_lap() {
-    let script = tmp_file("timed_lap_circle.input", "0 0.3 0 0\n5.2 0.04 0 0.16\n40 0.04 0 0.16\n");
+    let script = tmp_file(
+        "timed_lap_circle.input",
+        "0 0.3 0 0\n5.2 0.04 0 0.16\n40 0.04 0 0.16\n",
+    );
     let r = lap_run(&oval_path(), &script);
     assert_eq!(r.code, 0, "stderr: {}", r.stderr);
     let laps = lines_starting(&r.stdout, "lap ");
     assert_eq!(laps.len(), 1, "{}", r.stdout);
     assert_eq!(field(laps[0], "valid"), "no");
     assert_eq!(field(laps[0], "reason"), "missed_checkpoint");
-    assert!(lines_starting(&r.stdout, "checkpoint ").is_empty(), "{}", r.stdout);
+    assert!(
+        lines_starting(&r.stdout, "checkpoint ").is_empty(),
+        "{}",
+        r.stdout
+    );
     assert_eq!(
         r.stdout.lines().last().unwrap(),
         "race: laps_valid=0 laps_invalid=1 best_lap_s=none"
@@ -205,7 +225,14 @@ fn script_that_cuts_a_checkpoint_gives_no_counted_lap() {
 fn grid_state(track_text: &str, name: &str) -> ((f64, f64), f64) {
     let track = tmp_file(name, track_text);
     let mut child = Command::new(crash_sim_bin())
-        .args(["--body", &car_path(), "--track", &track, "--live", "--trajectory-v2"])
+        .args([
+            "--body",
+            &car_path(),
+            "--track",
+            &track,
+            "--live",
+            "--trajectory-v2",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -218,7 +245,11 @@ fn grid_state(track_text: &str, name: &str) -> ((f64, f64), f64) {
         .write_all(b"0 0 0 0\n0.01 0 0 0\n")
         .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = String::from_utf8(out.stdout).unwrap();
     let body = crash_sim::format::parse(&std::fs::read_to_string(car_path()).unwrap()).unwrap();
     let mut pos = vec![(0.0, 0.0); body.nodes.len()];
@@ -234,12 +265,24 @@ fn grid_state(track_text: &str, name: &str) -> ((f64, f64), f64) {
     assert_eq!(seen, body.nodes.len(), "one t = 0 frame:\n{text}");
     let total: f64 = body.nodes.iter().map(|n| n.mass).sum();
     let c = (
-        pos.iter().zip(&body.nodes).map(|(p, n)| p.0 * n.mass).sum::<f64>() / total,
-        pos.iter().zip(&body.nodes).map(|(p, n)| p.1 * n.mass).sum::<f64>() / total,
+        pos.iter()
+            .zip(&body.nodes)
+            .map(|(p, n)| p.0 * n.mass)
+            .sum::<f64>()
+            / total,
+        pos.iter()
+            .zip(&body.nodes)
+            .map(|(p, n)| p.1 * n.mass)
+            .sum::<f64>()
+            / total,
     );
     let mean = |group: &str| {
         let g = body.groups.iter().find(|g| g.name == group).unwrap();
-        let ix: Vec<usize> = g.nodes.iter().map(|id| body.node_index(*id).unwrap()).collect();
+        let ix: Vec<usize> = g
+            .nodes
+            .iter()
+            .map(|id| body.node_index(*id).unwrap())
+            .collect();
         (
             ix.iter().map(|&i| pos[i].0).sum::<f64>() / ix.len() as f64,
             ix.iter().map(|&i| pos[i].1).sum::<f64>() / ix.len() as f64,
@@ -259,13 +302,19 @@ fn car_on_grid_faces_the_track() {
     // The oval: start tangent +x, 20 m before the line at (0, 0).
     let oval = std::fs::read_to_string(oval_path()).unwrap();
     let ((x, z), h) = grid_state(&oval, "grid_oval.track");
-    assert!((x + 20.0).abs() <= GRID_POS_TOL_M && z.abs() <= GRID_POS_TOL_M, "{x} {z}");
+    assert!(
+        (x + 20.0).abs() <= GRID_POS_TOL_M && z.abs() <= GRID_POS_TOL_M,
+        "{x} {z}"
+    );
     assert!(h.abs() <= GRID_HEADING_TOL_DEG, "{h}");
     // A track whose start tangent is (1, 1) / sqrt 2 turns the car 45 degrees; the grid point is
     // 20 m back along the last segment, (-20, 0).
     let diag = "track 1\nwidth 12\nstart 0\ngrid 20\ncheckpoint 2\npoint 0 0\npoint 0 100\npoint -100 100\npoint -100 0\n";
     let ((x, z), h) = grid_state(diag, "grid_diag.track");
-    assert!((x + 20.0).abs() <= GRID_POS_TOL_M && z.abs() <= GRID_POS_TOL_M, "{x} {z}");
+    assert!(
+        (x + 20.0).abs() <= GRID_POS_TOL_M && z.abs() <= GRID_POS_TOL_M,
+        "{x} {z}"
+    );
     assert!((h - 45.0).abs() <= GRID_HEADING_TOL_DEG, "{h}");
 }
 
@@ -303,10 +352,22 @@ fn live_oval(v2: bool) -> (std::process::Child, mpsc::Receiver<String>) {
 fn live_and_file_input_give_same_race_lines() {
     let file = lap_run(&oval_path(), &lap_input_path());
     assert_eq!(file.code, 0);
+    // Not vacuous: the lines being compared hold the two laps.
+    assert_eq!(
+        lines_starting(&file.stdout, "lap ").len(),
+        2,
+        "{}",
+        file.stdout
+    );
     let input = std::fs::read_to_string(lap_input_path()).unwrap();
     for v2 in [false, true] {
         let (mut child, rx) = live_oval(v2);
-        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
         let mut live = String::new();
         while let Ok(l) = rx.recv_timeout(Duration::from_secs(120)) {
             live.push_str(&l);
@@ -329,9 +390,16 @@ fn live_and_file_input_give_same_race_lines() {
             .filter(|l| l.starts_with("track_line "))
             .collect();
         assert_eq!(draw.len(), 128 + 1 + 3, "{}", draw.len());
-        assert_eq!(draw.iter().filter(|l| l.starts_with("track_line start ")).count(), 1);
         assert_eq!(
-            draw.iter().filter(|l| l.starts_with("track_line checkpoint ")).count(),
+            draw.iter()
+                .filter(|l| l.starts_with("track_line start "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            draw.iter()
+                .filter(|l| l.starts_with("track_line checkpoint "))
+                .count(),
             3
         );
         assert_eq!(
@@ -379,12 +447,49 @@ fn track_refusals_exit_2_with_empty_stdout() {
     let _ = std::fs::remove_file(&missing);
     let bad_track = tmp_file("timed_lap_bad.track", "track 1\nwidth 12\nbogus\n");
     let cases: Vec<(Vec<String>, &str)> = vec![
-        (vec!["--track".into(), manifest("scenarios/tracks/nope.track"), "--input".into(), lap_input_path()], "nope.track"),
-        (vec!["--track".into(), bad_track.clone(), "--input".into(), lap_input_path()], "line 3, column 1"),
+        (
+            vec![
+                "--track".into(),
+                manifest("scenarios/tracks/nope.track"),
+                "--input".into(),
+                lap_input_path(),
+            ],
+            "nope.track",
+        ),
+        (
+            vec![
+                "--track".into(),
+                bad_track.clone(),
+                "--input".into(),
+                lap_input_path(),
+            ],
+            "line 3, column 1",
+        ),
         (vec!["--track".into(), oval_path()], "--input"),
-        (vec!["--track".into(), oval_path(), "--live".into(), "--input".into(), lap_input_path()], "--live"),
-        (vec!["--track".into(), oval_path(), "--input".into(), missing], "--input"),
-        (vec!["--track".into(), oval_path(), "--input".into(), lap_input_path(), "--summary".into()], "--track takes only"),
+        (
+            vec![
+                "--track".into(),
+                oval_path(),
+                "--live".into(),
+                "--input".into(),
+                lap_input_path(),
+            ],
+            "--live",
+        ),
+        (
+            vec!["--track".into(), oval_path(), "--input".into(), missing],
+            "--input",
+        ),
+        (
+            vec![
+                "--track".into(),
+                oval_path(),
+                "--input".into(),
+                lap_input_path(),
+                "--summary".into(),
+            ],
+            "--track takes only",
+        ),
     ];
     for (args, needle) in cases {
         let mut all = vec!["--body".to_string(), car_path()];
@@ -393,6 +498,10 @@ fn track_refusals_exit_2_with_empty_stdout() {
         let r = run(&refs);
         assert_eq!(r.code, 2, "{args:?}: {}", r.stderr);
         assert!(r.stdout.is_empty(), "{args:?}: stdout {}", r.stdout);
-        assert!(r.stderr.contains(needle), "{args:?}: stderr `{}` lacks `{needle}`", r.stderr);
+        assert!(
+            r.stderr.contains(needle),
+            "{args:?}: stderr `{}` lacks `{needle}`",
+            r.stderr
+        );
     }
 }
