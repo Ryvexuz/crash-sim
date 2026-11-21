@@ -375,6 +375,18 @@ def run(root, out):
         tests = load_pair_tests(root, pair, sources)
         if tests is None:
             excluded.append(number)
+            for tstno in pair:
+                t = load_test(root, tstno, (), sources)  # EV5 only: no channel is picked
+                veh = t["spec"]["vehicle"]
+                vf = lambda n: convert._field(veh, convert.VEHICLE_FIELD, n)  # noqa: E731,B023
+                n_tests += 1
+                p("test %d | %s | year %s make %s model %s body %s | mass %d kg | v0 %.2f km/h | "
+                  "channel excluded: no common channel kind in pair %d"
+                  % (tstno,
+                     convert._field(t["spec"]["test"], convert.TEST_FIELD, "TITLE").strip(),
+                     veh[3], veh[1], veh[2], veh[5], convert._int(vf("VEHTWT"), "VEHTWT"),
+                     convert._num(convert._field(t["spec"]["test"], convert.TEST_FIELD, "CLSSPD"),
+                                  "CLSSPD"), number))
             p("pair %d %d/%d | EXCLUDED | no rear seat, floor or door sill X channel of the "
               "same kind in both tests | vehicle-1 global X accelerometer SENATT codes "
               "(DASTAT AM): %d %s, %d %s"

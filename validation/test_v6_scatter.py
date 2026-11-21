@@ -161,13 +161,19 @@ class ReferenceData(unittest.TestCase):
         self.assertEqual([ln.split(" ")[1] for ln in excl], ["6", "7"])
         self.assertIn("excluded pairs: 6,7", lines)
 
-    def test_twelve_tests_read_and_the_summary_is_printed(self):
+    def test_sixteen_tests_read_and_the_summary_is_printed(self):
         buf = io.StringIO()
         self.assertEqual(v6.run(find_reference_root(), buf), 0)
         lines = buf.getvalue().splitlines()
-        self.assertEqual(sum(1 for ln in lines if ln.startswith("test ")), 12)
+        test_rows = [ln for ln in lines if ln.startswith("test ")]
+        self.assertEqual(len(test_rows), 16)
+        marked = sorted(int(ln.split(" ")[1]) for ln in test_rows
+                        if "channel excluded: no common channel kind in pair" in ln)
+        self.assertEqual(marked, [6642, 6643, 6736, 6766])
+        self.assertTrue(all("peak" not in ln for ln in test_rows
+                            if "channel excluded" in ln))
         self.assertEqual(sum(1 for ln in lines if ln.startswith("pair ")), 8)
-        self.assertIn("tests read: 12", lines)
+        self.assertIn("tests read: 16", lines)
         self.assertEqual(sum(1 for ln in lines if ln.startswith("counted | ")), 4)
 
 
