@@ -151,13 +151,23 @@ class Inputs(unittest.TestCase):
 
 @unittest.skipIf(find_reference_root() is None, "reference/nhtsa-pairs is not present")
 class ReferenceData(unittest.TestCase):
-    def test_all_sixteen_tests_read_and_the_summary_is_printed(self):
+    def test_door_sill_is_not_a_seat_channel_and_pairs_without_a_common_kind_are_excluded(self):
+        self.assertNotIn("DSRR", v6.RIGHT_REAR)
+        self.assertNotIn("DSLR", v6.LEFT_REAR)
+        buf = io.StringIO()
+        v6.run(find_reference_root(), buf)
+        lines = buf.getvalue().splitlines()
+        excl = [ln for ln in lines if ln.startswith("pair ") and "| EXCLUDED |" in ln]
+        self.assertEqual([ln.split(" ")[1] for ln in excl], ["6", "7"])
+        self.assertIn("excluded pairs: 6,7", lines)
+
+    def test_twelve_tests_read_and_the_summary_is_printed(self):
         buf = io.StringIO()
         self.assertEqual(v6.run(find_reference_root(), buf), 0)
         lines = buf.getvalue().splitlines()
-        self.assertEqual(sum(1 for ln in lines if ln.startswith("test ")), 16)
+        self.assertEqual(sum(1 for ln in lines if ln.startswith("test ")), 12)
         self.assertEqual(sum(1 for ln in lines if ln.startswith("pair ")), 8)
-        self.assertIn("tests read: 16", lines)
+        self.assertIn("tests read: 12", lines)
         self.assertEqual(sum(1 for ln in lines if ln.startswith("counted | ")), 4)
 
 

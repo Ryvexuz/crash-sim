@@ -57,14 +57,22 @@ PAIRS = [(6258, 6271), (4244, 5036), (5061, 4240), (6724, 6729),
 MASS_TOL = 0.05
 DIM_TOL = 0.05
 
-# Rear-seat-crossmember SENATT codes, right side first. SELR/SERR/DSLR/DSRR
-# are the old-format and 2900 Hz-class codes for the same two seat
-# accelerometers (INSCOM of 3915: "LEFT REAR X", "RIGHT REAR X"; 6729: "V1
-# RIGHT REAR #2X"); FLLR/FLRR are convert.py's own LOCATION codes ("left/right
-# rear seat crossmember"). The Guide's SENATT table was not read here, so the
-# code meaning is taken from those comments only.
-RIGHT_REAR = ("SERR", "DSRR", "FLRR")
-LEFT_REAR = ("SELR", "DSLR", "FLLR")
+# Rear-seat / rear-floor crossmember SENATT codes, right side first.
+# SERR/SELR: seat, right/left rear (NHTSA Component Data Reference Guide
+# Version 4, Appendix B, CMPNT table, "Seats ... bucket (reclining)": SELR
+# LEFT REAR, SERR RIGHT REAR; same vehicle-part code list as SENATT, which
+# the guide calls "a general location" for a vehicle). FLLR/FLRR: floorpan
+# left/right rear (same table, "Floorpan"; the 2010 NCAP INSCOM says "RIGHT
+# REAR SEAT CROSSMEMBER X"). DSLR/DSRR are NOT in these lists: the same table
+# lists them under "Doors: door sill (side rail below door)", LEFT REAR and
+# RIGHT REAR, a different structure (see validation/V6.md, "Channel kind").
+RIGHT_REAR = ("SERR", "FLRR")
+LEFT_REAR = ("SELR", "FLLR")
+# Used only when neither test of a pair has a seat/floor channel (pair 1:
+# both tests have DSRR and no seat or floor X channel). Door sill, right/left
+# rear, as the guide table names them; never matched against a seat code.
+SILL_RIGHT_REAR = ("DSRR",)
+SILL_LEFT_REAR = ("DSLR",)
 
 
 class ScatterError(Exception):
@@ -295,11 +303,30 @@ def load_test(root, tstno, senatt_codes, sources):
     }
 
 
+def xg_codes(root, tstno):
+    """SENATT codes of the vehicle-1 global X accelerometers (G'S, AM), sorted,
+    from the test's EV5; used only to say why a pair is excluded."""
+    with zipfile.ZipFile(os.path.join(root, str(tstno), "v%05d.zip" % tstno)) as z:
+        specs = [n for n in z.namelist() if n.upper().endswith(".EV5")]
+        spec = convert.parse_ev5(z.read(specs[0]).decode("latin-1"))
+    out = set()
+    for row in spec["instr"].values():
+        def f(name):
+            return convert._field(row, convert.INSTR_FIELD, name)
+        if (f("VEHNO") == "1" and f("SENTYP") == "AC" and f("AXIS") == "XG"
+                and f("YUNITS") == "G'S" and f("DASTAT") == "AM"):
+            out.add(f("SENATT"))
+    return sorted(out)
+
+
 def load_pair_tests(root, pair, sources):
-    """Both tests of a pair on the same channel kind: right-rear seat
-    crossmember if both have a usable one, else left-rear, else None."""
-    for kind, codes in (("right rear seat crossmember X", RIGHT_REAR),
-                        ("left rear seat crossmember X", LEFT_REAR)):
+    """Both tests of a pair on the same channel kind (seat/floor right rear,
+    else left rear, else door sill right rear, else left rear); None if no
+    kind is present in both tests."""
+    for kind, codes in (("right rear seat/floor crossmember X (SERR, FLRR)", RIGHT_REAR),
+                        ("left rear seat/floor crossmember X (SELR, FLLR)", LEFT_REAR),
+                        ("right rear door sill X (DSRR)", SILL_RIGHT_REAR),
+                        ("left rear door sill X (DSLR)", SILL_LEFT_REAR)):
         tests = [load_test(root, t, codes, sources) for t in pair]
         if all(t["curve"] is not None for t in tests):
             for t in tests:
@@ -337,15 +364,23 @@ def run(root, out):
     p = lambda s: print(s, file=out)  # noqa: E731
     p("V6 scatter: window %g s, CFC %g (peak, time of peak), CFC %g (delta-V, OLC)"
       % (WINDOW_S, CFC_SHAPE, CFC_INT))
+    p("channel rule: same channel kind in both tests (seat/floor rear X, else door sill rear X); "
+      "a pair with no common kind is excluded")
     p("count rule: same year, mass within %.0f%%, VEHICLE fields 13 and 14 within %.0f%%"
       % (100 * MASS_TOL, 100 * DIM_TOL))
     pair_rows = []
+    excluded = []
     n_tests = 0
     for number, pair in enumerate(PAIRS, 1):
         tests = load_pair_tests(root, pair, sources)
         if tests is None:
-            raise ScatterError("pair %d %s: no rear-seat crossmember X channel in both tests"
-                               % (number, pair))
+            excluded.append(number)
+            p("pair %d %d/%d | EXCLUDED | no rear seat, floor or door sill X channel of the "
+              "same kind in both tests | vehicle-1 global X accelerometer SENATT codes "
+              "(DASTAT AM): %d %s, %d %s"
+              % (number, pair[0], pair[1], pair[0], ",".join(xg_codes(root, pair[0])),
+                 pair[1], ",".join(xg_codes(root, pair[1]))))
+            continue
         res = []
         for t in tests:
             v0 = t["speed_kmh"] / 3.6
@@ -368,12 +403,15 @@ def run(root, out):
         tp = abs(res[0]["peak_time_s"] - res[1]["peak_time_s"])
         ol = rel_diff(res[0]["olc_mps2"], res[1]["olc_mps2"])
         same_body = tests[0]["body"] == tests[1]["body"]
+        same_code = tests[0]["senatt"] == tests[1]["senatt"]
         pair_rows.append({"n": number, "counted": counted, "same_body": same_body,
+                          "same_code": same_code,
                           "dv": dv, "peak": pk, "tpeak_ms": tp * 1e3, "olc": ol})
         p("pair %d %d/%d | counted %s | %s | dv_rel %.4f | peak_rel %.4f | peak_time_diff %.1f ms | "
           "olc_rel %s" % (number, pair[0], pair[1], "yes" if counted else "no", why, dv, pk,
                           tp * 1e3, fmt(ol, ".4f")))
     p("tests read: %d" % n_tests)
+    p("excluded pairs: %s" % (",".join(str(n) for n in excluded) or "none"))
 
     def summary(label, rows):
         for name, key in (("dv_rel", "dv"), ("peak_rel", "peak"), ("peak_time_diff_ms", "tpeak_ms"),
@@ -386,6 +424,9 @@ def run(root, out):
     counted = [r for r in pair_rows if r["counted"]]
     p("counted pairs: %s" % ",".join(str(r["n"]) for r in counted))
     summary("counted", counted)
+    code = [r for r in counted if r["same_code"]]
+    p("counted pairs with the same SENATT code in both tests: %s" % ",".join(str(r["n"]) for r in code))
+    summary("counted_same_senatt_code", code)
     same = [r for r in counted if r["same_body"]]
     p("counted pairs with identical body code: %s" % ",".join(str(r["n"]) for r in same))
     summary("counted_same_body_code", same)
