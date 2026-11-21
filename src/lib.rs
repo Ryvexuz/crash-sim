@@ -324,7 +324,7 @@ fn build_cube(cfg: &Config) -> (Vec<Vec3>, Vec<Beam>, Vec<f64>) {
 impl Sim {
     /// A cube sim with the default solver, `SymplecticEuler`.
     pub fn new(cfg: Config) -> Sim {
-        Sim::with_solver(cfg, Box::new(SymplecticEuler))
+        Sim::with_solver(cfg, Box::new(SymplecticEuler::default()))
     }
 
     /// A cube sim advanced by the given solver.
@@ -340,7 +340,7 @@ impl Sim {
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
     pub fn from_body(cfg: Config, body: &Body) -> Result<Sim, String> {
-        Sim::from_body_with_solver(cfg, body, Box::new(SymplecticEuler))
+        Sim::from_body_with_solver(cfg, body, Box::new(SymplecticEuler::default()))
     }
 
     /// A sim of a body loaded from a `.bsn` file, advanced by the given solver. Refused (Err)
@@ -370,7 +370,7 @@ impl Sim {
     /// below the stability bound of the chassis together with the wheels
     /// (`vehicle::Car::limit_elements`).
     pub fn from_car(cfg: Config, body: &Body) -> Result<Sim, String> {
-        Sim::from_car_with_solver(cfg, body, Box::new(SymplecticEuler))
+        Sim::from_car_with_solver(cfg, body, Box::new(SymplecticEuler::default()))
     }
 
     /// `from_car` with the given solver.

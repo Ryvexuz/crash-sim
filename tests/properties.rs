@@ -255,7 +255,7 @@ fn solver_energy_never_rises() {
             let mut b = random_body(&mut r);
             let h = b.h;
             let omega = gershgorin_omega_max(b.pos.len(), &b.beams, &b.mass);
-            let mut s = SymplecticEuler;
+            let mut s = SymplecticEuler::default();
             let mut prev = kinetic(&b) + elastic(&b);
             let start = prev;
             let tol = ENERGY_TOLERANCE_FACTOR * h * omega * start;
@@ -284,7 +284,7 @@ fn solver_conserves_momentum_without_external_force() {
             let mut r = case_rng(seed, case);
             let mut b = random_body(&mut r);
             let h = b.h;
-            let mut s = SymplecticEuler;
+            let mut s = SymplecticEuler::default();
             let p0 = momentum(&b);
             let scale: f64 = b
                 .vel
@@ -314,7 +314,7 @@ fn solver_is_deterministic() {
             let start = random_body(&mut r);
             let (mut x, mut y) = (start.clone(), start);
             let h = x.h;
-            let (mut sx, mut sy) = (SymplecticEuler, SymplecticEuler);
+            let (mut sx, mut sy) = (SymplecticEuler::default(), SymplecticEuler::default());
             for _ in 0..STEPS {
                 step(&mut sx, &mut x, h);
                 step(&mut sy, &mut y, h);
@@ -375,7 +375,7 @@ fn solver_energy_decays_with_damping() {
                 .fold(f64::INFINITY, f64::min);
             let m_max = b.mass.iter().cloned().fold(0.0, f64::max);
             let gamma = c_min / m_max;
-            let mut s = SymplecticEuler;
+            let mut s = SymplecticEuler::default();
             let mut energy = Vec::with_capacity(STEPS);
             for _ in 0..STEPS {
                 step(&mut s, &mut b, h);

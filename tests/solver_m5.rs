@@ -446,8 +446,8 @@ fn m5_constants_are_the_frozen_lines() {
 
 #[test]
 fn default_solver_handles_no_solids_and_reports_nothing() {
-    assert!(!SymplecticEuler.handles_solids());
-    assert_eq!(SymplecticEuler.check(), None);
+    assert!(!SymplecticEuler::default().handles_solids());
+    assert_eq!(SymplecticEuler::default().check(), None);
     let b = one_tet(1e6, 0.02, 0.0, 1.0, 1.0, Vec3::new(0.0, 10.0, 0.0));
     let s = SolverM5::from_body(&b, 1e-4).unwrap();
     assert!(s.handles_solids());
@@ -468,13 +468,13 @@ fn a_body_with_tets_is_refused_by_a_solver_without_solids() {
         ..Config::default()
     };
     let want = "the body has 6 tets, which this solver does not simulate (they would be dropped): tets are simulated by `solver_m5::SolverM5` (docs/PHYSICS.md, \"Solids\")";
-    let e = Sim::from_body_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler))
+    let e = Sim::from_body_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler::default()))
         .err()
         .unwrap();
     assert_eq!(e, want);
     assert_eq!(Sim::from_body(cfg.clone(), &b).err().unwrap(), want);
     assert_eq!(
-        Sim::from_car_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler))
+        Sim::from_car_with_solver(cfg.clone(), &b, Box::new(SymplecticEuler::default()))
             .err()
             .unwrap(),
         want

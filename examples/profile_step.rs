@@ -122,7 +122,7 @@ fn run_timed(s: &Setup) -> (Sim, [Duration; PHASES.len()], Duration) {
     let script = s.setup.script.as_ref().expect("script set in load");
     let h = s.one.dt;
     let tol = h * 1e-6;
-    let mut solver = SymplecticEuler;
+    let mut solver = SymplecticEuler::default();
     let mut acc = [Duration::ZERO; PHASES.len()];
     let t0 = Instant::now();
     for i in 1..=s.steps {

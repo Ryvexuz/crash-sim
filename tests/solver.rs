@@ -21,7 +21,7 @@ fn default_csv_matches_main_fixture() {
 fn explicit_default_solver_is_the_default() {
     let cfg = Config::default();
     let mut a = Sim::new(cfg.clone());
-    let mut b = Sim::with_solver(cfg, Box::new(SymplecticEuler));
+    let mut b = Sim::with_solver(cfg, Box::new(SymplecticEuler::default()));
     for _ in 0..200 {
         a.advance();
         b.advance();
@@ -137,7 +137,7 @@ fn symplectic_euler_uses_per_node_mass_and_per_beam_stiffness() {
         let mut vel = vec![Vec3::ZERO; 2];
         let beams = [Beam { a: 0, b: 1, rest: 1.0, stiffness: k, damping: 0.0 }];
         let mass = [m, m];
-        SymplecticEuler.step(State { pos: &mut pos, vel: &mut vel, beams: &beams, mass: &mass, gravity: 0.0 }, 0.001);
+        SymplecticEuler::default().step(State { pos: &mut pos, vel: &mut vel, beams: &beams, mass: &mass, gravity: 0.0 }, 0.001);
         vel[0].x
     };
     let light = run_with(1.0, 1000.0);
