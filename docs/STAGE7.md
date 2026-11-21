@@ -79,7 +79,7 @@ The grammar is nb-43's (in `docs/FORMAT.md`'s track section, or in `docs/TRACK.m
 - Width 12 m everywhere. Start/finish index 0. Checkpoints 16 (the apex of bend 1, (80, 30)), 32 (the middle of the back straight) and 48 (the apex of bend 2, (-80, 30)). `grid 20`, so the car starts at (-20, 0) facing +x.
 - Its centreline polygon is 388.4094 m long (two 100 m straights plus 60 chords of 2 x 30 x sin 3 degrees = 3.14016 m each). The race program prints this as `centre_length_m=388.41`.
 
-`scenarios/tracks/oval_pinch.track` (board task `t-20261121-015242`, which replaces nb-47 for this file) is `oval.track` with one change: points 5 to 10 (on bend 1, p = 24 to 54 degrees, about 16 m of bend) have a per-point width of 0.2 m. The gates at 0, 16, 32 and 48 keep 12 m. A test checks that nothing else differs.
+`scenarios/tracks/oval_pinch.track` (board task `t-20261121-015242`, which replaces nb-47 for this file) is `oval.track` with two changes, in two stretches: points 5 to 10 (on bend 1, p = 24 to 54 degrees, about 16 m of bend) and points 33 to 36 (the start of the back straight and of bend 2) have a per-point width of 0.2 m. There are two stretches because the oval script of 1.4 drives two laps and check 1.5 needs both laps invalid: one narrowed stretch cannot make both laps invalid, because lap 2 stays inside the band (the task `t-20261121-015242` found this when building it). The gates at 0, 16, 32 and 48 keep 12 m. A test checks that nothing else differs.
 
 `scenarios/tracks/chicane.track` (nb-43): any closed track with a chicane, for the parser and the lap timer tests. No run in milestone 1 uses it.
 
@@ -673,9 +673,157 @@ FAIL: no record, a paraphrase, any answer other than yes, or a missing item.
 
 **What guards against tuning to the test in milestone 3:** the expected text of the protocol is exact (3.2), so a menu that "works" in a different way fails; the state lines come from `menu::step` (n20-23's tests: no dead ends), so the shell is a thin layer; the restart in 3.2 and 3.5 is a second process reading what the first wrote, and the files are compared byte for byte; a corrupt file is shown to be refused, named and left alone (3.3); "no Rust, no Broadsword" is the environment of 3.5 and the import check of 3.4, not a claim; and the last word is a person on a machine that is not ours (3.6).
 
-### Milestones 4 and 5
+### Milestone 4: two machines race each other
 
-m4 checks: task t-20261121-014029 (n20-16b)
+**Lockstep, as built.** The sim is deterministic (STAGE6 3.5), so only inputs and state hashes cross the network (`src/net.rs`, `docs/NET.md`, `src/net/session.rs`). Both machines run the same two-car sim from the same files; the host's input drives car 1, the guest's drives car 2; a peer steps tick t only when it holds both inputs for t (a late input is waited for, never guessed); every N ticks both exchange a hash of the whole sim state, and a difference stops both with `desync at tick t` and both hashes. That is n20-25b's, merged. The input message carries throttle from -1 to 1 (reverse, crash-sim `6029157` on the wire, `15499f4` in the sim), brake 0 to 1 and steer -1 to 1, as integers in thousandths; the scripts of this milestone use no reverse. This milestone wires the session to the race and shows it on a real race.
+
+**The numbers, and why.**
+
+- **Tick rate 100 per second, one tick is one output step (`dt` 0.01 s, 10 substeps).** The input of a tick is held for its 10 substeps. 1000 ticks a second (one per substep) would need a round trip under 1 ms per tick, which no Wi-Fi LAN gives. `hello` carries the tick rate, so a peer with another `--dt` is refused (n20-25b: `HelloMismatch`).
+- **Input delay D = 6 ticks (60 ms).** An input given at tick t is applied at t + 6, so a message has 60 ms to arrive before the peer needs it. A home Wi-Fi round trip is usually 2 to 10 ms and spikes to 30 to 50 ms; 60 ms covers a spike with a margin, and is short enough to drive with. *Reasoned; the LAN check (4.7) records the round trips.*
+- **Hash every N = 100 ticks (1 s).** A divergence is found within one simulated second of its first visible effect. One hash is a 16-digit line.
+- **Timeout T = 5 s per message; connect timeout 30 s.** Longer than any stall of a healthy LAN peer, short enough to be a failure rather than a hang (the n20-25b test shows a silent peer ends within 2 x T). The connect timeout is longer because a person may have to click "Allow" on the Windows firewall prompt.
+- **`--duration 120` (12000 ticks, 120 hashes).** Milestone 1 (1.4) says `oval_lap.input` drives two laps and then brakes to a stop, as built in n20-13. Two laps at the 8 m/s floor of m2 are 2 x 48.6 = 97.2 s, plus the run-up of at most 5 s (40 m at 8 m/s is the slot-3 figure of m2; slot 2 is 30 m, so less): 102.2 s, so 120 s holds. The script of car 2 must end its two laps in the same time (4.1 tests that its last line is before 120 s). After its script ends, a car keeps the last input (the script ends with a brake to a stop).
+- **Two scripts, one per slot.** Car 1 uses `oval_lap.input` from slot 1. Car 2 uses its own script, `oval_lap_b.input`, made for slot 2 by n20-27 (see "Who builds what, milestone 4"). It is not `oval_lap.input` run from slot 2, and not that script delayed: the track is flat with no physical walls, so the same inputs from a slot 10 m farther back give the same path shifted 10 m along the front straight, which puts car 2 about 10 m off the centreline at both bend apexes (off track, invalid laps), and a time delay does not help, since on the back straight the two cars would be only |v x delay - 10 m| apart (for a 1 s delay, a collision at speeds between about 5.6 and 14.4 m/s). So `oval_lap_b.input` is authored the way `oval_lap.input` is (open loop, aimed by running it, with the final tyres) but from slot 2, with throttle and steer times chosen so that car 2 stays on the track and behind car 1; it drives two laps and ends before 120 s. That it is well aimed is measured, not assumed: 4.1's `oval_lap_b_drives_a_valid_lap_from_slot_2` runs it alone from slot 2 (`--grid-slot 2`, n20-20) and 4.2 requires both cars to complete a valid lap and the cars to stay at least 4.40 m apart (the rule and reason of milestone 2). With one script on both sides a bug that gave the local input to car 1 on both machines would still print equal lines; with two slot-specific scripts it makes car 2's lap invalid or the cars touch, which 4.2 reports.
+- **A state hash that covers every field the next step reads** (n20-27): the tick, then for car 1 and car 2 in that order: every node's position and velocity, every wheel's spin and steer, every beam's rest length and broken flag, all as `f64` bit patterns (n20-24's `write_f64`; NaN refused). A field left out can diverge without a hash ever showing it, and plastic beam state is state. The test `state_hash_covers_every_state_field` changes each kind of field alone and requires a different hash each time.
+
+**Flags and output (n20-27).** `crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> --host <addr:port> | --join <addr:port> --input <file> --net-delay <ticks> --net-hash-every <ticks> --net-timeout <s> --net-connect-timeout <s> --net-seed <u64>`; the same program without a network, as the reference, is `--input <file> --input2 <file> --net-delay <ticks> --net-hash-every <ticks>` (car 1 from `--input`, car 2 from `--input2`, each applied `--net-delay` ticks late as in a network run, the same sim, the same hash lines, no `net` lines). `--host 127.0.0.1:0` binds an OS-chosen port and prints it; `--host 0.0.0.0:47000` is the LAN case; the host binds exactly the address it is given. The hello's tick rate is 1 / `--dt`. Both peers must be given the same `--body`, `--track`, `--grid-gap`, `--duration`, `--net-delay`, `--net-hash-every` and `--net-seed`; a difference is a desync by design (4.3). The host drives car 1, the guest car 2. Lines, in this order (the program's, after `broadsword`'s own when run through it):
+
+```
+net listening addr=<addr:port>                 host only, first, flushed before it waits
+net role=<host|guest> addr=<addr:port> tick_rate=<n> input_delay=<n> hash_every=<n> timeout_s=<3 decimals> seed=<n>
+car <k> start t=<4 decimals>                    k is 1 or 2; the lines of milestone 1, as in milestone 2
+car <k> checkpoint lap=<n> k=<n> t=<4 decimals>
+car <k> lap n=<n> ...
+hash tick=<t> value=<16 lower-case hex>        after every hash_every-th tick, t = 99, 199, ...
+car <k> final t=<4 decimals> x=<4 decimals> z=<4 decimals> heading_deg=<2 decimals>
+cars gap_min_m=<2 decimals> gap_min_t=<4 decimals> near_substeps=<count>
+net: ok ticks=<n> hashes=<n> last_hash=<16 hex>
+```
+The `cars` line is milestone 2's, with the same definition (the smallest distance between the two chassis centres in the ground plane over all substeps, and the number of substeps with the centres closer than 4.40 m; the reason for 4.40 m is in "The numbers, and why" of milestone 2); the reference run prints it too. Or, instead of the last line, one of `net: FAIL desync at tick <t> own=<hex> peer=<hex>`, `net: FAIL timeout at tick <t> after <seconds, 3 decimals> s`, `net: FAIL disconnected at tick <t>`, `net: FAIL peer left at tick <t>`, `net: FAIL no peer within <seconds, 3 decimals> s`, `net: FAIL cannot connect to <addr:port>: <reason>`, with exit code 1; exit 2 for a usage error. A failure line is always the last line. A peer prints a `hash` line only once both peers' hashes for that tick have been compared and are equal; on a mismatch it prints no `hash` line for that tick, only the `net: FAIL desync` line, and neither peer prints another `car` or `hash` line after it.
+
+#### Checks
+
+**4.1 Tests.** `broadsword test crash-sim > scratch/s7-4-1.txt 2>&1`
+PASS iff the last line is `test: ok — N passed, 0 failed`, N is at least the N of 3.1 plus the 8 tests named here, and the file contains `Running tests\two_player.rs` and each of `test two_peers_on_loopback_match_the_local_run ... ok`, `test forced_desync_is_reported_by_both_peers ... ok` (the peers are started with different `--grid-gap`), `test silent_peer_ends_with_timeout ... ok`, `test killed_peer_ends_with_a_named_error ... ok`, `test no_peer_ends_with_a_named_error ... ok`, `test state_hash_covers_every_state_field ... ok`, `test oval_lap_b_drives_a_valid_lap_from_slot_2 ... ok` (runs `oval_lap_b.input` alone from slot 2 and asserts a valid lap, and that its last line is before 120 s), `test host_and_guest_inputs_drive_their_own_cars ... ok` (swapping the two scripts changes which car moves) (n20-27), and the existing tests of `net_codec` (14), `net_session` (18) and `statehash` (7): `{ source scratch/s7-named.sh; named scratch/s7-4-1.txt net_codec 14; named scratch/s7-4-1.txt net_session 18; named scratch/s7-4-1.txt statehash 7; } > scratch/s7-4-1-named.txt 2>&1` prints three `named ...: ok` lines and no `MISSING` line.
+FAIL: any failed or missing test, or a smaller N.
+
+**4.2 Two processes on one PC play the same race as one process.** The orchestrator saves the launcher and the verifier under "The m4 launcher and verifier" below as `scratch/s7-4-peers.sh` and `scratch/s7-4-verify.sh`. Then, in Git Bash from the Broadsword root:
+```
+G="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --grid-gap 10 --duration 120"
+mkdir -p scratch/s7-4
+build/bin/broadsword.exe run crash-sim -- cargo run --offline --release -- $G --input scenarios/tracks/oval_lap.input --input2 scenarios/tracks/oval_lap_b.input --net-delay 6 --net-hash-every 100 > scratch/s7-4-ref.txt 2>&1
+{ build/bin/broadsword.exe run crash-sim -- cargo build --offline --release; cp build/release/crash-sim.exe scratch/s7-4/crash-sim.exe && echo copied; } > scratch/s7-4-2-build.txt 2>&1
+bash scratch/s7-4-peers.sh p 10 10 120 no > scratch/s7-4-2-run.txt 2>&1
+bash scratch/s7-4-verify.sh > scratch/s7-4-2-verdict.txt 2>&1
+```
+The first command is the reference (run through `broadsword run` without a `timeout`: killing a `run` leaves an interrupted job that needs `recover`, and the run is 120 s of simulated time, about a second of wall time by the bench note of crash-sim `3a11077`, *reasoned*): the same program with no network, car 1 from `--input` and car 2 from `--input2`. **Scripted inputs under the input delay D:** the session applies the input given at tick t at tick t + D, and for a script the input given at tick t is the script's value at simulation time t x dt; so in a network run each car sees its script D ticks (60 ms) late, and the first D ticks are neutral. The reference run is given the same `--net-delay` and applies the same delay to both scripts, so the three runs must print identical lines. The other choice, sending the script values D ticks ahead so that they apply at their script times, is not used: a live player cannot send an input ahead of when he gives it, so it would test a different input history. The launcher starts the host on `127.0.0.1` with an OS-chosen port, reads the port from the host's `net listening` line, and starts the guest against it; the two are the copy of the built program, run directly (see "When a check runs a built program directly").
+PASS iff the reference output has `run: ok`, `scratch/s7-4-2-build.txt` contains `run: ok` and ends `copied`, `scratch/s7-4-2-run.txt` has `host_exit=0` and `guest_exit=0`, and the last line of `scratch/s7-4-2-verdict.txt` is `m4-local: ok`. The verifier, in order: the host's, the guest's and the reference's `car`/`hash` lines (the `start`, `checkpoint`, `lap` and `final` lines of both cars, and the `hash` lines) are identical, character for character, in all three files; there are exactly 120 `hash` lines in each; each peer's last line is `net: ok ticks=12000 hashes=120 last_hash=<H>` with `H` equal to the value of its `hash tick=11999` line and equal on both peers; car 1 and car 2 each have at least one `lap` line with `valid=yes`; and the `cars` line has `gap_min_m` at least 4.40 and `near_substeps=0` (the two scripts are slot-specific, so a swapped or ill-aimed input shows as an invalid lap or as cars touching). A run where a file has no lines, or where the reference has no hash lines, fails on the counts.
+FAIL: a difference between the three files (the network changed the simulation); a missing or different hash; a non-zero exit.
+
+**4.3 A forced desync is detected and reported by both peers.** In Git Bash from the Broadsword root, after 4.2 (the copy of the program is in place): `bash scratch/s7-4-peers.sh d 10 11 120 no > scratch/s7-4-3-run.txt 2>&1`. The host gets `--grid-gap 10`, the guest `--grid-gap 11`: the one parameter both sides must agree on differs, so the cars start from different places and the first hash, at tick 99, differs. Then `for p in host guest; do tr -d '\r' < scratch/s7-4-d-$p.txt | tail -n 1; done > scratch/s7-4-3-last.txt 2>&1`, and `grep -c '^net: ok' scratch/s7-4-d-host.txt scratch/s7-4-d-guest.txt > scratch/s7-4-3-ok.txt 2>&1; grep -c '^hash tick=' scratch/s7-4-d-host.txt scratch/s7-4-d-guest.txt > scratch/s7-4-3-hash.txt 2>&1`.
+PASS iff `scratch/s7-4-3-run.txt` has `host_exit=1` and `guest_exit=1`; `scratch/s7-4-3-last.txt` has two lines that each match `^net: FAIL desync at tick 99 own=[0-9a-f]{16} peer=[0-9a-f]{16}$`, with the host's `own` equal to the guest's `peer`, the host's `peer` equal to the guest's `own`, and `own` different from `peer` on each; and `scratch/s7-4-3-ok.txt` and `scratch/s7-4-3-hash.txt` each have two lines, one per file, and both end `:0` (no `net: ok` line and no `hash tick=` line: neither peer went on after the first hash). The tick is 99 because the first hash is exchanged after tick 99 and the cars differed from tick 0: it is the first hash after the divergence, and a peer that noticed later, or never, fails.
+FAIL: `net: ok` on either side; a desync reported at another tick; only one peer reporting it; a hang (the launcher runs each peer under `timeout 300`; a peer killed by it has exit 124 and fails).
+
+**4.4 A peer that dies ends the other with a named error, not a hang.** In Git Bash from the Broadsword root, after 4.2: `bash scratch/s7-4-peers.sh k 10 10 3000 yes > scratch/s7-4-4-run.txt 2>&1`, then `tr -d '\r' < scratch/s7-4-k-host.txt | tail -n 1 > scratch/s7-4-4-last.txt; grep -c '^hash tick=' scratch/s7-4-k-host.txt > scratch/s7-4-4-hash.txt; grep -c '^net: ok' scratch/s7-4-k-host.txt > scratch/s7-4-4-ok.txt`. The run is 3000 s of simulated time (300000 ticks), so the race cannot finish before the guest is stopped: the bench car case (`examples/bench.rs --case car`, crash-sim `3a11077`) says 10 s of the scripted lap took about 50 ms, about 5 ms per simulated second per car, so 3000 s of two cars is expected to take 30 s or more of wall time, against the half-second or less the launcher needs to see a hash line and stop the guest (*reasoned from that note, not measured*); the launcher stops the guest and its child with `taskkill //F //T` once the host has printed its first hash line.
+PASS iff `scratch/s7-4-4-run.txt` has `host_exit=1` and a `seconds_after_kill=` value of at most 15 (T is 5 s; 10 s is the margin); `scratch/s7-4-4-last.txt` matches `^net: FAIL (disconnected|timeout) at tick [0-9]+`; `scratch/s7-4-4-hash.txt` is at least 1 (the race was running when the guest died) and `scratch/s7-4-4-ok.txt` is 0.
+FAIL: `net: ok`; exit 124 (the host hung); a host that never printed a hash (the race did not start, so nothing was tested).
+
+**4.5 Waiting for a peer that never comes ends with a named error.** In Git Bash from the Broadsword root, after 4.2:
+```
+( cd projects/crash-sim || exit 2; X=../../scratch/s7-4/crash-sim.exe; C="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --grid-gap 10 --duration 120 --net-delay 6 --net-hash-every 100 --net-timeout 5 --net-connect-timeout 3 --net-seed 1"
+T0=$SECONDS; timeout 60 $X $C --host 127.0.0.1:0 --input scenarios/tracks/oval_lap.input > ../../scratch/s7-4-5a.txt 2>&1; echo "host_alone_exit=$? seconds=$((SECONDS - T0))"
+T0=$SECONDS; timeout 60 $X $C --join 127.0.0.1:1 --input scenarios/tracks/oval_lap_b.input > ../../scratch/s7-4-5b.txt 2>&1; echo "guest_alone_exit=$? seconds=$((SECONDS - T0))" ) > scratch/s7-4-5-run.txt 2>&1
+tr -d '\r' < scratch/s7-4-5a.txt | tail -n 1 > scratch/s7-4-5a-last.txt; tr -d '\r' < scratch/s7-4-5b.txt | tail -n 1 > scratch/s7-4-5b-last.txt
+```
+PASS iff `scratch/s7-4-5-run.txt` has `host_alone_exit=1` with `seconds=` 3 to 8 (a whole number from 3 to 8) and `guest_alone_exit=1` with `seconds=` 0 to 8; `scratch/s7-4-5a-last.txt` is exactly `net: FAIL no peer within 3.000 s`; and `scratch/s7-4-5b-last.txt` starts `net: FAIL cannot connect to 127.0.0.1:1: `.
+FAIL: a hang (exit 124), an earlier exit of the host, or any other last line.
+
+**4.6 The sim step uses no maths-library function that a second machine might compute differently.** Equal state hashes on one machine cannot show this: the same binary on two CPUs can give different last digits for `sin`, `cos`, `tanh` and the like (the Windows C runtime picks code by CPU features; a result can differ by one unit in the last place between CPUs), and one different bit becomes a desync at the next hash. The step lives in `src/lib.rs`, `src/solver.rs`, `src/collide.rs` and `src/vehicle.rs`, but a call anywhere in the library can reach it, so the scan covers every `.rs` file under `src/`, except `src/bin/` (the games' own programs, which the second game adds there). In Git Bash from the Broadsword root:
+```
+( cd projects/crash-sim || exit 2; grep -rHE --include='*.rs' --exclude-dir=bin '\.(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|exp2|exp_m1|ln|ln_1p|log|log2|log10|powf|cbrt|hypot|sin_cos)\(' src | tr -d '\r' | sed -E 's/^([^:]+):[[:space:]]*/\1: /' | LC_ALL=C sort ) > scratch/s7-4-6.txt 2>&1
+```
+The known list, on crash-sim `0bb2b5e` (read, with the reason each is or is not a risk). In the step of a race: `let (s, c) = (self.steer * self.max_steer).sin_cos();` in `src/vehicle.rs` (the steered wheels' direction, **every step**) and `c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()` in `src/vehicle.rs` (rolling resistance, **every step**, added by crash-sim `4fd84b0`). Once per run: two `sin_cos` of a tilt angle in `src/lib.rs` (the gravity tilt of the built-in cube, from a constant) and `Ok((grip_frac * first.mu).atan())` in `src/vehicle.rs` (the slope angle of `--slope-grip-frac`). Not in the lockstep step: `src/format.rs` (`log2` of the longest edge of a tetrahedron in the body file's quality check, at load time: it picks a scaling exponent, and the same file is loaded on both machines, so a different last bit could matter only at an exact power of two; recorded, not a step call), `src/main.rs` (`atan2` for the printed heading, a report), `src/ai.rs` (two lines, the AI driver: in milestone 4 the inputs come from scripts, but the driver is exactly what would be put in the loop later), `src/input.rs` (`atan2` of the reported heading), `src/pulse.rs` and `src/settle.rs` (analysis and reports). `sqrt` is exact in IEEE arithmetic and `powi` is plain multiplication; neither is listed.
+PASS iff `scratch/s7-4-6.txt` is exactly these thirteen lines (`diff` against the block below prints nothing), so that no new maths-library call enters the library without a decision here:
+```
+src/ai.rs: let alpha = wrap_angle(dz.atan2(dx) - s.heading);
+src/ai.rs: let delta = (2.0 * s.wheelbase * alpha.sin() / d).atan();
+src/format.rs: let k = longest.log2().ceil() as i32;
+src/input.rs: v.z.atan2(v.x)
+src/lib.rs: let (s, c) = TILT_DEG.to_radians().sin_cos();
+src/lib.rs: let (s, c) = self.gravity_tilt.sin_cos();
+src/main.rs: d.z.atan2(d.x).to_degrees()
+src/pulse.rs: let wa = (wd * dt / 2.0).sin() / (wd * dt / 2.0).cos();
+src/settle.rs: predicted: cfg.gravity * (theta.sin() - mu * theta.cos()),
+src/settle.rs: tan: theta.tan(),
+src/vehicle.rs: Ok((grip_frac * first.mu).atan())
+src/vehicle.rs: c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()
+src/vehicle.rs: let (s, c) = (self.steer * self.max_steer).sin_cos();
+```
+This check pins the list; it does not say the list is safe. 4.7 is the test of that. If 4.7 desyncs, the first suspects are the two per-step calls (the steer `sin_cos` and the `tanh`), and the remedy is a brief, not a looser check: replace each by a function built from `+ - * /` and `sqrt` only (so every IEEE machine gives the same bits), with a test against the library function and a re-run of the Stage 6 checks. That brief is the proposed **n20-27a**; the orchestrator may board it before 4.7 to save a failed LAN session.
+FAIL: any other output (a new call, a removed call, a changed line).
+
+**4.7 Two machines on the LAN** (the human check; Lazlo). Needs Lazlo's yes first (AGENTS.md: ask first for network services), and he is told that the host program will make Windows show a firewall prompt ("Allow access") on the first run, and that the host listens on the LAN while it runs. The same `crash-sim.exe` copy (the same file, copied, not rebuilt: a rebuild could differ) goes to both machines with `scenarios/` and the scripts. Host on one machine: `... --host 0.0.0.0:47000 --input scenarios/tracks/oval_lap.input`; guest on the other: `... --join <host LAN address>:47000 --input scenarios/tracks/oval_lap_b.input`, with the options of 4.2. The orchestrator saves both outputs, the exit codes, the two machines (computer name, Windows version, CPU model from `systeminfo`), the round-trip time of `ping -n 20 <other machine>` from each side, and the address used, in `evidence/stage-7-m4-human.md` before scratch can be wiped, and quotes Lazlo's answers verbatim: Q1 "Did both machines run the race to the end?", Q2 "Did you see anything freeze, stutter or jump?", and "What felt wrong, or not like two machines racing each other?", with one task id or `IDEAS.md` line per point.
+PASS iff both runs print `net: ok ticks=12000 hashes=120 ...`, both `last_hash` values are equal, the filtered lines (`car` and `hash` lines, as in 4.2) of the two machines are identical to each other and to 4.2's reference run on the main PC (`diff`), and Q1 is yes in Lazlo's words. The record must say whether the two machines have the same CPU model: if they differ and all hashes still match, that is the evidence 4.6 asks for. A `desync` here is a finding, not a failure to hide: record the tick and both hashes, and 4.6's remedy is the next task. The "felt wrong" points are not gated, but each needs its task or IDEAS line before the milestone is tagged.
+FAIL: any difference; `net: FAIL`; a missing record.
+
+#### The m4 launcher and verifier
+
+Save the first block as `scratch/s7-4-peers.sh` and the second as `scratch/s7-4-verify.sh`, unchanged. The launcher was run with a stand-in program (a shell script that printed the `net listening` line and hash lines) to see that it starts a host and a guest, reads the address, waits for both, and, with `yes`, stops the guest and its child with `taskkill //F //T` and reports `seconds_after_kill=`; it stopped the stand-in guest (throwaway scripts under `scratch/`, not committed). The verifier was run on synthetic files while this file was written: `m4-local: ok` on three matching files, and `m4-local: FAIL` after each of: a changed `lap` line on the guest, a missing hash line on the host, a wrong `last_hash`, `guest_exit=1`, a `gap_min_m` of 4.30, `near_substeps=3`, and an empty reference. That shows the scripts' logic only; the first real output is what shows the format matches.
+
+```
+# scratch/s7-4-peers.sh <prefix> <host grid gap> <guest grid gap> <duration s> <kill: yes|no>
+# Starts a host and a guest on loopback from projects/crash-sim with the copy scratch/s7-4/crash-sim.exe.
+# Writes scratch/s7-4-<prefix>-host.txt and scratch/s7-4-<prefix>-guest.txt; prints addr=, host_exit=, and
+# guest_exit= (kill no) or seconds_after_kill= (kill yes: the guest is stopped after the host's first hash line).
+P=$1; HG=$2; GG=$3; DUR=$4; KILL=$5
+R=$PWD; X=$R/scratch/s7-4/crash-sim.exe; H=$R/scratch/s7-4-$P-host.txt; G=$R/scratch/s7-4-$P-guest.txt
+cd projects/crash-sim || exit 2
+C="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --duration $DUR --net-delay 6 --net-hash-every 100 --net-timeout 5 --net-connect-timeout 30 --net-seed 1"
+timeout 300 $X $C --grid-gap $HG --host 127.0.0.1:0 --input scenarios/tracks/oval_lap.input > $H 2>&1 &
+HP=$!
+for i in $(seq 1 60); do grep -q '^net listening addr=' $H && break; sleep 0.5; done
+ADDR=$(grep -m1 '^net listening addr=' $H | sed -E 's/^net listening addr=//' | tr -d '\r'); echo "addr=$ADDR"
+timeout 300 $X $C --grid-gap $GG --join "$ADDR" --input scenarios/tracks/oval_lap_b.input > $G 2>&1 &
+GP=$!
+if [ "$KILL" = yes ]; then
+  for i in $(seq 1 600); do [ "$(grep -c '^hash tick=' $H)" -ge 1 ] && break; sleep 0.1; done
+  taskkill //F //T //PID "$(cat /proc/$GP/winpid)" > /dev/null; T0=$SECONDS
+  wait $HP; echo "host_exit=$?"; echo "seconds_after_kill=$((SECONDS - T0))"; wait $GP 2>/dev/null
+else
+  wait $HP; echo "host_exit=$?"; wait $GP; echo "guest_exit=$?"
+fi
+```
+
+```
+# scratch/s7-4-verify.sh: prints labelled lines and a last line m4-local: ok | FAIL
+# reads scratch/s7-4-p-host.txt, scratch/s7-4-p-guest.txt, scratch/s7-4-ref.txt and scratch/s7-4-2-run.txt
+bad=0; f() { echo "FAIL $1"; bad=1; }
+F='^(car [12] (start|checkpoint|lap|final) |cars |hash tick=)'
+src() { case $1 in host) echo scratch/s7-4-p-host.txt;; guest) echo scratch/s7-4-p-guest.txt;; ref) echo scratch/s7-4-ref.txt;; esac; }
+for p in host guest ref; do tr -d '\r' < "$(src $p)" | grep -E "$F" > scratch/s7-4-$p.lines; done
+echo "lines host=$(grep -c . scratch/s7-4-host.lines) guest=$(grep -c . scratch/s7-4-guest.lines) ref=$(grep -c . scratch/s7-4-ref.lines)"
+cmp -s scratch/s7-4-host.lines scratch/s7-4-ref.lines || f "host lines differ from the reference"
+cmp -s scratch/s7-4-guest.lines scratch/s7-4-ref.lines || f "guest lines differ from the reference"
+for p in host guest ref; do h=$(grep -c '^hash tick=' scratch/s7-4-$p.lines); echo "hashes $p=$h"; [ "$h" = 120 ] || f "$p has $h hash lines, need 120"; done
+for p in host guest; do
+  last=$(tr -d '\r' < "$(src $p)" | tail -n 1); echo "last $p: $last"
+  lh=$(grep '^hash tick=11999 ' scratch/s7-4-$p.lines | sed -E 's/.* value=//')
+  [ -n "$lh" ] && [ "$last" = "net: ok ticks=12000 hashes=120 last_hash=$lh" ] || f "$p last line is not net: ok with the hash of tick 11999"
+done
+[ "$(tail -n 1 "$(src host)" | tr -d '\r' | sed -E 's/.*last_hash=//')" = "$(tail -n 1 "$(src guest)" | tr -d '\r' | sed -E 's/.*last_hash=//')" ] || f "last_hash differs between peers"
+for k in 1 2; do n=$(grep -cE "^car $k lap n=[0-9]+ .* valid=yes " scratch/s7-4-ref.lines); echo "valid laps car $k=$n"; [ "$n" -ge 1 ] || f "car $k has no valid lap"; done
+C=$(grep -m1 '^cars ' scratch/s7-4-ref.lines); echo "$C"
+GM=$(echo "$C" | sed -E 's/.* gap_min_m=([^ ]+).*/\1/'); NR4=$(echo "$C" | sed -E 's/.* near_substeps=([^ ]+).*/\1/')
+awk -v g="$GM" 'BEGIN { exit !(g != "" && g + 0 >= 4.40) }' || f "cars came closer than 4.40 m (or no cars line)"
+[ "$NR4" = 0 ] || f "near_substeps is $NR4"
+grep -qx 'host_exit=0' scratch/s7-4-2-run.txt && grep -qx 'guest_exit=0' scratch/s7-4-2-run.txt || f "an exit code is not 0"
+if [ $bad = 0 ]; then echo "m4-local: ok"; else echo "m4-local: FAIL"; fi
+```
+
+**What guards against tuning to the test in milestone 4:** the network run must equal a run with no network (4.2), so the lockstep cannot change the physics; two different scripts make a mix-up of the cars visible; the forced desync uses a real mismatch and must be reported by both peers at the first hash (4.3); a dead or absent peer ends with a named error under a time limit (4.4, 4.5); a list of every maths-library call in the step is pinned (4.6), because equal hashes on one machine cannot show a machine difference; and the last word is two real machines (4.7).
+
+### Milestone 5
 
 m5 checks: task t-20261121-014029-2 (n20-16c)
 
@@ -748,5 +896,43 @@ Where a brief and this file differ, this file sets the check, and the brief's co
 - **n20-21, n20-22, n20-23 (merged):** nothing to change. The shell (n20-26a) prints `settings::write`'s canonical text and `Save::to_text`'s, which 3.2 pins byte for byte; the menu has no way to edit a setting, so the settings screen's `set` lines are the shell's, validated by `settings::validate`.
 - **n20-26a (proposed):** the shell protocol of "Milestone 3" exactly (flags, event lines, output lines, exit codes), the seven `shell` tests of 3.1, `docs/SHELL.md` with the same text, and claims `src/shell.rs` (new), `src/lib.rs` (the `pub mod shell;` line), `src/main.rs` (the `--shell` branch), `tests/shell.rs` (new), `docs/SHELL.md` (new). It depends on n20-20 and n20-13 merged (both claim `main.rs` and `lib.rs`).
 - **n20-26:** the front end's flags, the `--script` grammar, the release folder's layout, the `data` folder next to the executable, `game: ok` and `game: FAIL`, and the two commands of `package_race.py` (`build --out` and `check --folder`), with the allow-list of 3.4. The choice between a static C runtime and an app-local `vcruntime140.dll` is made and recorded in the evidence. **(not in the brief)** it depends on n20-26a, and the brief's claim is enough for the files it names. **(not in the brief)** the packaging script never writes outside `scratch/`; its unit tests hold the four cases of 3.1. **(not in the brief; conflict)** the brief's "child process or a small text protocol: say which" is settled here: the text protocol of n20-26a, with a crash-sim child.
-- m4 checks: task t-20261121-014029 (n20-16b)
+- m4: see "Who builds what, milestone 4" and "What the briefs must take from this file, milestone 4" at the end of this file.
 - m5 checks: task t-20261121-014029-2 (n20-16c)
+
+## Who builds what, milestone 4
+
+Scratch file names for milestone 4 (the rule of "Scratch file names" above: each check writes only files with its own number; 4.3 to 4.5 reuse 4.2's copy of the program and its launcher, which is stated here):
+
+| Check | Files it writes under `scratch/` |
+|---|---|
+| 4.1 | `s7-4-1.txt`, `s7-4-1-named.txt` |
+| 4.2 | `s7-4-ref.txt`, `s7-4/` (the program copy), `s7-4-2-*`, `s7-4-p-host.txt`, `s7-4-p-guest.txt`, `s7-4-host.lines`, `s7-4-guest.lines`, `s7-4-ref.lines`, `s7-4-peers.sh`, `s7-4-verify.sh` |
+| 4.3 | `s7-4-3-*`, `s7-4-d-host.txt`, `s7-4-d-guest.txt` |
+| 4.4 | `s7-4-4-*`, `s7-4-k-host.txt`, `s7-4-k-guest.txt` |
+| 4.5 | `s7-4-5*` |
+| 4.6 | `s7-4-6.txt` |
+
+Status is from the board when this was written; the brief files are in `state/next-batch-2026-11-20/`.
+
+| Brief | Board task | State | What it makes | Checks it must make pass |
+|---|---|---|---|---|
+| n20-13 headless timed lap | `t-20261121-001109-5` | built (with `--live`) | `--track` with `--input` and `--live`; `oval_lap.input` (two laps); `tests/timed_lap.rs` | 4.2 (the lap lines it prints) |
+| n20-19 several cars in one sim | not on the board yet | brief written | the two-car sim, car-to-car contact | 4.2 to 4.4 |
+| n20-20 AI race | not on the board yet | brief written | `--grid-slot`, `--grid-gap` | 4.1 (`oval_lap_b_drives_a_valid_lap_from_slot_2`), 4.2 |
+| n20-24 state hash | `t-20261119-223123-10` | merged | `src/statehash.rs`, `tests/statehash.rs` (7 tests) | 4.1, 4.2 (the hash lines) |
+| n20-25a message codec | `t-20261119-223123-11` | merged | `src/net.rs`, `tests/net_codec.rs` (14 tests), `docs/NET.md` | 4.1 |
+| n20-25b lockstep session | `t-20261120-175151` | merged | `src/net/session.rs`, `tests/net_session.rs` (18 tests) | 4.1 to 4.5 |
+| n20-27 two-player lockstep race | not on the board yet | brief written (a draft) | `--host`, `--join`, `--net-*`, `--input2`; `scenarios/tracks/oval_lap_b.input`; `tests/two_player.rs` | 4.1 to 4.5; 4.7 with the orchestrator |
+| n20-27a deterministic maths for the step | proposed, optional | not written | `src/vehicle.rs` (the two per-step library calls of 4.6), a test against the library function, `docs/PHYSICS.md` | 4.6 (the pinned list changes in the same commit), 4.7 |
+| Orchestrator, with Lazlo | | | `evidence/stage-7-m4.md`, `evidence/stage-7-m4-human.md` | 4.7, the evidence of every check |
+
+## What the briefs must take from this file, milestone 4
+
+Where a brief and this file differ, this file sets the check, and the brief's coder raises the difference with the orchestrator. Items marked **(not in the brief)** are additions or conflicts that the orchestrator must apply to the board brief before it starts.
+
+- **n20-19 (for m4):** **(not in the brief)** the multi-car sim exposes its full state in a fixed order (every node, wheel and beam of each car, car 1 first), which the hash of n20-27 reads.
+- **n20-20 (for m4):** `--grid-slot <k>` and `--grid-gap` are what the `oval_lap_b` test uses to run the script alone from slot 2; the m2 `cars` line definition is reused by m4.
+- **n20-24 (merged):** nothing to change. n20-27 feeds the fields in the order of "Milestone 4" (tick, then car 1, then car 2: nodes, wheels, beams) and a NaN is a sim failure, not a hash.
+- **n20-25a and n20-25b (merged):** nothing to change. `hello` carries the seed and the tick rate only, so D and N are flags that both peers are given (`--net-delay`, `--net-hash-every`); a difference between the two is a sequence error or a desync by design. The session's `Timeout`, `Disconnected` and `PeerLeft` errors are what 4.4 and 4.5 print as `net: FAIL ...`.
+- **n20-27:** every flag, line and exit code of "Milestone 4" (including the `cars` line), the eight `two_player` tests of 4.1, the hash coverage rule, and the numbers (tick rate 100, D = 6, N = 100, T = 5 s, connect timeout 30 s, `--duration 120`). **(not in the brief)** claims add `scenarios/tracks/oval_lap_b.input` (new): the open-loop script for car 2 in slot 2, aimed from slot 2 like `oval_lap.input` is aimed from slot 1 (not a copy of it, not a time shift: see "Two scripts, one per slot"), two laps, last line before 120 s, tested by `oval_lap_b_drives_a_valid_lap_from_slot_2`; n20-27 depends on n20-19, n20-20 and n20-13 merged for that reason. It also claims the file that holds the two-car sim and its hash if it is not `net.rs`. **(not in the brief)** the host binds exactly the address it is given (`--host 127.0.0.1:0` for tests, `0.0.0.0:<port>` for the LAN) and prints `net listening addr=...` first. **(not in the brief)** the reference mode `--input2` with no network and with `--net-delay` applied. **(not in the brief)** 4.6 pins thirteen lines of maths-library calls under `src/` (two of them in the per-step path); a new call anywhere in `src/` outside `src/bin/` is a decision for the orchestrator, not an edit of that check.
+- **n20-27a (proposed, optional):** replace the two per-step library calls (`sin_cos` of the steer angle and `tanh` of the rolling resistance, in `src/vehicle.rs`) by functions built from `+ - * /` and `sqrt` only, tested against the library function over the range the sim uses, and re-run the Stage 6 checks (the default CSV unchanged, the car checks, the 3.6 crash). The two `sin_cos` of the tilt angle in `src/lib.rs` are computed once per run from a constant and are left for the same task to decide. 4.6's list changes in the same commit. The orchestrator boards it before 4.7 if it wants no failed LAN session; otherwise 4.7 is the test.
