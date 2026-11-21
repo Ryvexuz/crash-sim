@@ -1173,8 +1173,114 @@ fn without_comments(text: &str) -> (String, usize) {
     (out, dropped)
 }
 
-/// No `bsn 1` or `bsn 2` scenario on main changes by one byte on `write(parse(x))`, and the
-/// header `write` picks is the file's own.
+/// SHA-256 (FIPS 180-4), written out here because the crate has no dependencies. Checked
+/// against the published test vectors in `sha256_matches_the_fips_test_vectors`.
+fn sha256_hex(data: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+    for block in msg.chunks(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([
+                block[4 * i],
+                block[4 * i + 1],
+                block[4 * i + 2],
+                block[4 * i + 3],
+            ]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+            *x = x.wrapping_add(y);
+        }
+    }
+    h.iter().map(|x| format!("{x:08x}")).collect()
+}
+
+#[test]
+fn sha256_matches_the_fips_test_vectors() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
+}
+
+/// The two committed scenario files that carry comments (so `write(parse(x))` cannot equal
+/// the file: `write` never keeps comments), with the length and SHA-256 of `write(parse(x))`
+/// as MAIN's code (d1758ae) printed it: measured in a scratch worktree of main with a scratch
+/// example, and compared with `cmp` against this branch's output (round 2 report).
+const MAIN_OUTPUT_PINS: [(&str, usize, &str); 2] = [
+    (
+        "pad_and_wall.bsn",
+        6971,
+        "ae201f37452ea6fed2d8a19470e05daad19df85f593af558b8d5e1f4ce2ff9cb",
+    ),
+    (
+        "skidpad.bsn",
+        6951,
+        "882bb30bd6f6e4b3b4cc2efd34a7841141ecb81c034d0fcbeff8d26c54b1b54f",
+    ),
+];
+
+/// No `bsn 1` or `bsn 2` scenario's `write(parse(x))` changes by one byte from main. The 10
+/// canonical files are compared with their own bytes, exactly. The 2 with comments are
+/// compared with the file minus its comment and blank lines, and pinned to main's output by
+/// length and SHA-256.
 #[test]
 fn every_scenario_file_writes_back_byte_for_byte() {
     let dir = format!("{}/scenarios", env!("CARGO_MANIFEST_DIR"));
@@ -1184,22 +1290,60 @@ fn every_scenario_file_writes_back_byte_for_byte() {
         .filter(|n| n.ends_with(".bsn"))
         .collect();
     names.sort();
+    let (mut canonical, mut pinned) = (0, 0);
     for name in &names {
         let text = scenario(name);
-        let (expected, dropped) = without_comments(&text);
         let body = parse(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
         let again = write(&body);
-        assert_eq!(
-            again, expected,
-            "write(parse({name})) differs from the file without its comments"
-        );
         assert_eq!(&again[..6], &text[..6], "{name}: header");
-        println!("scenario {name}: header `{}`, {} bytes in, {dropped} comment or blank lines dropped, {} bytes out, identical", &text[..5], text.len(), again.len());
+        match MAIN_OUTPUT_PINS.iter().find(|p| p.0 == name) {
+            None => {
+                assert_eq!(again, text, "write(parse({name})) differs from the file");
+                canonical += 1;
+                println!(
+                    "scenario {name}: {} bytes, write(parse(x)) identical to the file",
+                    text.len()
+                );
+            }
+            Some(&(_, len, sha)) => {
+                let (expected, dropped) = without_comments(&text);
+                assert!(
+                    dropped > 0,
+                    "{name} is pinned as a file with comments, but has none"
+                );
+                assert_eq!(
+                    again, expected,
+                    "write(parse({name})) differs from the file without its comments"
+                );
+                assert_eq!(
+                    again.len(),
+                    len,
+                    "{name}: length of the output differs from main's"
+                );
+                assert_eq!(
+                    sha256_hex(again.as_bytes()),
+                    sha,
+                    "{name}: SHA-256 of the output differs from main's"
+                );
+                pinned += 1;
+                let comments = text
+                    .split_terminator('\n')
+                    .skip(1)
+                    .filter(|l| l.starts_with('#'))
+                    .count();
+                println!(
+                    "scenario {name}: {} bytes in, {} bytes out, sha256 {sha}: canonical output identical to main's; {comments} comment lines (and {} blank lines) are not part of the canonical form",
+                    text.len(),
+                    again.len(),
+                    dropped - comments
+                );
+            }
+        }
     }
-    println!("scenario files checked: {}", names.len());
+    println!("scenario files checked: {} ({canonical} identical to the file, {pinned} pinned to main's output)", names.len());
     assert_eq!(
-        names.len(),
-        12,
+        (names.len(), canonical, pinned),
+        (12, 10, 2),
         "the 12 committed scenario files (main at the task start): {names:?}"
     );
 }
