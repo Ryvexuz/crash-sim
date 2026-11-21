@@ -417,7 +417,20 @@ fn positive(t: &Toks, col: usize, what: &str, v: f64) -> Result<(), ParseError> 
 }
 
 /// The line keywords in the order they must come.
-const SECTIONS: [&str; 12] = ["material", "solid", "node", "beam", "tet", "group", "velocity", "wheel", "suspension", "tyre", "controls", "plane"];
+const SECTIONS: [&str; 12] = [
+    "material",
+    "solid",
+    "node",
+    "beam",
+    "tet",
+    "group",
+    "velocity",
+    "wheel",
+    "suspension",
+    "tyre",
+    "controls",
+    "plane",
+];
 
 /// Keywords a version 1 file may not use.
 const CAR_SECTIONS: [&str; 4] = ["wheel", "suspension", "tyre", "controls"];
@@ -451,10 +464,18 @@ struct CarLines {
 
 /// Parse a `.bsn` file. See docs/FORMAT.md for the grammar.
 pub fn parse(text: &str) -> Result<Body, ParseError> {
-    let err = |line: usize, column: Option<usize>, message: String| ParseError { line, column, message };
+    let err = |line: usize, column: Option<usize>, message: String| ParseError {
+        line,
+        column,
+        message,
+    };
 
     if text.is_empty() {
-        return Err(err(1, None, format!("empty file: the first line must be {HEADERS}")));
+        return Err(err(
+            1,
+            None,
+            format!("empty file: the first line must be {HEADERS}"),
+        ));
     }
     if !text.ends_with('\n') {
         let last = text.split('\n').count();
@@ -524,7 +545,10 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
         };
         let needed = needs_version(kw);
         if version < needed {
-            return Err(t.err(Some(kc), format!("`{kw}` needs version {needed}: this file is `bsn {version}`")));
+            return Err(t.err(
+                Some(kc),
+                format!("`{kw}` needs version {needed}: this file is `bsn {version}`"),
+            ));
         }
         if this_rank < rank {
             return Err(t.err(
@@ -723,15 +747,26 @@ fn parse_solid(t: &mut Toks, names: &HashSet<String>) -> Result<Solid, ParseErro
     t.keyword("yield_strain")?;
     let (yc, yield_strain) = t.number("yield_strain")?;
     if !(yield_strain > 0.0 && yield_strain < 1.0) {
-        return Err(t.err(Some(yc), format!("yield_strain {yield_strain} must be > 0 and < 1")));
+        return Err(t.err(
+            Some(yc),
+            format!("yield_strain {yield_strain} must be > 0 and < 1"),
+        ));
     }
     t.keyword("damping_ratio")?;
     let (zc, damping_ratio) = t.number("damping_ratio")?;
     if !(0.0..=1.0).contains(&damping_ratio) {
-        return Err(t.err(Some(zc), format!("damping_ratio {damping_ratio} must be >= 0 and <= 1")));
+        return Err(t.err(
+            Some(zc),
+            format!("damping_ratio {damping_ratio} must be >= 0 and <= 1"),
+        ));
     }
     t.done()?;
-    Ok(Solid { name: name.to_string(), plateau_stress, yield_strain, damping_ratio })
+    Ok(Solid {
+        name: name.to_string(),
+        plateau_stress,
+        yield_strain,
+        damping_ratio,
+    })
 }
 
 /// `tet <a> <b> <c> <d> <solid>` (version 3): four distinct nodes declared above, a solid
@@ -748,7 +783,10 @@ fn parse_tet(
 ) -> Result<Tet, ParseError> {
     let mut ids = [0u32; 4];
     let mut cols = [0usize; 4];
-    for (k, what) in ["tet node a", "tet node b", "tet node c", "tet node d"].into_iter().enumerate() {
+    for (k, what) in ["tet node a", "tet node b", "tet node c", "tet node d"]
+        .into_iter()
+        .enumerate()
+    {
         (cols[k], ids[k]) = t.id(what)?;
     }
     let (sc, solid) = t.name("tet solid")?;
@@ -769,7 +807,13 @@ fn parse_tet(
     let mut set = ids;
     set.sort_unstable();
     if sets.contains(&set) {
-        return Err(t.err(at, format!("duplicate tet: nodes {} {} {} {} already form a tet", ids[0], ids[1], ids[2], ids[3])));
+        return Err(t.err(
+            at,
+            format!(
+                "duplicate tet: nodes {} {} {} {} already form a tet",
+                ids[0], ids[1], ids[2], ids[3]
+            ),
+        ));
     }
     let p = ids.map(|id| body.nodes[node_ids[&id]].pos);
     let volume = (p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0;
@@ -781,7 +825,10 @@ fn parse_tet(
         return Err(t.err(at, format!("{label}: its size is not finite (rest volume {volume}, longest edge {longest}): the nodes are too far apart")));
     }
     if volume.abs() < TET_MIN_VOLUME {
-        return Err(t.err(at, format!("{label}: its rest volume {volume} is below the minimum {TET_MIN_VOLUME} m^3")));
+        return Err(t.err(
+            at,
+            format!("{label}: its rest volume {volume} is below the minimum {TET_MIN_VOLUME} m^3"),
+        ));
     }
     // divided edge by edge, so that a large but well-shaped tet does not overflow the cube
     if volume.abs() / longest / longest / longest < TET_MIN_SHAPE {
@@ -791,10 +838,18 @@ fn parse_tet(
         ));
     }
     if volume < 0.0 {
-        return Err(t.err(at, format!("{label} is inverted: its rest volume {volume} is negative (swap two of its nodes)")));
+        return Err(t.err(
+            at,
+            format!(
+                "{label} is inverted: its rest volume {volume} is negative (swap two of its nodes)"
+            ),
+        ));
     }
     sets.insert(set);
-    Ok(Tet { nodes: ids, solid: solid.to_string() })
+    Ok(Tet {
+        nodes: ids,
+        solid: solid.to_string(),
+    })
 }
 
 /// `wheel <name> mount <id> [<id> ...] radius <r> width <w> mass <m> inertia <i>
@@ -932,18 +987,34 @@ const HEADERS: &str = "`bsn 1`, `bsn 2` or `bsn 3`";
 
 /// The version on line 1, 1 to `VERSION`.
 fn parse_header(line: &str) -> Result<u32, ParseError> {
-    let err = |column: Option<usize>, message: String| ParseError { line: 1, column, message };
+    let err = |column: Option<usize>, message: String| ParseError {
+        line: 1,
+        column,
+        message,
+    };
     let rest = match line.strip_prefix("bsn ") {
         Some(r) => r,
-        None => return Err(err(None, format!("the first line must be {HEADERS}, found `{line}`"))),
+        None => {
+            return Err(err(
+                None,
+                format!("the first line must be {HEADERS}, found `{line}`"),
+            ))
+        }
     };
     match parse_id(rest) {
         Some(v) if (1..=VERSION).contains(&v) => Ok(v),
-        Some(v) => Err(err(Some(5), format!("unknown version {v}: this parser reads versions 1, 2 and 3"))),
-        None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => {
-            Err(err(Some(5), format!("unknown version {rest}: this parser reads versions 1, 2 and 3")))
-        }
-        None => Err(err(Some(5), format!("version `{rest}` is not a version number (the first line must be {HEADERS})"))),
+        Some(v) => Err(err(
+            Some(5),
+            format!("unknown version {v}: this parser reads versions 1, 2 and 3"),
+        )),
+        None if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) => Err(err(
+            Some(5),
+            format!("unknown version {rest}: this parser reads versions 1, 2 and 3"),
+        )),
+        None => Err(err(
+            Some(5),
+            format!("version `{rest}` is not a version number (the first line must be {HEADERS})"),
+        )),
     }
 }
 

@@ -2,7 +2,10 @@
 //! Each refusal test checks the line, the column where the token is at fault, and the words
 //! of the message, so a parser that refuses for the wrong reason or at the wrong place fails.
 
-use crash_sim::format::{parse, write, Body, BodyBeam, Controls, Group, Material, Node, ParseError, Plane, Solid, Suspension, Tet, Tyre, Velocity, Wheel, TET_MIN_SHAPE, TET_MIN_VOLUME};
+use crash_sim::format::{
+    parse, write, Body, BodyBeam, Controls, Group, Material, Node, ParseError, Plane, Solid,
+    Suspension, Tet, Tyre, Velocity, Wheel, TET_MIN_SHAPE, TET_MIN_VOLUME,
+};
 use crash_sim::vec3::Vec3;
 use crash_sim::{Config, Sim, BEAM_DAMPING, BEAM_STIFFNESS, NODE_MASS};
 
@@ -265,7 +268,12 @@ fn random_body(rng: &mut Rng) -> Body {
                 1 => 1.0,
                 _ => rng.below(1001) as f64 / 1000.0,
             };
-            solids.push(Solid { name: format!("s{i}"), plateau_stress: rng.positive(), yield_strain: (1 + rng.below(999_999)) as f64 / 1e6, damping_ratio });
+            solids.push(Solid {
+                name: format!("s{i}"),
+                plateau_stress: rng.positive(),
+                yield_strain: (1 + rng.below(999_999)) as f64 / 1e6,
+                damping_ratio,
+            });
         }
         if nodes.len() >= 4 {
             for _ in 0..rng.below(24) {
@@ -285,23 +293,43 @@ fn random_body(rng: &mut Rng) -> Body {
                         s == set
                     });
                     if !taken {
-                        tets.push(Tet { nodes: ids, solid: format!("s{}", rng.below(solids.len() as u64)) });
+                        tets.push(Tet {
+                            nodes: ids,
+                            solid: format!("s{}", rng.below(solids.len() as u64)),
+                        });
                     }
                 }
             }
         }
     }
-    Body { materials, solids, nodes, beams, tets, groups, velocities, wheels, suspensions, tyres, controls, planes }
+    Body {
+        materials,
+        solids,
+        nodes,
+        beams,
+        tets,
+        groups,
+        velocities,
+        wheels,
+        suspensions,
+        tyres,
+        controls,
+        planes,
+    }
 }
 
 /// The node ids of `pick`, ordered to a positive volume, when the four nodes make a tet that
 /// passes the volume and shape minimums by a factor of 1000 (so the parser's rounding cannot
 /// decide it); None otherwise. The volume is this test's own determinant, written out.
 fn good_tet(nodes: &[Node], pick: &[usize]) -> Option<[u32; 4]> {
-    let p: Vec<[f64; 3]> = pick.iter().map(|&i| [nodes[i].pos.x, nodes[i].pos.y, nodes[i].pos.z]).collect();
+    let p: Vec<[f64; 3]> = pick
+        .iter()
+        .map(|&i| [nodes[i].pos.x, nodes[i].pos.y, nodes[i].pos.z])
+        .collect();
     let e = |k: usize| [p[k][0] - p[0][0], p[k][1] - p[0][1], p[k][2] - p[0][2]];
     let (u, v, w) = (e(1), e(2), e(3));
-    let det = u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0]);
+    let det = u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+        + u[2] * (v[0] * w[1] - v[1] * w[0]);
     let volume = det / 6.0;
     let mut longest = 0.0f64;
     for i in 0..4 {
@@ -310,13 +338,25 @@ fn good_tet(nodes: &[Node], pick: &[usize]) -> Option<[u32; 4]> {
             longest = longest.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
         }
     }
-    let ok = volume.is_finite() && longest.is_finite() && volume.abs() >= 1e3 * TET_MIN_VOLUME && volume.abs() / longest / longest / longest >= 1e3 * TET_MIN_SHAPE;
+    let ok = volume.is_finite()
+        && longest.is_finite()
+        && volume.abs() >= 1e3 * TET_MIN_VOLUME
+        && volume.abs() / longest / longest / longest >= 1e3 * TET_MIN_SHAPE;
     if !ok {
         return None;
     }
-    let ids = [nodes[pick[0]].id, nodes[pick[1]].id, nodes[pick[2]].id, nodes[pick[3]].id];
+    let ids = [
+        nodes[pick[0]].id,
+        nodes[pick[1]].id,
+        nodes[pick[2]].id,
+        nodes[pick[3]].id,
+    ];
     // an odd permutation (swap the last two) turns a negative tet positive
-    Some(if volume > 0.0 { ids } else { [ids[0], ids[1], ids[3], ids[2]] })
+    Some(if volume > 0.0 {
+        ids
+    } else {
+        [ids[0], ids[1], ids[3], ids[2]]
+    })
 }
 
 #[test]
@@ -333,12 +373,25 @@ fn parse_of_write_gives_the_same_body() {
         // a car with tets is written as version 3, so count the controls line, not the header
         with_car += usize::from(text.contains("\ncontrols "));
         with_tets += text.matches("\ntet ").count();
-        assert_eq!(text.starts_with("bsn 3\n"), !body.solids.is_empty() || !body.tets.is_empty(), "case {case}: header");
+        assert_eq!(
+            text.starts_with("bsn 3\n"),
+            !body.solids.is_empty() || !body.tets.is_empty(),
+            "case {case}: header"
+        );
     }
-    assert!(with_rest > 50, "the generator should exercise explicit rest lengths ({with_rest})");
-    assert!(with_car > 150, "the generator should exercise the car sections ({with_car})");
+    assert!(
+        with_rest > 50,
+        "the generator should exercise explicit rest lengths ({with_rest})"
+    );
+    assert!(
+        with_car > 150,
+        "the generator should exercise the car sections ({with_car})"
+    );
     println!("random bodies: {with_rest} explicit rest lengths, {with_car} cars, {with_tets} tets");
-    assert!(with_tets > 100, "the generator should exercise tets ({with_tets})");
+    assert!(
+        with_tets > 100,
+        "the generator should exercise tets ({with_tets})"
+    );
 }
 
 #[test]
@@ -413,9 +466,24 @@ fn refuse_missing_header() {
 
 #[test]
 fn refuse_unknown_version() {
-    expect("bsn 4\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 4");
-    expect("bsn 0\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 0");
-    expect("bsn 99999999999\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 99999999999");
+    expect(
+        "bsn 4\nnode 0 0 0 0 mass 1\n",
+        1,
+        Some(5),
+        "unknown version 4",
+    );
+    expect(
+        "bsn 0\nnode 0 0 0 0 mass 1\n",
+        1,
+        Some(5),
+        "unknown version 0",
+    );
+    expect(
+        "bsn 99999999999\nnode 0 0 0 0 mass 1\n",
+        1,
+        Some(5),
+        "unknown version 99999999999",
+    );
 }
 
 #[test]
@@ -1121,12 +1189,19 @@ fn every_scenario_file_writes_back_byte_for_byte() {
         let (expected, dropped) = without_comments(&text);
         let body = parse(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
         let again = write(&body);
-        assert_eq!(again, expected, "write(parse({name})) differs from the file without its comments");
+        assert_eq!(
+            again, expected,
+            "write(parse({name})) differs from the file without its comments"
+        );
         assert_eq!(&again[..6], &text[..6], "{name}: header");
         println!("scenario {name}: header `{}`, {} bytes in, {dropped} comment or blank lines dropped, {} bytes out, identical", &text[..5], text.len(), again.len());
     }
     println!("scenario files checked: {}", names.len());
-    assert_eq!(names.len(), 12, "the 12 committed scenario files (main at the task start): {names:?}");
+    assert_eq!(
+        names.len(),
+        12,
+        "the 12 committed scenario files (main at the task start): {names:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1177,7 +1252,11 @@ tyre w mu 0.9 radial_stiffness 100000 radial_damping 100 long_stiffness 15 lat_s
 controls max_steer_deg 30 max_drive_torque 100 max_brake_torque 200 drag_area 0.65\n\
 plane 5 0 0 -1 0 0\n";
     let body = parse(text).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(write(&body), text, "write(parse(x)) differs for the full version 3 file");
+    assert_eq!(
+        write(&body),
+        text,
+        "write(parse(x)) differs for the full version 3 file"
+    );
     assert_eq!(parse(&write(&body)).unwrap(), body);
 }
 
@@ -1186,7 +1265,11 @@ fn version_3_file_without_solids_or_tets_loads_like_version_1_and_2() {
     let v1 = base("beam 0 1 m\n");
     let as_v3 = v1.replacen("bsn 1\n", "bsn 3\n", 1);
     assert_eq!(parse(&as_v3).unwrap(), parse(&v1).unwrap());
-    assert_eq!(write(&parse(&as_v3).unwrap()), v1, "the lowest version that holds the body");
+    assert_eq!(
+        write(&parse(&as_v3).unwrap()),
+        v1,
+        "the lowest version that holds the body"
+    );
     let car_v3 = CAR.replacen("bsn 2\n", "bsn 3\n", 1);
     assert_eq!(write(&parse(&car_v3).unwrap()), CAR);
     // a solid alone (no tet) still needs version 3
@@ -1196,7 +1279,8 @@ fn version_3_file_without_solids_or_tets_loads_like_version_1_and_2() {
 
 #[test]
 fn version_3_keeps_comments_out_and_the_order_of_tets() {
-    let text = v3("tet 1 2 3 4 s\n").replace("tet 0 1 2 3 s\n", "# the first tet\n\ntet 0 1 2 3 s\n");
+    let text =
+        v3("tet 1 2 3 4 s\n").replace("tet 0 1 2 3 s\n", "# the first tet\n\ntet 0 1 2 3 s\n");
     let body = parse(&text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(write(&body), v3("tet 1 2 3 4 s\n"));
 }
@@ -1205,27 +1289,58 @@ fn version_3_keeps_comments_out_and_the_order_of_tets() {
 fn refuse_solid_or_tet_before_version_3() {
     for version in [1, 2] {
         let text = v3("").replacen("bsn 3", &format!("bsn {version}"), 1);
-        expect(&text, 3, Some(1), &format!("`solid` needs version 3: this file is `bsn {version}`"));
-        let text = text.replace("solid s plateau_stress 1000000 yield_strain 0.02 damping_ratio 0.01\n", "");
-        expect(&text, 9, Some(1), &format!("`tet` needs version 3: this file is `bsn {version}`"));
+        expect(
+            &text,
+            3,
+            Some(1),
+            &format!("`solid` needs version 3: this file is `bsn {version}`"),
+        );
+        let text = text.replace(
+            "solid s plateau_stress 1000000 yield_strain 0.02 damping_ratio 0.01\n",
+            "",
+        );
+        expect(
+            &text,
+            9,
+            Some(1),
+            &format!("`tet` needs version 3: this file is `bsn {version}`"),
+        );
     }
 }
 
 #[test]
 fn refuse_unknown_version_names_version_3_as_read() {
-    expect("bsn 4\nnode 0 0 0 0 mass 1\n", 1, Some(5), "unknown version 4: this parser reads versions 1, 2 and 3");
-    expect("bsn x\n", 1, Some(5), "the first line must be `bsn 1`, `bsn 2` or `bsn 3`");
+    expect(
+        "bsn 4\nnode 0 0 0 0 mass 1\n",
+        1,
+        Some(5),
+        "unknown version 4: this parser reads versions 1, 2 and 3",
+    );
+    expect(
+        "bsn x\n",
+        1,
+        Some(5),
+        "the first line must be `bsn 1`, `bsn 2` or `bsn 3`",
+    );
 }
 
 #[test]
 fn refuse_duplicate_solid() {
-    let text = v3_with("node 0 ", "solid s plateau_stress 1 yield_strain 0.5 damping_ratio 0\nnode 0 ");
+    let text = v3_with(
+        "node 0 ",
+        "solid s plateau_stress 1 yield_strain 0.5 damping_ratio 0\nnode 0 ",
+    );
     expect_after(&text, 4, "solid ", "duplicate solid `s`");
 }
 
 #[test]
 fn refuse_bad_solid_name() {
-    expect_after(&v3_with("solid s ", "solid 1s "), 3, "solid ", "solid name `1s` is not a name");
+    expect_after(
+        &v3_with("solid s ", "solid 1s "),
+        3,
+        "solid ",
+        "solid name `1s` is not a name",
+    );
 }
 
 #[test]
@@ -1234,7 +1349,12 @@ fn refuse_nonpositive_plateau_stress() {
         let text = v3_with("plateau_stress 1000000", &format!("plateau_stress {bad}"));
         expect_after(&text, 3, "plateau_stress ", "must be > 0");
     }
-    expect_after(&v3_with("plateau_stress 1000000", "plateau_stress -2.5"), 3, "plateau_stress ", "plateau_stress -2.5 must be > 0");
+    expect_after(
+        &v3_with("plateau_stress 1000000", "plateau_stress -2.5"),
+        3,
+        "plateau_stress ",
+        "plateau_stress -2.5 must be > 0",
+    );
 }
 
 #[test]
@@ -1243,10 +1363,18 @@ fn refuse_solid_yield_strain_outside_0_to_1() {
         let text = v3_with("yield_strain 0.02", &format!("yield_strain {bad}"));
         expect_after(&text, 3, "yield_strain ", "must be > 0 and < 1");
     }
-    expect_after(&v3_with("yield_strain 0.02", "yield_strain 1"), 3, "yield_strain ", "yield_strain 1 must be > 0 and < 1");
+    expect_after(
+        &v3_with("yield_strain 0.02", "yield_strain 1"),
+        3,
+        "yield_strain ",
+        "yield_strain 1 must be > 0 and < 1",
+    );
     // just inside both ends is accepted
     for ok in ["0.000001", "0.999999"] {
-        assert!(parse(&v3_with("yield_strain 0.02", &format!("yield_strain {ok}"))).is_ok(), "{ok}");
+        assert!(
+            parse(&v3_with("yield_strain 0.02", &format!("yield_strain {ok}"))).is_ok(),
+            "{ok}"
+        );
     }
 }
 
@@ -1254,17 +1382,33 @@ fn refuse_solid_yield_strain_outside_0_to_1() {
 fn refuse_damping_ratio_outside_0_to_1() {
     for bad in ["-0.01", "1.01", "2"] {
         let text = v3_with("damping_ratio 0.01", &format!("damping_ratio {bad}"));
-        expect_after(&text, 3, "damping_ratio ", &format!("damping_ratio {bad} must be >= 0 and <= 1"));
+        expect_after(
+            &text,
+            3,
+            "damping_ratio ",
+            &format!("damping_ratio {bad} must be >= 0 and <= 1"),
+        );
     }
     // both ends are accepted
     for ok in ["0", "1"] {
-        assert!(parse(&v3_with("damping_ratio 0.01", &format!("damping_ratio {ok}"))).is_ok(), "{ok}");
+        assert!(
+            parse(&v3_with(
+                "damping_ratio 0.01",
+                &format!("damping_ratio {ok}")
+            ))
+            .is_ok(),
+            "{ok}"
+        );
     }
 }
 
 #[test]
 fn refuse_non_finite_or_non_numeric_solid_numbers() {
-    for (key, value) in [("plateau_stress", "1000000"), ("yield_strain", "0.02"), ("damping_ratio", "0.01")] {
+    for (key, value) in [
+        ("plateau_stress", "1000000"),
+        ("yield_strain", "0.02"),
+        ("damping_ratio", "0.01"),
+    ] {
         for (bad, words) in [
             ("NaN", format!("{key} `NaN` is not finite")),
             ("nan", format!("{key} `nan` is not finite")),
@@ -1282,16 +1426,49 @@ fn refuse_non_finite_or_non_numeric_solid_numbers() {
 
 #[test]
 fn refuse_solid_line_with_a_wrong_missing_or_extra_token() {
-    expect_after(&v3_with("plateau_stress", "plateau"), 3, "solid s ", "expected `plateau_stress`, found `plateau`");
-    expect_after(&v3_with(" damping_ratio 0.01", " damping 0.01"), 3, "0.02 ", "expected `damping_ratio`, found `damping`");
+    expect_after(
+        &v3_with("plateau_stress", "plateau"),
+        3,
+        "solid s ",
+        "expected `plateau_stress`, found `plateau`",
+    );
+    expect_after(
+        &v3_with(" damping_ratio 0.01", " damping 0.01"),
+        3,
+        "0.02 ",
+        "expected `damping_ratio`, found `damping`",
+    );
     // the keys are in a fixed order
-    let swapped = v3_with("yield_strain 0.02 damping_ratio 0.01", "damping_ratio 0.01 yield_strain 0.02");
-    expect_after(&swapped, 3, "1000000 ", "expected `yield_strain`, found `damping_ratio`");
+    let swapped = v3_with(
+        "yield_strain 0.02 damping_ratio 0.01",
+        "damping_ratio 0.01 yield_strain 0.02",
+    );
+    expect_after(
+        &swapped,
+        3,
+        "1000000 ",
+        "expected `yield_strain`, found `damping_ratio`",
+    );
     let text = v3_with(" damping_ratio 0.01", "");
-    expect(&text, 3, Some(text.split('\n').nth(2).unwrap().chars().count() + 1), "missing `damping_ratio`");
+    expect(
+        &text,
+        3,
+        Some(text.split('\n').nth(2).unwrap().chars().count() + 1),
+        "missing `damping_ratio`",
+    );
     let text = v3_with("damping_ratio 0.01", "damping_ratio");
-    expect(&text, 3, Some(text.split('\n').nth(2).unwrap().chars().count() + 1), "missing damping_ratio");
-    expect_after(&v3_with("damping_ratio 0.01", "damping_ratio 0.01 x"), 3, "0.01 ", "unexpected `x` at the end of the line");
+    expect(
+        &text,
+        3,
+        Some(text.split('\n').nth(2).unwrap().chars().count() + 1),
+        "missing damping_ratio",
+    );
+    expect_after(
+        &v3_with("damping_ratio 0.01", "damping_ratio 0.01 x"),
+        3,
+        "0.01 ",
+        "unexpected `x` at the end of the line",
+    );
 }
 
 #[test]
@@ -1304,45 +1481,96 @@ fn refuse_solid_out_of_order() {
     );
     expect(&text, 3, Some(1), "after a later section");
     // after a node
-    let text = v3_with("node 1 ", "solid t plateau_stress 1 yield_strain 0.5 damping_ratio 0\nnode 1 ");
+    let text = v3_with(
+        "node 1 ",
+        "solid t plateau_stress 1 yield_strain 0.5 damping_ratio 0\nnode 1 ",
+    );
     expect(&text, 5, Some(1), "after a later section");
 }
 
 #[test]
 fn refuse_tet_to_missing_node() {
-    for (from, to, prefix) in [("tet 0 1 2 3", "tet 9 1 2 3", "tet "), ("tet 0 1 2 3", "tet 0 1 2 9", "tet 0 1 2 ")] {
+    for (from, to, prefix) in [
+        ("tet 0 1 2 3", "tet 9 1 2 3", "tet "),
+        ("tet 0 1 2 3", "tet 0 1 2 9", "tet 0 1 2 "),
+    ] {
         expect_after(&v3_with(from, to), 10, prefix, "tet to missing node 9");
     }
 }
 
 #[test]
 fn refuse_tet_listing_a_node_twice() {
-    expect_after(&v3_with("tet 0 1 2 3", "tet 0 1 2 0"), 10, "tet 0 1 2 ", "tet lists node 0 twice");
-    expect_after(&v3_with("tet 0 1 2 3", "tet 0 1 1 3"), 10, "tet 0 1 ", "tet lists node 1 twice");
+    expect_after(
+        &v3_with("tet 0 1 2 3", "tet 0 1 2 0"),
+        10,
+        "tet 0 1 2 ",
+        "tet lists node 0 twice",
+    );
+    expect_after(
+        &v3_with("tet 0 1 2 3", "tet 0 1 1 3"),
+        10,
+        "tet 0 1 ",
+        "tet lists node 1 twice",
+    );
 }
 
 #[test]
 fn refuse_tet_with_unknown_solid() {
-    expect_after(&v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 t"), 10, "tet 0 1 2 3 ", "tet uses unknown solid `t`");
+    expect_after(
+        &v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 t"),
+        10,
+        "tet 0 1 2 3 ",
+        "tet uses unknown solid `t`",
+    );
     // a material is not a solid
-    expect_after(&v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 m"), 10, "tet 0 1 2 3 ", "tet uses unknown solid `m`");
+    expect_after(
+        &v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 m"),
+        10,
+        "tet 0 1 2 3 ",
+        "tet uses unknown solid `m`",
+    );
 }
 
 #[test]
 fn refuse_tet_line_with_a_bad_missing_or_extra_token() {
-    expect_after(&v3_with("tet 0 1 2 3", "tet 0 1 x 3"), 10, "tet 0 1 ", "tet node c `x` is not a node id");
-    expect_after(&v3_with("tet 0 1 2 3", "tet 0 01 2 3"), 10, "tet 0 ", "tet node b `01` is not a node id");
+    expect_after(
+        &v3_with("tet 0 1 2 3", "tet 0 1 x 3"),
+        10,
+        "tet 0 1 ",
+        "tet node c `x` is not a node id",
+    );
+    expect_after(
+        &v3_with("tet 0 1 2 3", "tet 0 01 2 3"),
+        10,
+        "tet 0 ",
+        "tet node b `01` is not a node id",
+    );
     let text = v3_with("tet 0 1 2 3 s", "tet 0 1 2 3");
     expect(&text, 10, Some(12), "missing tet solid");
-    expect_after(&v3_with("tet 0 1 2 3 s", "tet 0 1 2 s"), 10, "tet 0 1 2 ", "tet node d `s` is not a node id");
-    expect_after(&v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 s 4"), 10, "tet 0 1 2 3 s ", "unexpected `4` at the end of the line");
+    expect_after(
+        &v3_with("tet 0 1 2 3 s", "tet 0 1 2 s"),
+        10,
+        "tet 0 1 2 ",
+        "tet node d `s` is not a node id",
+    );
+    expect_after(
+        &v3_with("tet 0 1 2 3 s", "tet 0 1 2 3 s 4"),
+        10,
+        "tet 0 1 2 3 s ",
+        "unexpected `4` at the end of the line",
+    );
 }
 
 #[test]
 fn refuse_inverted_tet() {
     // an odd permutation of a positive tet turns it inside out
     for bad in ["tet 1 0 2 3", "tet 0 1 3 2", "tet 3 1 2 0"] {
-        expect_after(&v3_with("tet 0 1 2 3", bad), 10, "tet ", "is inverted: its rest volume -0.16666666666666666 is negative");
+        expect_after(
+            &v3_with("tet 0 1 2 3", bad),
+            10,
+            "tet ",
+            "is inverted: its rest volume -0.16666666666666666 is negative",
+        );
     }
     // an even permutation is the same tet, positive
     assert!(parse(&v3_with("tet 0 1 2 3", "tet 1 2 0 3")).is_ok());
@@ -1352,14 +1580,25 @@ fn refuse_inverted_tet() {
 fn refuse_tet_below_the_minimum_rest_volume() {
     // four coplanar nodes (z = 0), three collinear ones, and a tiny but well-shaped tet
     let flat = v3("").replacen("node 3 0 0 1 ", "node 3 1 1 0 ", 1);
-    expect_after(&flat, 10, "tet ", "tet 0 1 2 3: its rest volume 0 is below the minimum 0.000000001 m^3");
+    expect_after(
+        &flat,
+        10,
+        "tet ",
+        "tet 0 1 2 3: its rest volume 0 is below the minimum 0.000000001 m^3",
+    );
     let collinear = v3("").replacen("node 2 0 1 0 ", "node 2 2 0 0 ", 1);
     expect_after(&collinear, 10, "tet ", "rest volume 0 is below the minimum");
-    let tiny = v3("").replacen("node 1 1 0 0 ", "node 1 0.001 0 0 ", 1).replacen("node 2 0 1 0 ", "node 2 0 0.001 0 ", 1).replacen("node 3 0 0 1 ", "node 3 0 0 0.001 ", 1);
+    let tiny = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 0.001 0 0 ", 1)
+        .replacen("node 2 0 1 0 ", "node 2 0 0.001 0 ", 1)
+        .replacen("node 3 0 0 1 ", "node 3 0 0 0.001 ", 1);
     // its volume is 1e-9 / 6, so the beam 0-1 is fine but the tet is refused
     expect_after(&tiny, 10, "tet ", "is below the minimum 0.000000001 m^3");
     // twelve times larger (edges 0.002, 0.001 and 0.006 m: volume 2e-9 m^3) is accepted
-    let above = v3("").replacen("node 1 1 0 0 ", "node 1 0.002 0 0 ", 1).replacen("node 2 0 1 0 ", "node 2 0 0.001 0 ", 1).replacen("node 3 0 0 1 ", "node 3 0 0 0.006 ", 1);
+    let above = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 0.002 0 0 ", 1)
+        .replacen("node 2 0 1 0 ", "node 2 0 0.001 0 ", 1)
+        .replacen("node 3 0 0 1 ", "node 3 0 0 0.006 ", 1);
     assert!(parse(&above).is_ok(), "{:?}", parse(&above).err());
 }
 
@@ -1372,7 +1611,12 @@ fn refuse_tet_too_flat_for_its_size() {
         .replacen("node 1 1 0 0 ", "node 1 1000 0 0 ", 1)
         .replacen("node 2 0 1 0 ", "node 2 0 1000 0 ", 1)
         .replacen("node 3 0 0 1 ", "node 3 1000 1000 0.0001 ", 1);
-    expect_after(&sliver, 10, "tet ", "tet 0 1 2 3 is too flat: its rest volume");
+    expect_after(
+        &sliver,
+        10,
+        "tet ",
+        "tet 0 1 2 3 is too flat: its rest volume",
+    );
     // a thin tet that is still usable: height 0.001 m on the unit corner, volume 1/6000 m^3,
     // longest edge sqrt(2) m, ratio 5.9e-5 (above 1e-6): accepted
     let thin = v3("").replacen("node 3 0 0 1 ", "node 3 0 0 0.001 ", 1);
@@ -1381,16 +1625,28 @@ fn refuse_tet_too_flat_for_its_size() {
 
 #[test]
 fn refuse_tet_whose_volume_is_not_finite() {
-    let far = v3("").replacen("node 1 1 0 0 ", "node 1 1e308 0 0 ", 1).replacen("node 0 0 0 0 ", "node 0 -1e308 0 0 ", 1);
+    let far = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 1e308 0 0 ", 1)
+        .replacen("node 0 0 0 0 ", "node 0 -1e308 0 0 ", 1);
     // the beam 0-1 overflows first, so give it a rest length
     let far = far.replacen("beam 0 1 m\n", "beam 0 1 m rest 1\n", 1);
-    expect_after(&far, 10, "tet ", "tet 0 1 2 3: its size is not finite (rest volume inf");
+    expect_after(
+        &far,
+        10,
+        "tet ",
+        "tet 0 1 2 3: its size is not finite (rest volume inf",
+    );
 }
 
 #[test]
 fn refuse_duplicate_tet() {
     // the same four nodes in any order, even or odd
-    expect_after(&v3("tet 1 2 0 3 s\n"), 11, "tet ", "duplicate tet: nodes 1 2 0 3 already form a tet");
+    expect_after(
+        &v3("tet 1 2 0 3 s\n"),
+        11,
+        "tet ",
+        "duplicate tet: nodes 1 2 0 3 already form a tet",
+    );
     let text = v3_with("solid s plateau_stress 1000000 yield_strain 0.02 damping_ratio 0.01\n", "solid s plateau_stress 1000000 yield_strain 0.02 damping_ratio 0.01\nsolid u plateau_stress 1 yield_strain 0.5 damping_ratio 0\n");
     // in another solid too: one set of nodes is one tet
     expect_after(&(text + "tet 3 1 2 0 u\n"), 12, "tet ", "duplicate tet");
@@ -1399,12 +1655,26 @@ fn refuse_duplicate_tet() {
 #[test]
 fn refuse_tet_out_of_order() {
     // before the beams
-    let text = v3("").replacen("beam 0 1 m\ntet 0 1 2 3 s\n", "tet 0 1 2 3 s\nbeam 0 1 m\n", 1);
+    let text = v3("").replacen(
+        "beam 0 1 m\ntet 0 1 2 3 s\n",
+        "tet 0 1 2 3 s\nbeam 0 1 m\n",
+        1,
+    );
     expect(&text, 10, Some(1), "after a later section");
     // after a group
-    expect(&v3("group g 0\ntet 1 2 3 4 s\n"), 12, Some(1), "after a later section");
+    expect(
+        &v3("group g 0\ntet 1 2 3 4 s\n"),
+        12,
+        Some(1),
+        "after a later section",
+    );
     // a node after a tet: nodes come first, so a tet can only name earlier nodes
-    expect(&v3("node 5 2 2 2 mass 1\n"), 11, Some(1), "after a later section");
+    expect(
+        &v3("node 5 2 2 2 mass 1\n"),
+        11,
+        Some(1),
+        "after a later section",
+    );
 }
 
 #[test]
@@ -1413,12 +1683,22 @@ fn hostile_solid_and_tet_input_is_refused_or_bounded() {
     let huge = "9".repeat(50 * 1024 * 1024);
     let text = v3_with("plateau_stress 1000000", &format!("plateau_stress {huge}"));
     let e = refuse(&text);
-    assert_eq!((e.line, e.column), (3, Some(col_after(&text, 3, "plateau_stress "))));
-    assert!(e.message.contains("is not finite"), "{}", &e.message[..200.min(e.message.len())]);
+    assert_eq!(
+        (e.line, e.column),
+        (3, Some(col_after(&text, 3, "plateau_stress ")))
+    );
+    assert!(
+        e.message.contains("is not finite"),
+        "{}",
+        &e.message[..200.min(e.message.len())]
+    );
     // a 50 MB trailing token on a tet line
     let text = v3_with("tet 0 1 2 3 s", &format!("tet 0 1 2 3 s {huge}"));
     let e = refuse(&text);
-    assert_eq!((e.line, e.column), (10, Some(col_after(&text, 10, "tet 0 1 2 3 s "))));
+    assert_eq!(
+        (e.line, e.column),
+        (10, Some(col_after(&text, 10, "tet 0 1 2 3 s ")))
+    );
     // a 50 MB solid name on a tet line is an unknown solid, refused by name
     let text = v3_with("tet 0 1 2 3 s", &format!("tet 0 1 2 3 s{huge}"));
     assert_eq!(refuse(&text).line, 10);
@@ -1427,14 +1707,23 @@ fn hostile_solid_and_tet_input_is_refused_or_bounded() {
     let n = 20_000;
     let mut text = String::from("bsn 3\n");
     for i in 0..n {
-        text.push_str(&format!("solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"));
+        text.push_str(&format!(
+            "solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"
+        ));
     }
     for i in 0..n {
         let x = (i * 2) as f64;
         text.push_str(&format!("node {} {x} 0 0 mass 1\nnode {} {} 0 0 mass 1\nnode {} {x} 1 0 mass 1\nnode {} {x} 0 1 mass 1\n", 4 * i, 4 * i + 1, x + 1.0, 4 * i + 2, 4 * i + 3));
     }
     for i in 0..n {
-        text.push_str(&format!("tet {} {} {} {} s{}\n", 4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 3, n - 1 - i));
+        text.push_str(&format!(
+            "tet {} {} {} {} s{}\n",
+            4 * i,
+            4 * i + 1,
+            4 * i + 2,
+            4 * i + 3,
+            n - 1 - i
+        ));
     }
     let body = parse(&text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(write(&body), text);
