@@ -1343,8 +1343,8 @@ fn every_scenario_file_writes_back_byte_for_byte() {
     println!("scenario files checked: {} ({canonical} identical to the file, {pinned} pinned to main's output)", names.len());
     assert_eq!(
         (names.len(), canonical, pinned),
-        (12, 10, 2),
-        "the 12 committed scenario files (main at the task start): {names:?}"
+        (14, 12, 2),
+        "the 14 committed scenario files (the 12 of main at the task start plus validation_car.bsn and validation_wall.bsn): {names:?}"
     );
 }
 
