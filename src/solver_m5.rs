@@ -784,9 +784,9 @@ impl SolverM5 {
             let mut ln_je = je_trial.ln();
             let (mut fe, mut b, mut fp, mut e_c, mut je) = (fe_trial, t.b, t.fp, t.e_c, je_trial);
             if let Some(flow) = flow_from(&eig, ln_je, t.e_c, &law) {
-                let grow = flow.d.exp() - 1.0;
-                fe = add_outer(&fe, grow, mat_vec(&fe, flow.n), flow.n);
-                b = add_outer(&b, grow, mat_vec(&b, flow.n), flow.n);
+                // Fe' = Fe (I + (e^d - 1) n n^T) and b' = b (I + (e^d - 1) n n^T): the same map.
+                fe = apply_flow(&fe, &flow);
+                b = apply_flow(&b, &flow);
                 // (I + (e^-d - 1) n n^T) Fp = Fp + (e^-d - 1) n (Fp^T n)^T
                 let fpt_n = Vec3::new(
                     fp[0][0] * flow.n.x + fp[1][0] * flow.n.y + fp[2][0] * flow.n.z,
