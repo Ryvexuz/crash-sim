@@ -5,13 +5,17 @@
 //!
 //! Each substep (`SolverM5::step`): gravity, then the beam forces (the arithmetic and order of
 //! `solver::SymplecticEuler`, so a body with no tets gives the same bits), then the tet forces in
-//! tet index order, then `vel += force * h / m`, `pos += vel * h`. No threads, no hash maps, a
-//! fixed order everywhere: the same input gives the same bytes.
+//! tet index order, all into one working force array, then `vel += force * h / m`,
+//! `pos += vel * h`. No threads, no hash maps, a fixed order everywhere: the same input gives the
+//! same bytes.
 //!
-//! The solver fails closed. A tet whose trial elastic volume ratio `Je` is not finite or is at or
-//! below `J_MIN_FAIL`, or whose force is not finite, applies no force in that substep, and a tangent
-//! bound that puts `h omega` at or above 2 is an error; the first error is kept and
-//! `Solver::check` returns it, so `Sim::check` ends the run. Nothing is clamped.
+//! The solver fails closed. The working force array is checked for finiteness before it is
+//! applied (after each source, so the error names it), and so are the state before the step and
+//! the new state after it; on the first non-finite value nothing of the substep is applied. A
+//! tet whose trial elastic volume ratio `Je` is not finite or is at or below `J_MIN_FAIL` applies
+//! no force in that substep, and a tangent bound that puts `h omega` at or above 2 is an error.
+//! The first error is kept and `Solver::check` returns it, so `Sim::check` ends the run. Nothing
+//! is clamped.
 
 use crate::format::{Body, TET_MIN_SHAPE, TET_MIN_VOLUME};
 use crate::solver::{Solver, State};
@@ -1062,7 +1066,11 @@ impl SolverM5 {
         self.substep += 1;
         let n = self.substep;
         let nn = self.n_nodes;
-        if pos.len() != nn || vel.len() != nn || mass.len() != nn || extra.is_some_and(|e| e.len() != nn) {
+        if pos.len() != nn
+            || vel.len() != nn
+            || mass.len() != nn
+            || extra.is_some_and(|e| e.len() != nn)
+        {
             self.fail(format!(
                 "the m5 solver was built for {nn} nodes but substep {n} has {} (a different body)",
                 pos.len()
@@ -1129,7 +1137,10 @@ impl SolverM5 {
             }
         }
         // semi-implicit Euler: velocity first, then position with the new velocity
-        let (mut nv, mut np) = (std::mem::take(&mut self.new_vel), std::mem::take(&mut self.new_pos));
+        let (mut nv, mut np) = (
+            std::mem::take(&mut self.new_vel),
+            std::mem::take(&mut self.new_pos),
+        );
         nv.clear();
         np.clear();
         for i in 0..nn {

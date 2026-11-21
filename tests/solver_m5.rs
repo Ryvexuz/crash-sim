@@ -1255,7 +1255,10 @@ fn a_beam_force_that_overflows_during_the_run_is_stopped_before_it_is_applied() 
     let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
     let start = state_bits(&sim.pos, &sim.vel);
     sim.advance();
-    assert!(state_bits(&sim.pos, &sim.vel) == start, "a substep changed the state");
+    assert!(
+        state_bits(&sim.pos, &sim.vel) == start,
+        "a substep changed the state"
+    );
     assert_eq!(
         sim.check(),
         Err("force on node 0 is not finite at substep 1 (from beams)".to_string())
@@ -1268,7 +1271,12 @@ fn a_beam_force_that_overflows_during_the_run_is_stopped_before_it_is_applied() 
 #[test]
 fn the_force_check_catches_every_source_before_anything_is_applied() {
     let h = 1e-5;
-    let run = |b: &Body, pos: &mut Vec<Vec3>, vel: &mut Vec<Vec3>, gravity: f64, extra: Option<&[Vec3]>| -> (Option<String>, SolverM5) {
+    let run = |b: &Body,
+               pos: &mut Vec<Vec3>,
+               vel: &mut Vec<Vec3>,
+               gravity: f64,
+               extra: Option<&[Vec3]>|
+     -> (Option<String>, SolverM5) {
         let mut s = SolverM5::from_body(b, h).unwrap();
         let mass: Vec<f64> = b.nodes.iter().map(|n| n.mass).collect();
         let beams = Body::build(b).beams;
@@ -1284,24 +1292,41 @@ fn the_force_check_catches_every_source_before_anything_is_applied() {
             Some(e) => s.step_with_forces(st, e, h),
             None => s.step(st, h),
         }
-        assert!(state_bits(pos, vel) == before, "the failed substep changed the state");
+        assert!(
+            state_bits(pos, vel) == before,
+            "the failed substep changed the state"
+        );
         (s.check(), s)
     };
     // Gravity: 1e308 m/s^2 on 10 kg overflows.
     let b = one_tet(1e6, 0.02, 0.0, 1.0, 10.0, Vec3::new(0.0, 10.0, 0.0));
     let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 4]);
     let (e, _) = run(&b, &mut pos, &mut vel, 1e308, None);
-    assert_eq!(e.as_deref(), Some("force on node 0 is not finite at substep 1 (from gravity)"));
+    assert_eq!(
+        e.as_deref(),
+        Some("force on node 0 is not finite at substep 1 (from gravity)")
+    );
     // Beams: a node 1e200 m away (finite, past the node check) gives an infinite length.
     let b = two_node_beam(2.0, 1.0, 1e3, 2.0);
     let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 2]);
     pos[1].x = 1e200;
     let (e, _) = run(&b, &mut pos, &mut vel, 9.81, None);
-    assert_eq!(e.as_deref(), Some("force on node 0 is not finite at substep 1 (from beams)"));
+    assert_eq!(
+        e.as_deref(),
+        Some("force on node 0 is not finite at substep 1 (from beams)")
+    );
     // Tets: two tets; tet 0 compressed past yield, tet 1 with a node 1e305 m out (Je finite,
     // mu Fe overflows). The flow of tet 0 must not be kept either.
     let mut b = one_tet(1e6, 0.02, 0.0, 1.0, 1.0, Vec3::new(0.0, 10.0, 0.0));
-    for (i, q) in [Vec3::new(5.0, 10.0, 0.0), Vec3::new(6.0, 10.0, 0.0), Vec3::new(5.0, 11.0, 0.0), Vec3::new(5.0, 10.0, 1.0)].iter().enumerate() {
+    for (i, q) in [
+        Vec3::new(5.0, 10.0, 0.0),
+        Vec3::new(6.0, 10.0, 0.0),
+        Vec3::new(5.0, 11.0, 0.0),
+        Vec3::new(5.0, 10.0, 1.0),
+    ]
+    .iter()
+    .enumerate()
+    {
         add_node(&mut b, 4 + i as u32, *q, 1.0);
     }
     add_tet(&mut b, [4, 5, 6, 7], "s");
@@ -1327,22 +1352,38 @@ fn the_force_check_catches_every_source_before_anything_is_applied() {
         h,
     );
     assert_eq!(s_ok.check(), None);
-    assert!(s_ok.plastic_strain(0) > 0.0, "control: the squeezed tet yields");
+    assert!(
+        s_ok.plastic_strain(0) > 0.0,
+        "control: the squeezed tet yields"
+    );
     let (mut pos, mut vel) = (squeezed(true), vec![Vec3::ZERO; 8]);
     let (e, s) = run(&b, &mut pos, &mut vel, 0.0, None);
-    assert_eq!(e.as_deref(), Some("force on node 4 is not finite at substep 1 (from tets)"));
-    assert_eq!(s.plastic_strain(0), 0.0, "the flow of a failed substep was kept");
+    assert_eq!(
+        e.as_deref(),
+        Some("force on node 4 is not finite at substep 1 (from tets)")
+    );
+    assert_eq!(
+        s.plastic_strain(0),
+        0.0,
+        "the flow of a failed substep was kept"
+    );
     // Extra forces of step_with_forces.
     let b = two_node_beam(2.0, 1.0, 1e3, 2.0);
     let (mut pos, mut vel) = (positions(&b), vec![Vec3::ZERO; 2]);
     let extra = [Vec3::ZERO, Vec3::new(0.0, f64::INFINITY, 0.0)];
     let (e, _) = run(&b, &mut pos, &mut vel, 9.81, Some(&extra));
-    assert_eq!(e.as_deref(), Some("force on node 1 is not finite at substep 1 (from extra forces)"));
+    assert_eq!(
+        e.as_deref(),
+        Some("force on node 1 is not finite at substep 1 (from extra forces)")
+    );
     // The update: finite force, finite state, but x + v h overflows (one free node, h = 1 s).
     let mut b = empty_body();
     add_node(&mut b, 0, Vec3::ZERO, 1.0);
     let mut s = SolverM5::from_body(&b, 1.0).unwrap();
-    let (mut pos, mut vel) = (vec![Vec3::new(1.7e308, 0.0, 0.0)], vec![Vec3::new(1.7e308, 0.0, 0.0)]);
+    let (mut pos, mut vel) = (
+        vec![Vec3::new(1.7e308, 0.0, 0.0)],
+        vec![Vec3::new(1.7e308, 0.0, 0.0)],
+    );
     let before = state_bits(&pos, &vel);
     s.step(
         State {
@@ -1354,8 +1395,14 @@ fn the_force_check_catches_every_source_before_anything_is_applied() {
         },
         1.0,
     );
-    assert!(state_bits(&pos, &vel) == before, "the failed update changed the state");
-    assert_eq!(s.check().as_deref(), Some("update of node 0 is not finite at substep 1"));
+    assert!(
+        state_bits(&pos, &vel) == before,
+        "the failed update changed the state"
+    );
+    assert_eq!(
+        s.check().as_deref(),
+        Some("update of node 0 is not finite at substep 1")
+    );
 }
 
 // ---------------------------------------------------------------------------------------
