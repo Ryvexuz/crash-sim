@@ -448,6 +448,8 @@ pub struct SolverM5 {
     tets: Vec<TetEl>,
     laws: Vec<Law>,
     n_nodes: usize,
+    /// The file's id of each node, in file order (for error messages).
+    node_ids: Vec<u32>,
     h: f64,
     m_min: f64,
     eps_d: f64,
@@ -743,6 +745,7 @@ impl SolverM5 {
             tets,
             laws,
             n_nodes: n,
+            node_ids: body.nodes.iter().map(|nd| nd.id).collect(),
             h,
             m_min,
             eps_d,
@@ -993,6 +996,16 @@ impl Solver for SolverM5 {
             self.fail(format!(
                 "the m5 solver was built for h = {} s but substep {n} has h = {h} s",
                 self.h
+            ));
+            return;
+        }
+        // Before any force is summed: every node finite, or nothing moves in this substep and
+        // the run ends through `check` (so no NaN can reach the force array through a beam or
+        // a tet; the tet guard of `add_tet_forces` is a second line behind this one).
+        if let Some(i) = (0..pos.len()).find(|&i| !(finite(pos[i]) && finite(vel[i]))) {
+            self.fail(format!(
+                "node {} is not finite at substep {n}",
+                self.node_ids[i]
             ));
             return;
         }

@@ -1017,12 +1017,28 @@ fn a_tet_driven_through_collapse_ends_the_run_with_the_named_error() {
     );
 }
 
-/// R4e: a NaN node ends the run with the same named error (through the solver and through
+/// R4e: a NaN node ends the run with a named error (through the solver and through
 /// `Sim::check`, which reports the solver's error first), and no NaN enters the force array.
+/// `step` stops on the node itself (round 2); the tet guard behind it gives the R4e error
+/// `tet <i> inverted or collapsed ... Je = NaN` where it is reached first, in `tet_forces`.
 #[test]
 fn a_nan_node_ends_the_run_with_the_named_error() {
     let at = Vec3::new(0.0, 10.0, 0.0);
     let b = one_tet(1e6, 0.02, 0.05, 1.0, 1.0, at);
+    let mut s = SolverM5::from_body(&b, 1e-5).unwrap();
+    let mut bad = positions(&b);
+    bad[2].y = f64::NAN;
+    let f = s.tet_forces(&bad, &[Vec3::ZERO; 4]);
+    assert_eq!(
+        s.check(),
+        Some("tet 0 inverted or collapsed at substep 0: Je = NaN".to_string())
+    );
+    assert!(
+        f.iter()
+            .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()),
+        "the tet guard let a NaN into the forces"
+    );
+
     let mut s = SolverM5::from_body(&b, 1e-5).unwrap();
     let mut pos = positions(&b);
     let mut vel = vec![Vec3::ZERO; 4];
@@ -1040,7 +1056,7 @@ fn a_nan_node_ends_the_run_with_the_named_error() {
     );
     assert_eq!(
         s.check(),
-        Some("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string())
+        Some("node 2 is not finite at substep 1".to_string())
     );
     assert!(
         vel.iter()
@@ -1061,7 +1077,96 @@ fn a_nan_node_ends_the_run_with_the_named_error() {
     sim.advance();
     assert_eq!(
         sim.check(),
-        Err("tet 0 inverted or collapsed at substep 1: Je = NaN".to_string())
+        Err("node 2 is not finite at substep 1".to_string())
+    );
+}
+
+/// Round 2 of review q-20261121-031356: a NaN node shared by a beam and a tet. The step must
+/// stop before any force is summed: the run ends with `node <id> is not finite at substep <n>`
+/// (the file's node id), and no other node gets a NaN or moves in that substep, through the
+/// solver and through `Sim::check`. Before the fix the beam loop spread the NaN to node 14.
+#[test]
+fn a_nan_node_shared_by_a_beam_and_a_tet_stops_the_step_before_any_force() {
+    let at = Vec3::new(0.0, 10.0, 0.0);
+    let mut b = one_tet(1e6, 0.02, 0.0, 1.0, 1.0, at);
+    for (k, n) in b.nodes.iter_mut().enumerate() {
+        n.id = 10 + k as u32;
+    }
+    for t in b.tets.iter_mut() {
+        t.nodes = t.nodes.map(|i| i + 10);
+    }
+    add_node(&mut b, 14, at + Vec3::new(-1.0, 0.0, 0.0), 1.0);
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: 1e3,
+        damping: 1.0,
+        yield_strain: None,
+        break_strain: None,
+    });
+    add_beam(&mut b, 10, 14, "m"); // node 10 is in the tet and in the beam
+    let h = 1e-5;
+    let built = Body::build(&b);
+    let mass: Vec<f64> = built.mass.clone();
+    for (field, bad) in [("pos", f64::NAN), ("vel", f64::INFINITY)] {
+        let mut s = SolverM5::from_body(&b, h).unwrap();
+        let mut pos = built.pos.clone();
+        let mut vel = vec![Vec3::new(0.1, 0.0, 0.0); 5];
+        if field == "pos" {
+            pos[0].x = bad;
+        } else {
+            vel[0].y = bad;
+        }
+        let (pos0, vel0) = (pos.clone(), vel.clone());
+        s.step(
+            State {
+                pos: &mut pos,
+                vel: &mut vel,
+                beams: &built.beams,
+                mass: &mass,
+                gravity: 9.81,
+            },
+            h,
+        );
+        let ok = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+        for i in 1..5 {
+            assert!(
+                ok(pos[i]) && ok(vel[i]),
+                "{field}: node {i} got a non-finite value"
+            );
+        }
+        for i in 1..5 {
+            assert!(
+                pos[i] == pos0[i] && vel[i] == vel0[i],
+                "{field}: node {i} moved in the stopped substep"
+            );
+        }
+        assert_eq!(
+            s.check(),
+            Some("node 10 is not finite at substep 1".to_string()),
+            "{field}"
+        );
+    }
+    let cfg = Config {
+        dt: 1e-4,
+        substeps: 10,
+        gravity: 9.81,
+        duration: 1.0,
+        ..Config::default()
+    };
+    let m5 = SolverM5::from_body(&b, cfg.dt / cfg.substeps as f64).unwrap();
+    let mut sim = Sim::from_body_with_solver(cfg, &b, Box::new(m5)).unwrap();
+    sim.pos[0].y = f64::NAN;
+    sim.advance();
+    assert_eq!(
+        sim.check(),
+        Err("node 10 is not finite at substep 1".to_string())
+    );
+    assert!(
+        sim.pos[1..]
+            .iter()
+            .chain(&sim.vel)
+            .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()),
+        "a NaN spread to another node"
     );
 }
 
