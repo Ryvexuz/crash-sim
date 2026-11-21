@@ -12,6 +12,10 @@
 //!   lines of docs/STAGE6-M4-M5.md, read from that file at run time.
 //! - `crush_beams_one_length`: the `crush` beams of each file have one rest length within 5%.
 //!
+//! `cabin_gap_capacity_at_least_factor_times_needed` (t-20261121-225636) checks the fixed-strength
+//! passenger cell: its weakest station gap carries at least `frozen: cabin.capacity_factor` times
+//! the force test A's reference peak needs through any gap, and exactly the cell's beams are `cabin`.
+//!
 //! `validation_checks_reject_wrong_copies` is not one of the five: it runs the same checks on
 //! deliberately wrong copies and requires each to fail, so a check that cannot fail is caught.
 //!
@@ -433,6 +437,194 @@ fn check_share_accepts_equal_values_zero_included() {
     assert!(e.contains("P3 damping_ratio"), "{e}");
 }
 
+/// One gap between two neighbouring stations of the passenger cell (`cabin_gaps_of`).
+#[derive(Debug, Clone, Copy)]
+struct CellGap {
+    /// The x of the station behind the gap and of the station ahead of it, m.
+    x_rear: f64,
+    x_front: f64,
+    /// Beams with one end at or behind `x_rear` and the other at or ahead of `x_front`.
+    n_beams: usize,
+    /// The gap's section capacity along x, N: the sum over those beams of k x yield_strain x |dx|
+    /// (a beam's axial force at yield is k y L, its x-component k y |dx|; an upper bound, as not
+    /// every diagonal yields at once).
+    capacity_n: f64,
+    /// Mass behind the gap, kg: the nodes at or behind `x_rear` and the wheels mounted on them.
+    mass_behind_kg: f64,
+}
+
+/// The gaps of the passenger cell: the stations (distinct node x) at or behind the rearmost end
+/// of a `crush` beam (the front axle station), and each gap between neighbouring stations.
+fn cabin_gaps_of(body: &Body) -> Result<Vec<CellGap>, String> {
+    let x_of = |id: u32| {
+        body.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.pos.x)
+            .ok_or(format!("no node {id}"))
+    };
+    let mut cell_x = f64::INFINITY;
+    for b in body.beams.iter().filter(|b| b.material == "crush") {
+        cell_x = cell_x.min(x_of(b.a)?).min(x_of(b.b)?);
+    }
+    if !cell_x.is_finite() {
+        return Err("no beam uses the material `crush`".into());
+    }
+    let mut stations: Vec<f64> = body
+        .nodes
+        .iter()
+        .map(|n| n.pos.x)
+        .filter(|&x| x <= cell_x)
+        .collect();
+    stations.sort_by(|a, b| a.partial_cmp(b).expect("node x is a number"));
+    stations.dedup();
+    if stations.len() < 2 {
+        return Err(format!(
+            "the cell has {} station(s), not 2 or more",
+            stations.len()
+        ));
+    }
+    let mut gaps = Vec::new();
+    for w in stations.windows(2) {
+        let (x_rear, x_front) = (w[0], w[1]);
+        let (mut n_beams, mut capacity_n) = (0, 0.0);
+        for b in &body.beams {
+            let (xa, xb) = (x_of(b.a)?, x_of(b.b)?);
+            if !(xa.min(xb) <= x_rear && xa.max(xb) >= x_front) {
+                continue;
+            }
+            let m = body
+                .materials
+                .iter()
+                .find(|m| m.name == b.material)
+                .ok_or(format!("beam {}-{} names a missing material", b.a, b.b))?;
+            let y = m.yield_strain.ok_or(format!(
+                "beam {}-{} across the cell gap at x {x_rear}..{x_front} is `{}`, which has no yield_strain",
+                b.a, b.b, m.name
+            ))?;
+            n_beams += 1;
+            capacity_n += m.stiffness * y * (xb - xa).abs();
+        }
+        let mut mass_behind_kg: f64 = body
+            .nodes
+            .iter()
+            .filter(|n| n.pos.x <= x_rear)
+            .map(|n| n.mass)
+            .sum();
+        for wh in &body.wheels {
+            let mut behind = true;
+            for &m in &wh.mount {
+                behind &= x_of(m)? <= x_rear;
+            }
+            if behind {
+                mass_behind_kg += wh.mass;
+            }
+        }
+        gaps.push(CellGap {
+            x_rear,
+            x_front,
+            n_beams,
+            capacity_n,
+            mass_behind_kg,
+        });
+    }
+    Ok(gaps)
+}
+
+/// docs/STAGE6-M4-M5.md, "The passenger cell (`cabin`)": the weakest gap of the cell carries at
+/// least `frozen: cabin.capacity_factor` times the largest force any gap must pass, that force
+/// being the mass behind the gap times `frozen: cabin.design_accel_mps2`. Then the layout: every
+/// beam with both ends in the cell is `cabin`, and no other beam is.
+fn check_cabin(body: &Body, doc: &str) -> Result<String, String> {
+    let one = |name: &str| -> Result<f64, String> {
+        let v = frozen(doc, name);
+        if v.len() != 1 {
+            return Err(format!("`frozen: {name}` has {} numbers, not 1", v.len()));
+        }
+        Ok(v[0])
+    };
+    let (accel, factor) = (
+        one("cabin.design_accel_mps2")?,
+        one("cabin.capacity_factor")?,
+    );
+    let gaps = cabin_gaps_of(body)?;
+    let mut report = String::new();
+    for g in &gaps {
+        report += &format!(
+            "gap x {:.4}..{:.4}: {} beams, capacity {:.0} N, mass behind {:.2} kg, needed {:.0} N\n",
+            g.x_rear,
+            g.x_front,
+            g.n_beams,
+            g.capacity_n,
+            g.mass_behind_kg,
+            g.mass_behind_kg * accel
+        );
+    }
+    let weakest = gaps
+        .iter()
+        .map(|g| g.capacity_n)
+        .fold(f64::INFINITY, f64::min);
+    let needed = gaps
+        .iter()
+        .map(|g| g.mass_behind_kg * accel)
+        .fold(0.0, f64::max);
+    report += &format!(
+        "weakest capacity {weakest:.0} N, largest needed {needed:.0} N, ratio {:.3}, required {factor}",
+        weakest / needed
+    );
+    // NaN fails too (partial_cmp is None).
+    if weakest.partial_cmp(&(factor * needed)) == Some(std::cmp::Ordering::Less) || weakest.is_nan()
+    {
+        return Err(format!(
+            "the cell's weakest gap carries {weakest:.0} N, under {factor} x the needed {needed:.0} N\n{report}"
+        ));
+    }
+    let cell_x = gaps.last().expect("at least one gap").x_front;
+    let x_of = |id: u32| body.nodes.iter().find(|n| n.id == id).map(|n| n.pos.x);
+    let mut n_cabin = 0;
+    for b in &body.beams {
+        let in_cell = x_of(b.a)
+            .zip(x_of(b.b))
+            .is_some_and(|(a, c)| a <= cell_x && c <= cell_x);
+        if in_cell != (b.material == "cabin") {
+            return Err(format!(
+                "beam {}-{} is `{}`: a beam is `cabin` exactly when both its ends are in the cell (x <= {cell_x})",
+                b.a, b.b, b.material
+            ));
+        }
+        n_cabin += usize::from(in_cell);
+    }
+    Ok(format!("{report}\n{n_cabin} cabin beams"))
+}
+
+/// The passenger cell is not the weakest link: its weakest station gap carries at least
+/// `frozen: cabin.capacity_factor` times the force test A's reference peak needs through it
+/// (validation/CAR.md, "The passenger cell"). Both cars, the cabin being one fixed design value.
+#[test]
+fn cabin_gap_capacity_at_least_factor_times_needed() {
+    let f = files();
+    for (name, text) in [
+        ("validation_car.bsn", &f.car_a),
+        ("validation_car_b.bsn", &f.car_b),
+    ] {
+        let r = check_cabin(&body_of(text), &f.doc).unwrap_or_else(|e| panic!("{name}: {e}"));
+        println!("{name}:\n{r}");
+    }
+    // The two cars carry the same `cabin` line (a design value, not computed per file).
+    let mat = |t: &str| {
+        body_of(t)
+            .materials
+            .into_iter()
+            .find(|m| m.name == "cabin")
+            .expect("material `cabin`")
+    };
+    assert_eq!(
+        mat(&f.car_a),
+        mat(&f.car_b),
+        "the two cars' `cabin` lines differ"
+    );
+}
+
 /// What one run of the wall file measures at the wall (`wall_load_of`).
 #[derive(Debug)]
 struct WallLoad {
@@ -765,6 +957,27 @@ fn validation_checks_reject_wrong_copies() {
     print_wall_load("16 crush beams", &w);
     let e = check_wall_load(&w).unwrap_err();
     assert!(e.contains("not below the centre of gravity"), "{e}");
+    // The cabin: back at the `chassis` numbers it is the weak link again (the cars before
+    // t-20261121-225636); one cell beam left `chassis` breaks the layout rule; a doc without the
+    // cabin lines is refused.
+    let mut b = body_of(&f.car_a);
+    let cabin = b.materials.iter_mut().find(|m| m.name == "cabin").unwrap();
+    (cabin.stiffness, cabin.damping) = (300000.0, 200.0);
+    let e = check_cabin(&b, &f.doc).unwrap_err();
+    assert!(e.contains("weakest gap carries"), "{e}");
+    let mut b = body_of(&f.car_a);
+    b.beams
+        .iter_mut()
+        .find(|x| x.material == "cabin")
+        .unwrap()
+        .material = "chassis".into();
+    let e = check_cabin(&b, &f.doc).unwrap_err();
+    assert!(
+        e.contains("exactly when both its ends are in the cell"),
+        "{e}"
+    );
+    let r = std::panic::catch_unwind(|| check_cabin(&body_of(&f.car_a), "nothing here\n"));
+    assert!(r.is_err(), "a doc without the cabin lines was accepted");
     // A doc without the range lines is refused by name (no vacuous pass).
     let r = std::panic::catch_unwind(|| frozen("nothing here\n", "range crush.area_m2"));
     assert!(r.is_err(), "a missing frozen line was accepted");
