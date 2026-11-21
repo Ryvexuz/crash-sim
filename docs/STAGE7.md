@@ -1,4 +1,4 @@
-# Stage 7 done checks: milestone 1, with drafts for milestones 2 to 5
+# Stage 7 done checks: milestones 1 to 5
 
 Written before any Stage 7 code, on crash-sim `5415a5b` (board task `t-20261119-171333-43`, brief nb-42). DEVELOPMENT_PLAN Stage 7:
 
@@ -10,7 +10,7 @@ Written before any Stage 7 code, on crash-sim `5415a5b` (board task `t-20261119-
 
 Lesson focus: whole-product integration, where many parts must work together and "tests pass" stops being enough.
 
-This file turns milestone 1 into commands with numbers. Milestone 1 is done when every one of its checks passes on crash-sim main and render master, the output is saved in `evidence/`, and the human check (1.8) is recorded. Milestones 2 to 5 get one paragraph each, marked as drafts. The table at the end maps every check to the brief that makes it pass: nb-43 and nb-44 (on the board as `t-20261119-171333-44` and `t-20261119-171333-45`) and three new briefs proposed here, nb-47, nb-48 and nb-49.
+This file turns milestone 1 into commands with numbers. Milestone 1 is done when every one of its checks passes on crash-sim main and render master, the output is saved in `evidence/`, and the human check (1.8) is recorded. The table "Who builds what" maps every milestone 1 check to the brief that makes it pass: nb-43 and nb-44 (on the board as `t-20261119-171333-44` and `t-20261119-171333-45`) and three new briefs proposed here, nb-47, nb-48 and nb-49. Milestones 2 to 5 have their own numbered checks (2.1 to 5.6) in "Milestones 2 to 5: exact checks", written on crash-sim `0bb2b5e` by board task `t-20261121-001109-6` (brief n20-16), and their own table, "Who builds what, milestones 2 to 5", at the end.
 
 ## Where the game lives
 
@@ -316,15 +316,582 @@ What guards against tuning to the test in milestone 1: the grip target's bounds 
 
 After 1.1 to 1.9 pass, the Stage 7 m1 retro entry in `RETRO.md` is due (AGENTS.md); nb-49 lists its inputs in `evidence/stage-7-m1.md`. The Stage 7 lesson goes in it: what the human check found that the tests did not.
 
-## Milestones 2 to 5 (drafts)
+## Milestones 2 to 5: exact checks
 
-**Milestone 2, AI drivers (draft, rewrite when the milestone starts).** Done: three AI cars finish a race without crashing into walls. Needs several cars in one sim (car-to-car contact is new physics), walls along the track edges (finite wall segments, not today's infinite planes), and an AI driver that is a pure function from what a driver could see (car state, track) to the same throttle, brake and steer that a human gives. The AI writes its inputs to a script, so every AI lap replays headless through `race --input` exactly as in 1.9, and the AI can never move the car by any other route. Checks to write: three cars, three laps each, every lap valid by nb-43's rule; zero wall contacts and zero car-to-car contacts in the race (counted every substep, as STAGE6 counts impacts); each AI's best lap within a stated margin of the scripted lap of 1.4, so the AI cannot win by crawling; and the same race twice gives the same bytes.
+Written on crash-sim `0bb2b5e` (board task `t-20261121-001109-6`, brief n20-16). What exists on that commit, read from the files: the AI driver `src/ai.rs` (n20-17), the speed profile `src/speed_profile.rs` (n20-18), the track and lap timer `src/track.rs` (nb-43), the settings file `src/settings.rs` (n20-21), the save file `src/save.rs` (n20-22), the menu state machine `src/menu.rs` (n20-23), the state hash `src/statehash.rs` (n20-24), the message codec `src/net.rs` (n20-25a) and the lockstep session `src/net/session.rs` (n20-25b), all registered in `src/lib.rs`. What does not exist yet, and so is only *specified* here: several cars in one sim (n20-19), the race program with AI cars (n20-20), the lap lines of a headless `--track` run (n20-13), the game front end and release folder (n20-26 and the proposed n20-26a), two players over the network (n20-27), and the second game. Every flag and file in a command below that is not in `src/main.rs` or the repository today is named in "Who builds what, milestones 2 to 5" with the brief that creates it; if a flag is in no row, the check is wrong, not the brief.
 
-**Milestone 3, game shell (draft, rewrite when the milestone starts).** Done: a standalone executable a friend can run. Needs menus (track and car choice), a settings file (keys, window size), and saving (best laps per track), with strict, versioned files like `.bsn`, so a corrupt save is refused with a message and never crashes the game. Checks to write: the release build and its assets are copied to one folder and run on a fresh clone of the VM base image with no Rust installed (AGENTS.md: VMs are disposable); a scripted menu path starts a race and saves a lap; a corrupted save and settings file are each refused by name. Plus a human check like 1.8 with someone who is not Lazlo, if he chooses one, recorded the same way.
+**Which program.** Milestone 1 above writes its commands for a second binary, `--bin race` (nb-47). The board does not have nb-47: n20-13 (`t-20261121-001109-5`) claims `src/main.rs` and adds `--track` to the existing `crash-sim` program, and n20-20 claims `src/main.rs` too. So the commands below use the default binary, `cargo run --offline --release -- ...`, and assume n20-13 prints the lap lines that milestone 1 specifies (`track`, `start`, `checkpoint`, `lap`, `final`, `race:`) for a `--track` run with `--input`. If m1 stays on `--bin race`, the orchestrator reconciles the two before n20-13 starts; milestones 2 to 5 then add `--bin race` to every `cargo run` line and nothing else changes. Milestone 1's `--live` race (`race --live`, with `track_line` lines) is also not in n20-13's brief, and n20-14 and n20-26 need it: see "What the briefs must take".
 
-**Milestone 4, multiplayer (draft, rewrite when the milestone starts).** Done: two machines race each other. The sim is deterministic (STAGE6 3.5, check 1.9 here), so only inputs need to cross the network: lockstep, with each machine sending its sim-time-stamped input lines. Network services need Lazlo's OK first (AGENTS.md, ask first). Checks to write: two processes on one machine first, then the laptop and the PC; both machines print identical `lap` and `final` lines for both cars; a delayed or dropped packet is handled by waiting, never by guessing an input; a mismatch is detected, because each machine sends a hash of its state every second, and reported, never hidden.
+**When a check runs a built program directly.** Checks that need two processes at once (m4), a pipe into stdin (m3) or a clean folder (m3) cannot run through `broadsword run`: a `run` holds the build lock to its end (`build_lock_wait_seconds` in `broadsword.toml`), so a second concurrent `run` waits or is refused. Those checks first build with `broadsword run crash-sim -- cargo build --offline --release` and copy `build/release/crash-sim.exe` to `scratch/` in the same command block (the shared build folder can be cleaned by another job between two commands, as happened on 2026-11-20), and then run the copy. They never call cargo.
 
-**Milestone 5, second game (draft, rewrite when the milestone starts).** Done: it ships without changes to the engine core. Before the work starts, the engine core is written down as a list of files (likely the solver, body format, input, track and render modules). Checks to write: the second game is its own binary in the same repo; `git diff --stat <tag at the start of m5>..main -- <the core files>` prints nothing after the second game lands; both games' tests pass in one run. If the core must change, that is a finding recorded in `RETRO.md`, not a quiet edit.
+All numbers marked *reasoned* are derived in the text that gives them. Any number that a brief must measure against a reasoned bound follows milestone 1's rule: if the measured value is outside the bound, the brief stops and reports; it never moves the bound.
+
+**Reading test names.** A check that says "the existing tests of file X still pass" reads the names from the test file, so the list cannot drift from the code. Save this as `scratch/s7-named.sh` and `source` it in Git Bash from the Broadsword root. `named <cargo test output> <test file stem> <least number of tests>` finds every `#[test]` function of `projects/crash-sim/tests/<stem>.rs`, looks for `test <name> ... ok` in the output, prints `MISSING <stem> <name>` for each one not there, and a last line `named <stem>: ok (...)` or `named <stem>: FAIL (...)`. The number is what makes an empty or renamed file fail instead of passing with nothing to look for. The counts used in this file are the counts on crash-sim `0bb2b5e`: `ai` 14, `speed_profile` 10, `settings` 9, `save` 13, `menu` 8, `net_codec` 14, `net_session` 18, `statehash` 7. It was run on a synthetic output (all names present: `ok`; one name removed: `MISSING` and `FAIL`; an empty file: `FAIL`).
+
+```
+named() {
+  out=$1; f=$2; want=$3; ok=0
+  for n in $(grep -hA1 -E '^#\[test\]' projects/crash-sim/tests/$f.rs | grep -oE 'fn [a-z0-9_]+' | sed 's/^fn //'); do
+    if tr -d '\r' < $out | grep -qF "test $n ... ok"; then ok=$((ok+1)); else echo "MISSING $f $n"; fi
+  done
+  if [ "$ok" -ge "$want" ]; then echo "named $f: ok ($ok found, at least $want needed)"; else echo "named $f: FAIL ($ok found, at least $want needed)"; fi
+}
+```
+
+### Milestone 2: three AI cars finish a race without crashing into walls
+
+**The race.** `crash-sim` runs `--ai 3` cars on `scenarios/tracks/oval.track` for 3 timed laps each. Each car starts from rest on a single-file grid on the centreline: slot k (1, 2, 3) is `grid + (k - 1) x grid_gap` metres before the start line, `grid_gap` is 10 m, so slot 3 is 40 m before the line, on the 100 m front straight (point 63, 50 m before the line, is the start of the straight). Every car is `scenarios/car_basic.bsn`. A car's laps are timed by its own `LapTimer` (nb-43), fed the chassis centre of mass at every substep as in "Shared definitions". The race ends when every car has finished its lap 3, or at the time limit. The cars keep driving after they finish, until the race ends, so a finished car is still an obstacle and a wall risk.
+
+**What an AI sees and can do.** The driver is `ai::Driver::update` (n20-17), called once per 0.02 s of simulation time (50 Hz, the rate of the human viewer's input: `INPUT_HZ` in `projects/render/examples/drive.rs`), with the car's own state (its centre-of-mass position, heading and speed, wheelbase and maximum steer angle), the track centreline and a target speed per centreline point from `speed_profile::profile` (n20-18). The answer is throttle, brake and steer, held for the 0.02 s. It cannot see the other cars or the walls, so it does not overtake: with one speed profile and one driver for all three, the cars keep their grid gaps (that is why the grid is staggered, and why contact stays at zero without any sensing). It cannot reach the car by any other route: the only call that moves a car is the sim step with those three numbers, and 2.4 proves it with a replay.
+
+**Car-to-car contact: allowed in the physics, required to be zero in the race.** n20-19 gives the sim car-to-car contact, because a racing game whose cars pass through each other is not the "crash sim grows into a racing game" of DEVELOPMENT_PLAN, and because the milestone-5 game needs it. The m2 race still requires none: "without crashing" is read to include each other, and with zero contacts a car's trajectory in the race must equal its trajectory driving alone (2.4). Ghost cars would hide a collision that the checks are meant to find. A contact test in n20-19 shows the physics exists; the race shows the AI does not use it.
+
+**What counts as a wall contact.** The track has no physical walls in this milestone, as in milestone 1 (the ground is the same plane everywhere). An edge of the track is where a wall would stand, and the first part of a car to touch a wall is the first part to cross the edge. So, at every substep, a car has a wall contact if any chassis node, or the outer edge of any tyre, is off the track by `Track::on_track` (the distance from the point to the centreline is more than half the track width there). A tyre's outer edge is its mount node moved 0.0975 m (half the wheel width 0.195 m in `car_basic.bsn`) away from the car's centreline, sideways in the ground plane. On `car_basic.bsn` the outermost chassis nodes (z = 0.9 m) are outside the tyre edges (0.75 + 0.0975 = 0.8475 m), so the nodes decide there; the tyre clause is in force for other bodies and is tested on a synthetic one (`wall_rule_counts_tyre_outer_edges`). Finite wall colliders along the edges are a later idea, not part of this milestone.
+
+**The numbers, and why.**
+
+- **3 cars, 3 laps.** DEVELOPMENT_PLAN says three AI cars. Three laps show that the AI repeats a lap, not that one lap went well. Lap 1 starts at the car's first crossing of the line, so the grid run-up is not a lap.
+- **A lap of at most 48.6 s: a mean speed of at least 8 m/s over the centreline.** 388.41 m / 8 m/s = 48.55 s. 8 m/s is half of the 15.6 m/s bend speed that milestone 1 reasons for the oval (sqrt(0.83 x 9.81 x 30) = 15.6 m/s at the lowest sourced limit). A car slower than that on average is crawling, which would pass "no wall contact" trivially. The bound does not depend on the AI's own numbers.
+- **Time limit 160 s.** 3 laps at 48.6 s is 145.8 s, plus the run-up of the farthest slot, 40 m at 8 m/s is 5 s: 150.8 s, rounded up to 160 s. A car that has not finished by then fails.
+- **Path at least 338.67 m, timing identity, `off_track_s` 0.000, every lap valid.** These are milestone 1's lap rules (1.4), applied to every lap of every car, so an AI cannot count a lap by cutting a corner.
+- **Centres at least 4.40 m apart at every substep.** The body's nodes are within 2.193 m of its centre of mass in the ground plane: sqrt(2.0^2 + 0.9^2) = 2.193 m for the corner nodes of `car_basic.bsn` (x = -2 to 2, z = -0.9 to 0.9), and the mass-weighted centre is at x = 0.0000, z = 0.0000 (computed from the file's node masses). Two bodies whose centres are more than 2 x 2.193 = 4.386 m apart cannot touch; 4.40 m rounds up. The race reports the smallest centre distance and the number of substeps under 4.40 m. This is an independent measure, not n20-19's contact rule.
+- **Grid gap 10 m.** 2.5 car lengths (the car is 4.0 m long). The gap is 2.3 times the 4.40 m floor, and the three cars drive the same profile, so the gap should hold; if it does not, the first measured `gap_min_m` shows where.
+- **AI cadence 50 Hz and the file `scenarios/ai_driver.params`.** The file holds the driver's six `DriverParams` values and the profile's `mu`, `g`, `a_accel`, `a_brake` and `v_max`, one `key value` per line after a first line `ai 1`, strict like `.bsn` (a missing, repeated or unknown key is refused with the line number; nothing is defaulted). n20-20 chooses the values and writes a reason beside each. `v_max` and `a_accel` must not be above what the car does with the rolling resistance and aero drag that crash-sim `4fd84b0` added (`docs/PHYSICS.md` lists both): a profile above the car's real top speed asks for speeds it cannot reach, and the speed controller then saturates; n20-20 takes both from the speed and acceleration of the open-loop lap of 1.4 and names that evidence in the file. `mu` must stay at or below 0.9 x the `limit_g` that check 1.3 records (a profile that asks for the whole measured limit leaves no margin, and the AI is then the thing that gets tuned to the wall); this is a review step, not machine-checked, and the file's comment names the evidence line it took `limit_g` from.
+
+**Flags and output (n20-20).** `crash-sim --body <car.bsn> --track <file> --ai <n> --laps <N> --time-limit <s> --grid-gap <m> --ai-params <file> [--save-inputs <prefix>] [--substeps <n>]`. `--ai` is 1 to 3, `--laps` 1 to 10, the other numbers are above zero, and the first six are required together; `--ai` cannot be combined with `--input`, `--live` or any report flag. `--save-inputs <prefix>` writes `<prefix>1.input`, `<prefix>2.input`, ... one input script per car, in the script format of `src/input.rs`: one line `t throttle brake steer` every 0.02 s from `0.000`, `t` written from whole milliseconds as `<ms / 1000>.<ms % 1000, 3 digits>`, and the three values written with Rust's `{}` for `f64` (shortest text that parses back to the same number, so a replay gets the very same inputs); a last line at the text of the race's `end_t`, repeating the values in force (the rule of 1.8, so a replay ends at the same substep). The single-car mode of n20-13 gets one more flag, `--grid-slot <k>` (1 to 3, needs `--grid-gap`): the car is placed in slot k; without it, slot 1, which is milestone 1's placement. Exit codes: 0 when the last line is `race: ok`, 1 when it is `race: FAIL ...` (a rule broken, a time limit, or `Sim::check()` failing), 2 for a usage error or a refused file (line number in the message, empty stdout).
+
+```
+race track=<stem> cars=<n> laps=<N> time_limit_s=<3 decimals> grid_gap_m=<2 decimals> ai_params=<file stem>
+profile lap_s=<3 decimals> v_min_kmh=<1 decimal> v_max_kmh=<1 decimal>
+car <k> start t=<4 decimals>
+car <k> checkpoint lap=<n> k=<1..> t=<4 decimals>
+car <k> lap n=<n> start_t=<..> end_t=<..> time_s=<..> valid=<yes|no> reason=<..> path_m=<..> max_speed_kmh=<..> off_track_s=<..>     (the fields of milestone 1's lap line)
+car <k> finish t=<4 decimals> place=<1..n>              the end of that car's lap N; place by finish time
+car <k> walls substeps=<count> first_t=<4 decimals, or none>
+car <k> final t=<4 decimals> x=<4 decimals> z=<4 decimals> heading_deg=<2 decimals>     milestone 1's final line at the end of the race
+cars gap_min_m=<2 decimals> gap_min_t=<4 decimals> near_substeps=<count>
+race: ok cars=<n> finished=<n> wall_substeps=<sum> near_substeps=<count> end_t=<4 decimals>
+```
+
+The fields after `car <k> ` in `start`, `checkpoint`, `lap` and `final` lines are exactly milestone 1's lines (same fields, same formats), so a car's lines in the race and the lines of a single-car run of the same inputs can be compared character for character. `profile lap_s` is the ideal lap time of the profile, the sum of ds / v over the centreline, recorded and not gated. `race: ok` is printed iff every car has finished lap N, `wall_substeps` is 0 and `near_substeps` is 0; otherwise the last line is `race: FAIL <the broken rules with their numbers>`. A verdict printed by the program is not trusted: 2.2 re-checks every rule from the per-car lines.
+
+#### Checks
+
+**2.1 Tests.** `broadsword test crash-sim > scratch/s7-2-1.txt 2>&1`
+PASS iff the last line is `test: ok — N passed, 0 failed`, N is at least the N recorded for check 1.1 in `evidence/stage-7-m1.md` plus the 13 tests named here, and the file contains each of:
+`Running tests\multi_car.rs`, then `test one_car_matches_the_single_car_run_byte_for_byte ... ok`, `test two_cars_driving_apart_never_interact ... ok`, `test head_on_at_low_speed_conserves_momentum ... ok`, `test car_contact_never_creates_energy ... ok`, `test multi_car_same_inputs_same_bytes ... ok` (n20-19; the momentum and energy tolerances are the brief's, stated in `docs/PHYSICS.md`);
+`Running tests\ai_race.rs`, then `test three_ai_cars_finish_three_laps_on_oval ... ok` (runs the 2.2 race in-process and asserts its rules), `test ai_race_same_input_same_bytes ... ok`, `test ai_inputs_replay_one_car_alone ... ok` (the 2.4 replay of car 2), `test tight_track_reports_wall_contacts ... ok` (the 2.3 run), `test oval_tight_differs_only_in_width ... ok`, `test wall_rule_counts_tyre_outer_edges ... ok` (a synthetic body whose tyres are outboard of its nodes: nodes inside the edge, a tyre edge outside, one wall contact), `test near_rule_counts_centres_under_4_4_m ... ok`, `test ai_race_refuses_bad_flags ... ok` (each of `--ai 0`, `--ai 4`, `--laps 0`, `--time-limit 0`, `--grid-gap 0`, a missing `--ai-params` file and a bad line in it: exit 2, empty stdout, the line number named) (n20-20);
+and every test of `tests\ai.rs` (14 on this commit) and `tests\speed_profile.rs` (10), found by the helper under "Reading test names": `source scratch/s7-named.sh; named scratch/s7-2-1.txt ai 14; named scratch/s7-2-1.txt speed_profile 10 > scratch/s7-2-1-named.txt 2>&1`; its output has `named ai: ok` and `named speed_profile: ok` and no `MISSING` line.
+FAIL: any failed or missing test, or a smaller N.
+
+**2.2 Three AI cars finish three laps without a wall or a car.** Build and run, from the Broadsword root:
+`broadsword run crash-sim -- cargo run --offline --release -- --body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --ai 3 --laps 3 --time-limit 160 --grid-gap 10 --ai-params scenarios/ai_driver.params --save-inputs ../../scratch/s7-2-in > scratch/s7-2-2.txt 2>&1`
+The orchestrator saves the block under "The m2 verifier" below as `scratch/s7-2-verify.sh`, then runs `bash scratch/s7-2-verify.sh scratch/s7-2-2.txt > scratch/s7-2-2-verdict.txt 2>&1`.
+PASS iff `scratch/s7-2-2.txt` contains `run: ok` and the last line of `scratch/s7-2-2-verdict.txt` is exactly `m2-race: ok`. The verifier prints `cars_checked=3 laps_checked=9` and a `FAIL <rule>: <line>` line for every rule broken; it re-derives every rule from the per-car lines and does not read the program's own verdict except to require that it says `race: ok cars=3 finished=3 wall_substeps=0 near_substeps=0 end_t=...`. Its rules, in order: the `race` header line is exactly `race track=oval cars=3 laps=3 time_limit_s=160.000 grid_gap_m=10.00 ai_params=ai_driver`; each car has exactly one `start`, `finish`, `walls` and `final` line and, for each of laps 1 to 3, exactly one `lap` line and exactly three `checkpoint` lines (checkpoint times increasing); every `lap` line is `valid=yes reason=none`; for laps 1 to 3 also `off_track_s=0.000`, `path_m` >= 338.67, `time_s` <= 48.6, `time_s` x `max_speed_kmh` / 3.6 >= `path_m` - 2 and |`time_s` - (`end_t` - `start_t`)| <= 0.0006; each car's `finish t` is the text of the `end_t` of its lap 3 and is at most 160; the places are 1, 2, 3 once each, in finish-time order; every `walls` line is `substeps=0 first_t=none`; the `cars` line has `gap_min_m` >= 4.40 and `near_substeps=0`.
+Record `profile lap_s`, each car's best lap and `gap_min_m` in the evidence, next to lap 1's `time_s` of check 1.4 (the open-loop script's lap). They are recorded, not gated.
+FAIL: `run: FAILED`; any `FAIL` line; a missing car; `race: FAIL`.
+
+**2.3 The wall counter can fail.** Same command with `--track scenarios/tracks/oval_tight.track --ai 1 --laps 1` (and the other flags unchanged), saved as `scratch/s7-2-3.txt`; `scenarios/tracks/oval_tight.track` (n20-20) is `oval.track` with the width changed to 1.6 m, which is less than the car's 1.8 m, so no path of the car can stay inside.
+PASS iff `scratch/s7-2-3.txt` contains `run: FAILED (exit 1)`, a line `car 1 walls substeps=N first_t=T` with N at least 1 and T a number, and a last program line that starts `race: FAIL` and names `wall_substeps`. The run must fail for walls, not for something else: a last line that says `unstable` fails this check.
+FAIL: `run: ok`, `walls substeps=0` or `first_t=none` (the wall rule does not see a car outside the edge, so 2.2's zero means nothing).
+
+**2.4 The AI uses only throttle, brake and steer.** Three parts.
+(a) The driver's source cannot reach the sim: in Git Bash from the Broadsword root, `grep -nE '^use |crate::|crash_sim::|\bSim\b|\bState\b' projects/crash-sim/src/ai.rs > scratch/s7-2-4a.txt 2>&1; grep -c 'pub struct Controls' projects/crash-sim/src/ai.rs > scratch/s7-2-4a-control.txt`. PASS iff `scratch/s7-2-4a.txt` is empty (the module has no top-level `use`, names no other module and no sim type; the `use super::*;` of its own test module is indented and does not match) and `scratch/s7-2-4a-control.txt` is `1` (the pattern is aimed at the right file: `Controls`, the type the driver answers with, is declared there once). It is empty on this commit: the same `grep` printed nothing.
+(b) What the AI did is replayable as an input script, and a car driving alone with that script is the same car. Run, from the Broadsword root, for k in 1 2 3:
+`broadsword run crash-sim -- cargo run --offline --release -- --body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --input ../../scratch/s7-2-in<k>.input --grid-slot <k> --grid-gap 10 > scratch/s7-2-4-replay<k>.txt 2>&1`
+then, in Git Bash:
+```
+{ for k in 1 2 3; do
+  tr -d '\r' < scratch/s7-2-2.txt | grep -E "^car $k (start|checkpoint|lap|final) " | sed -E "s/^car $k //" > scratch/s7-2-4-race$k.lines
+  tr -d '\r' < scratch/s7-2-4-replay$k.txt | grep -E '^(start|checkpoint|lap|final) ' > scratch/s7-2-4-replay$k.lines
+  n=$(grep -c . scratch/s7-2-4-race$k.lines); echo "car $k race_lines=$n"
+  if [ "$n" -ge 14 ] && cmp -s scratch/s7-2-4-race$k.lines scratch/s7-2-4-replay$k.lines; then echo "car $k replay: identical"; else echo "car $k replay: FAIL"; fi
+done; } > scratch/s7-2-4b.txt 2>&1
+```
+PASS iff each replay's output contains `run: ok`, and `scratch/s7-2-4b.txt` has `car 1 replay: identical`, `car 2 replay: identical` and `car 3 replay: identical` and no `FAIL`. A race car has at least 14 lines (a start, 9 checkpoints, 3 laps, a final), so an empty comparison cannot pass. If the replay equals the race, nothing moved the car but those inputs, and no car touched another.
+(c) The saved inputs are what a human could have typed. In Git Bash, for k in 1 2 3, with `E` the `end_t=` text of the `race: ok` line of `scratch/s7-2-2.txt`: `bash scratch/s7-2-inputs.sh scratch/s7-2-in<k>.input "$E" > scratch/s7-2-4c<k>.txt 2>&1`, where `scratch/s7-2-inputs.sh` is the second block under "The m2 verifier". PASS iff each output ends with `inputs: ok`: four fields on every line; the first time `0`, times increasing; throttle and brake in 0 to 1; steer in -1 to 1; never throttle and brake together; at least 1000 lines; the last line's time text equals `E`. A human may also give a negative throttle (reverse, crash-sim `15499f4`: throttle -1 to 1); the driver of n20-17 never asks for it (its throttle is 0 to 1, said in `ai.rs`), so a negative throttle in a saved script fails here.
+FAIL: a match in (a); a difference or an empty side in (b); any `FAIL` in (c).
+
+**2.5 The same race twice gives the same bytes.** The 2.2 command again with `--save-inputs ../../scratch/s7-2-in-b`, saved as `scratch/s7-2-5.txt`, then in Git Bash: `{ for f in scratch/s7-2-2.txt scratch/s7-2-5.txt; do tr -d '\r' < $f | grep -E '^(race |race:|profile |car [0-9]+ |cars )' > $f.prog; done; cmp scratch/s7-2-2.txt.prog scratch/s7-2-5.txt.prog && echo "program lines: identical"; for k in 1 2 3; do cmp scratch/s7-2-in$k.input scratch/s7-2-in-b$k.input && echo "input $k: identical"; done; echo "lines=$(grep -c . scratch/s7-2-2.txt.prog)"; } > scratch/s7-2-5-cmp.txt 2>&1`
+PASS iff the second run has `run: ok` and `scratch/s7-2-5-cmp.txt` has `program lines: identical`, `input 1: identical`, `input 2: identical`, `input 3: identical` and a `lines=` value of at least 50 (a race has at least 52 program lines: the header, the profile line, 16 per car, the `cars` line and the verdict). (The `broadsword run` job lines differ between runs, so only the program's lines are compared.)
+
+**2.6 The race is physics, not a step-size artefact.** The 2.2 command with `--substeps 20` added and `--save-inputs ../../scratch/s7-2-in-s20`, saved as `scratch/s7-2-6.txt`, then `bash scratch/s7-2-verify.sh scratch/s7-2-6.txt > scratch/s7-2-6-verdict.txt 2>&1` and, in Git Bash:
+`for k in 1 2 3; do for f in 2 6; do tr -d '\r' < scratch/s7-2-$f.txt | grep -E "^car $k lap n=[123] " | sed -E 's/.* time_s=([^ ]+) .*/\1/' | sort -n | head -n 1 > scratch/s7-2-6-best$k-$f.txt; done; awk -v k=$k -v a="$(cat scratch/s7-2-6-best$k-2.txt)" -v b="$(cat scratch/s7-2-6-best$k-6.txt)" 'BEGIN { d = a - b; if (d < 0) d = -d; if (a > 0 && b > 0 && d <= 0.01 * a) print "car " k " best lap within 1%: ok (" a " " b ")"; else print "car " k " best lap within 1%: FAIL (" a " " b ")" }'; done > scratch/s7-2-6-cmp.txt 2>&1`
+PASS iff the 2.6 run has `run: ok`, the verdict's last line is `m2-race: ok`, and `scratch/s7-2-6-cmp.txt` has three `ok` lines and no `FAIL`. The 1% is milestone 1's step-size rule (1.6), *reasoned, not measured*: n20-20 reports the measured differences; if one is above 1% it stops and reports instead of raising the bound.
+
+**What guards against tuning to the test in milestone 2:** the crawl bound (48.6 s) and the path floor do not come from the AI's own numbers (2.2); the wall counter is shown to fire on a track the car cannot fit (2.3); the AI's moves are shown to be only throttle, brake and steer by a replay that must equal the race, and a contact would break that equality (2.4); the verdict is re-derived from per-car lines, not read (2.2); the race must give the same bytes twice and survive a different step (2.5, 2.6). There is no human check in milestone 2: nothing a person can look at exists, because the viewer draws one body (trajectory v2 holds one body) and cannot show three cars. A multi-car viewer is the orchestrator's IDEAS line, not a task here.
+
+#### The m2 verifier
+
+Save the first block as `scratch/s7-2-verify.sh` and the second as `scratch/s7-2-inputs.sh`, unchanged. Both were run on synthetic outputs while this file was written (throwaway scripts under `scratch/`, not committed): the first printed `m2-race: ok` on a well-formed race and `m2-race: FAIL` on each of ten changes of it (a wall contact, a gap of 4.30 m, an invalid lap, a path of 330 m, a lap of 49 s, a wrong place, `off_track_s=0.020`, a missing `final` line, a wrong header and `finished=2`) and on an empty file; the second printed `inputs: ok` on a well-formed script and `inputs: FAIL` on a brake and throttle together and on a last time that differs from `E` by trailing digits. Those runs show the scripts' logic only; the first real output is what shows the format matches.
+
+```
+# scratch/s7-2-verify.sh <race output file>: prints labelled lines and a last line m2-race: ok | FAIL
+tr -d '\r' < "$1" | grep -E '^(race |race:|profile |car [0-9]+ |cars )' | awk '
+function fail(m) { print "FAIL " m; bad = 1 }
+function num(s, key,   a) { if (match(s, " " key "=[^ ]+")) { a = substr(s, RSTART + length(key) + 2, RLENGTH - length(key) - 2); return a } return "" }
+BEGIN { bad = 0 }
+$1 == "race" && $2 ~ /^track=/ { hdr++; if ($0 != "race track=oval cars=3 laps=3 time_limit_s=160.000 grid_gap_m=10.00 ai_params=ai_driver") fail("header line: " $0) }
+$1 == "car" && $3 == "start" { st[$2]++ }
+$1 == "car" && $3 == "checkpoint" { cp[$2, num($0, "lap")]++ ; ct = num($0, "t"); if (ct + 0 <= lastcp[$2] + 0 && lastcp[$2] != "") fail("checkpoint time not increasing: " $0); lastcp[$2] = ct }
+$1 == "car" && $3 == "lap" {
+  c = $2; n = num($0, "n"); lap[c, n]++
+  v = num($0, "valid"); r = num($0, "reason"); off = num($0, "off_track_s")
+  ts = num($0, "time_s"); pm = num($0, "path_m"); ms = num($0, "max_speed_kmh"); s = num($0, "start_t"); e = num($0, "end_t")
+  if (v != "yes" || r != "none") fail("lap not valid: " $0)
+  if (n + 0 <= 3) {
+    laps_seen++
+    if (off != "0.000") fail("off_track_s not 0.000: " $0)
+    if (pm + 0 < 338.67) fail("path below the floor 338.67: " $0)
+    if (ts + 0 > 48.6) fail("lap slower than 48.6 s (crawling): " $0)
+    if (ts * ms / 3.6 < pm - 2) fail("timing identity: " $0)
+    d = ts - (e - s); if (d < 0) d = -d; if (d > 0.0006) fail("time_s vs end_t-start_t: " $0)
+    end3[c, n] = e
+  }
+}
+$1 == "car" && $3 == "finish" { c = $2; fin[c]++; ft[c] = num($0, "t"); pl[c] = num($0, "place"); if (ft[c] + 0 > 160) fail("finish after the limit: " $0) }
+$1 == "car" && $3 == "walls" { w[$2]++; if ($0 != "car " $2 " walls substeps=0 first_t=none") fail("wall contact: " $0) }
+$1 == "car" && $3 == "final" { fl[$2]++ }
+$1 == "cars" { g++; gm = num($0, "gap_min_m"); nr = num($0, "near_substeps"); if (gm + 0 < 4.40 || nr != "0") fail("car gap: " $0) }
+$1 == "race:" { last = $0; rl++ }
+END {
+  for (c = 1; c <= 3; c++) {
+    if (st[c] != 1) fail("car " c ": start lines " st[c] + 0)
+    if (fin[c] != 1) fail("car " c ": finish lines " fin[c] + 0)
+    if (w[c] != 1) fail("car " c ": walls lines " w[c] + 0)
+    if (fl[c] != 1) fail("car " c ": final lines " fl[c] + 0)
+    for (n = 1; n <= 3; n++) {
+      if (lap[c, n] != 1) fail("car " c " lap " n ": lap lines " lap[c, n] + 0)
+      if (cp[c, n] != 3) fail("car " c " lap " n ": checkpoint lines " cp[c, n] + 0)
+    }
+    if (ft[c] != end3[c, 3]) fail("car " c ": finish t " ft[c] " is not the end_t of lap 3 " end3[c, 3])
+  }
+  for (a = 1; a <= 3; a++) for (b = 1; b <= 3; b++) if (a != b) {
+    if (pl[a] == pl[b]) fail("two cars share place " pl[a])
+    if (ft[a] + 0 < ft[b] + 0 && pl[a] + 0 > pl[b] + 0) fail("place order disagrees with finish times")
+  }
+  for (c = 1; c <= 3; c++) if (pl[c] !~ /^[123]$/) fail("place not 1..3: car " c)
+  if (hdr != 1) fail("header lines " hdr + 0)
+  if (g != 1) fail("cars gap lines " g + 0)
+  if (laps_seen != 9) fail("lap lines n<=3: " laps_seen + 0 " (need 9)")
+  if (rl != 1 || last !~ /^race: ok cars=3 finished=3 wall_substeps=0 near_substeps=0 end_t=[0-9]+\.[0-9]{4}$/) fail("last race line: " last)
+  print "cars_checked=3 laps_checked=" laps_seen + 0
+  print (bad ? "m2-race: FAIL" : "m2-race: ok")
+}'
+```
+
+```
+# scratch/s7-2-inputs.sh <input file> <end_t text>: prints labelled lines and a last line inputs: ok | FAIL
+awk -v E="$2" '
+function bad(m) { print "FAIL " m; b = 1 }
+NF != 4 { bad("line " NR ": " NF " fields"); next }
+{ t = $1 + 0
+  if (NR == 1 && t != 0) bad("first line time is " $1 ", not 0")
+  if (NR > 1 && t <= prev) bad("line " NR ": time not increasing")
+  if ($2 + 0 < 0 || $2 + 0 > 1) bad("line " NR ": throttle " $2)
+  if ($3 + 0 < 0 || $3 + 0 > 1) bad("line " NR ": brake " $3)
+  if ($4 + 0 < -1 || $4 + 0 > 1) bad("line " NR ": steer " $4)
+  if ($2 + 0 > 0 && $3 + 0 > 0) bad("line " NR ": throttle and brake both on")
+  prev = t; lt = $1 }
+END { if (NR < 1000) bad("only " NR " lines"); if ((lt "") != (E "")) bad("last line time " lt " is not end_t " E)
+      print "lines=" NR " last_t=" lt; print (b ? "inputs: FAIL" : "inputs: ok") }' "$1"
+```
+
+### Milestone 3: a standalone executable a friend can run
+
+**What "a friend can run" means, as checks.** A friend has a Windows 10 or 11 PC with no Rust, no Broadsword and no copy of this repository. They get one folder (the release folder), put it anywhere they can write, double-click `race.exe`, and can pick a track and a car, drive a timed lap, close the game, open it again, and find their best lap and their settings still there. A corrupt settings or save file does not crash the game: it is named in a message, left untouched, and the game runs on defaults. That is five claims, and each has a check: the folder holds everything and needs nothing outside Windows (3.4, 3.5); the menu path works (3.2, 3.5); settings and saves survive a restart (3.2, 3.5); corrupt files are refused by name and never overwritten (3.3); and a person on another machine or account did it (3.6).
+
+**Where the data lives: a `data` folder next to `race.exe`, not in the user's app-data folder.** Reason: Broadsword must be portable (AGENTS.md: every path relative, the project moves between machines), the folder can be copied or deleted as a unit, nothing is written to the registry or to the user's profile, and a check can run the game from a clean folder and look at everything it wrote. The cost: a folder that is not writable (a protected one such as Program Files) cannot hold saves. The shell then prints `warn data folder not writable: <path>` and the game still runs; the README tells the friend to keep the folder somewhere they own.
+
+**How the front end gets the menus: a text protocol with a crash-sim child (the proposed n20-26a).** The menu state machine, the settings file and the save file are in crash-sim (`menu.rs`, `settings.rs`, `save.rs`), and ADR 0001 (a) forbids render from linking crash-sim, so render's front end starts `crash-sim --shell` as a child process and talks to it in lines: events in on stdin, state out on stdout. This keeps one implementation of every rule (the same menu, the same strict parsers) and puts the whole menu path under a test that needs no window. The front end only draws what the lines say and starts races.
+
+**The shell protocol (n20-26a, documented in `docs/SHELL.md`).** `crash-sim --shell --data <dir> --shell-track <file> [--shell-track <file> ...] --shell-car <file> [--shell-car <file> ...] --today <YYYY-MM-DD>`. The track and car lists are exactly the repeated flags, in the order given (never scanned, never hard-coded: n20-23's rule), at least one of each, and a track's or car's id is its file stem. `--today` is required (the shell has no clock, so a test is deterministic; the front end passes the UTC date). The data folder holds `settings.txt` (`settings 1`, n20-21) and `best.save` (`save 2`, n20-22), both written canonically and atomically. One line is read from stdin per event: `up`, `down`, `select`, `back`, `pause`, `finished <ms>` or `finished none` (the race ended; the best valid lap in whole milliseconds), and `set <key> <value>` (`width`, `height`, `fullscreen`, `volume`, `units`; only on the settings screen). The shell prints one line per fact, each flushed, in this order after an event: the `state` line, then an `action` line if the step returned one, then what carrying the action out printed.
+
+```
+shell tracks=<n> cars=<n>                                           first line
+settings width=<w> height=<h> fullscreen=<true|false> volume=<v> units=<kmh|mph> source=<defaults|file|unsaved>
+best track=<id> seconds=<value> car=<id> date=<YYYY-MM-DD>          one per saved track, sorted by id, at start only
+state main cursor=<i>  |  state track_select cursor=<i>  |  state car_select track=<id> cursor=<i>  |  state settings
+state race track=<id> car=<id>  |  state paused track=<id> car=<id> cursor=<i>  |  state results track=<id> car=<id>  |  state quit
+action start_race track=<id> track_file=<path as given> car=<id> car_file=<path as given>
+action abort_race  |  action save_settings  |  action quit
+saved settings                       after action save_settings
+saved best track=<id> seconds=<3 decimals>      after `finished <ms>` when the lap beat the saved one (or there was none)
+warn settings refused: <settings error text>     the file failed `settings::load`; defaults are in use; the file is not touched
+warn save refused: <save error text>             the file failed `Save::parse`; an empty save is in use; the file is not touched
+warn settings not saved: ... / warn best not saved: ...    a write was asked for while the file is in the refused state (never overwrites a refused file)
+warn set refused: <message>                       a bad key, a bad value (settings::validate's text) or not on the settings screen; nothing changed
+warn data folder not writable: <path>             printed once at start when a file cannot be created there; the shell still runs
+```
+
+The shell exits 0 after `action quit` or at end of stdin, and 2 on a usage error (empty stdout). A `finished <ms>` outside the race state is ignored with `warn finished ignored: not in a race`. `seconds` in `saved best` and in `best` is the integer milliseconds divided by 1000 with three decimals, made from the integer (milestone 1's rule), so the printed time, the saved time and the on-screen time are one number.
+
+**The front end and the release folder (n20-26).** `race` is a render example (`projects/render/examples/race.rs`): a window with the menu drawn from the shell's `state` lines, and a race that starts when the shell prints `action start_race`: it runs `crash-sim --body <car_file> --track <track_file> --live` as a child, as the drive viewer does (the `--live` race with lap lines is the item that milestone 1 and n20-14 need; see "What the briefs must take"), shows the lap timer, and when the first timed lap ends or the player presses back, sends `finished <ms>` (or `finished none`) to the shell. `race [--sim-exe <path>] [--cars <dir>] [--tracks <dir>] [--data <dir>] [--today <YYYY-MM-DD>] [--script <file> --no-window]`: with no flag, the executable looks next to itself for `crash-sim.exe`, `cars/` (every `*.bsn`, sorted by file name), `tracks/` (every `*.track`, sorted) and `data/`, and uses today's UTC date; this is the double-click case. `--script <file>` replaces the keyboard and the window for a test: one line per event as the shell reads them, plus `drive <input file>` (path relative to the script's folder; only in the race state), which runs `crash-sim --body <car_file> --track <track_file> --input <file>` in place of the live race, prints its lines unchanged, takes the best lap from its `race: ... best_lap_s=<3 decimals, or none>` line as whole milliseconds by text (no float) and sends `finished` to the shell; blank lines and `#` comments are skipped; `--script` requires `--no-window` and `--today`. The front end prints every line the shell prints, unchanged, and the child's lines unchanged, and ends with exactly one of `game: ok` (the shell printed `action quit` and every child exited 0) or `game: FAIL <reason naming the script line or child>` (exit 1). `scripts/package_race.py build --out <folder>` (inside `scratch/` only) builds a release folder; `scripts/package_race.py check --folder <folder>` checks one. The folder holds `race.exe`, `crash-sim.exe`, `cars/car_basic.bsn`, `tracks/oval.track`, `tracks/chicane.track`, `demo/oval_lap.input` (a copy of `scenarios/tracks/oval_lap.input`, used by the scripted drive), `README.txt` (how to run, where the data is, that the folder must be writable), and `vcruntime140.dll` only if the executables import it (below). It has no `data/` folder: the game makes it on first run.
+
+**Windows system DLLs, and the one that is not.** `crash-sim.exe` on `main` imports `vcruntime140.dll` (read with a small PE import reader, run on `build/release/crash-sim.exe` on this machine while this file was written: `api-ms-win-core-synch-l1-2-0.dll`, six `api-ms-win-crt-*.dll`, `bcryptprimitives.dll`, `kernel32.dll`, `ntdll.dll` and `vcruntime140.dll`). The `api-ms-win-crt-*` files are the Universal C Runtime, part of Windows 10 and 11. `vcruntime140.dll` is the Visual C++ runtime: a clean Windows install need not have it. So a folder that imports it and does not carry it would fail on a friend's machine and pass on every machine of ours. n20-26 must pick one of two fixes, and the folder check accepts exactly these two outcomes: the executables are built with the C runtime linked in statically (`-C target-feature=+crt-static`, passed through cargo's `--config`, so the shared build folder's other builds are not touched), so they import no `vcruntime140.dll`; or `vcruntime140.dll` sits beside them (an app-local copy of the redistributable DLL, which Microsoft's redistribution terms allow). Which one is a recorded decision in the evidence, not a loosened check.
+
+**The numbers, and why.** Window 1280 x 720, volume 80, units km/h, throttle on Up and so on are the defaults of `settings.rs` (n20-21), not chosen here. The date `2026-11-20` in the scripted runs is a fixed test date. 83456 ms is the 83.456 s used by the milestone-1 time-text test (1.7).
+
+#### Checks
+
+**3.1 Tests.** `broadsword test crash-sim > scratch/s7-3-1.txt 2>&1`, `broadsword test render > scratch/s7-3-1-render.txt 2>&1` and `python -I -B scripts/test_package_race.py -v > scratch/s7-3-1-py.txt 2>&1`.
+PASS iff crash-sim's last line is `test: ok — N passed, 0 failed` with N at least the N of 2.1 plus the 7 tests named here; render's last line is `test: ok — N passed, 0 failed` with N at least the N recorded for 1.7's render run in `evidence/stage-7-m1.md`; the Python run ends `OK`; and the crash-sim file contains `Running tests\shell.rs` and each of `test shell_scripted_menu_path_starts_a_race_and_saves_the_lap ... ok`, `test shell_settings_and_best_survive_a_restart ... ok` (two processes, one data folder), `test shell_refuses_corrupt_settings_and_save_and_leaves_them_unchanged ... ok`, `test shell_set_refuses_bad_values_by_name ... ok`, `test shell_needs_at_least_one_track_and_car ... ok`, `test shell_never_overwrites_a_refused_file ... ok`, `test shell_unwritable_data_folder_is_a_warning ... ok` (n20-26a), plus the existing tests of the three files the shell is built on: `source scratch/s7-named.sh; named scratch/s7-3-1.txt settings 9; named scratch/s7-3-1.txt save 13; named scratch/s7-3-1.txt menu 8 > scratch/s7-3-1-named.txt 2>&1` prints three `named ...: ok` lines and no `MISSING` line. `scripts/test_package_race.py` must hold a case where the folder check is given a fake executable that imports a DLL outside the allow-list and has no copy of it beside it (it must fail), one with the DLL beside it (it must pass), one whose file holds a drive-letter path that is not a `.pdb` path (it must fail), and a folder with a file missing (it must fail).
+FAIL: any failed or missing test, or a smaller N.
+
+**3.2 The scripted menu path, and a restart (the protocol, without a window).** In Git Bash from the Broadsword root:
+```
+mkdir -p scratch/s7-3
+{ build/bin/broadsword.exe run crash-sim -- cargo build --offline --release; cp build/release/crash-sim.exe scratch/s7-3/crash-sim.exe && echo "copied"; } > scratch/s7-3-2-build.txt 2>&1
+printf 'select\nselect\nselect\nfinished 83456\nback\ndown\nselect\nset volume 55\nset units mph\nselect\nback\ndown\nselect\n' > scratch/s7-3-a.events
+printf 'down\nselect\nback\ndown\nselect\n' > scratch/s7-3-b.events
+rm -rf scratch/s7-3-data; mkdir scratch/s7-3-data
+{ cd projects/crash-sim; X=../../scratch/s7-3/crash-sim.exe; O="--shell --data ../../scratch/s7-3-data --shell-track scenarios/tracks/oval.track --shell-track scenarios/tracks/chicane.track --shell-car scenarios/car_basic.bsn --today 2026-11-20"
+$X $O < ../../scratch/s7-3-a.events > ../../scratch/s7-3-2a.txt 2> ../../scratch/s7-3-2a.err; echo "exit_a=$?"
+cp ../../scratch/s7-3-data/settings.txt ../../scratch/s7-3-2-settings-after-a.txt; cp ../../scratch/s7-3-data/best.save ../../scratch/s7-3-2-best-after-a.txt
+$X $O < ../../scratch/s7-3-b.events > ../../scratch/s7-3-2b.txt 2> ../../scratch/s7-3-2b.err; echo "exit_b=$?"; } > scratch/s7-3-2-exit.txt 2>&1
+```
+The expected texts: the lines of the code block below that follow a `--- <name>` line, up to the next `---` line or the end of the block, are written to `scratch/<name>` (four files: `s7-3-2a.want`, `s7-3-2b.want`, `s7-3-2-settings.want`, `s7-3-2-best.want`; the `---` lines are not part of them). Then, in Git Bash, `for f in 2a 2b; do tr -d '\r' < scratch/s7-3-$f.txt | diff - scratch/s7-3-$f.want > scratch/s7-3-$f.diff 2>&1; echo "$f diff exit $?"; done > scratch/s7-3-2-diff.txt 2>&1; diff scratch/s7-3-2-settings-after-a.txt scratch/s7-3-2-settings.want > scratch/s7-3-2-settings.diff 2>&1; diff scratch/s7-3-2-best-after-a.txt scratch/s7-3-2-best.want > scratch/s7-3-2-best.diff 2>&1; cmp scratch/s7-3-2-settings-after-a.txt scratch/s7-3-data/settings.txt; cmp scratch/s7-3-2-best-after-a.txt scratch/s7-3-data/best.save`.
+
+```
+--- s7-3-2a.want
+shell tracks=2 cars=1
+settings width=1280 height=720 fullscreen=false volume=80 units=kmh source=defaults
+state main cursor=0
+state track_select cursor=0
+state car_select track=oval cursor=0
+state race track=oval car=car_basic
+action start_race track=oval track_file=scenarios/tracks/oval.track car=car_basic car_file=scenarios/car_basic.bsn
+state results track=oval car=car_basic
+saved best track=oval seconds=83.456
+state main cursor=0
+state main cursor=1
+state settings
+settings width=1280 height=720 fullscreen=false volume=55 units=kmh source=unsaved
+settings width=1280 height=720 fullscreen=false volume=55 units=mph source=unsaved
+state settings
+action save_settings
+saved settings
+state main cursor=1
+state main cursor=2
+state quit
+action quit
+--- s7-3-2b.want
+shell tracks=2 cars=1
+settings width=1280 height=720 fullscreen=false volume=55 units=mph source=file
+best track=oval seconds=83.456 car=car_basic date=2026-11-20
+state main cursor=0
+state main cursor=1
+state settings
+state main cursor=1
+state main cursor=2
+state quit
+action quit
+--- s7-3-2-settings.want
+settings 1
+width = 1280
+height = 720
+fullscreen = false
+volume = 55
+units = mph
+key.throttle = up
+key.brake = down
+key.left = left
+key.right = right
+key.pause = escape
+key.reset = r
+--- s7-3-2-best.want
+save 2
+best oval 83.456 car_basic 2026-11-20
+```
+PASS iff `scratch/s7-3-2-build.txt` contains `run: ok` and ends `copied`; `scratch/s7-3-2-exit.txt` is exactly `exit_a=0` and `exit_b=0`; `scratch/s7-3-2-diff.txt` is `2a diff exit 0` and `2b diff exit 0` (the output of both runs is the expected text, line for line: the menu path, the saved best lap, the saved settings, and, in the second process, the restored settings and best lap); `scratch/s7-3-2-settings.diff` and `scratch/s7-3-2-best.diff` are empty (the two files are the canonical text); the two `cmp` lines print nothing (run B changed no file); and both `.err` files are empty. The test of the expected text is exact, so a changed word in the protocol is a failed check until this file and `docs/SHELL.md` agree.
+FAIL: any difference.
+
+**3.3 Corrupt files are refused by name, and never overwritten.** In Git Bash from the Broadsword root, with `scratch/s7-3/crash-sim.exe` from 3.2:
+```
+rm -rf scratch/s7-3-bad; mkdir scratch/s7-3-bad
+printf 'settings 1\nvolume = 101\n' > scratch/s7-3-bad/settings.txt
+printf 'save 2\nbest oval abc car_basic 2026-11-20\n' > scratch/s7-3-bad/best.save
+cp scratch/s7-3-bad/settings.txt scratch/s7-3-bad-settings.orig; cp scratch/s7-3-bad/best.save scratch/s7-3-bad-best.orig
+printf 'select\nselect\nselect\nfinished 70000\nback\ndown\nselect\nselect\nback\ndown\nselect\n' > scratch/s7-3-c.events
+{ cd projects/crash-sim; ../../scratch/s7-3/crash-sim.exe --shell --data ../../scratch/s7-3-bad --shell-track scenarios/tracks/oval.track --shell-track scenarios/tracks/chicane.track --shell-car scenarios/car_basic.bsn --today 2026-11-20 < ../../scratch/s7-3-c.events > ../../scratch/s7-3-3.txt 2> ../../scratch/s7-3-3.err; echo "exit=$?"; } > scratch/s7-3-3-exit.txt 2>&1
+{ tr -d '\r' < scratch/s7-3-3.txt | grep -c '^warn settings refused: settings line 2: '; tr -d '\r' < scratch/s7-3-3.txt | grep -c '^warn save refused: .*line 2'; tr -d '\r' < scratch/s7-3-3.txt | grep -c '^warn settings not saved: '; tr -d '\r' < scratch/s7-3-3.txt | grep -c '^warn best not saved: '; tr -d '\r' < scratch/s7-3-3.txt | grep -c '^settings width=1280 height=720 fullscreen=false volume=80 units=kmh source=defaults$'; tr -d '\r' < scratch/s7-3-3.txt | tail -n 2 | tr '\n' '|'; echo; cmp scratch/s7-3-bad/settings.txt scratch/s7-3-bad-settings.orig && echo settings-unchanged; cmp scratch/s7-3-bad/best.save scratch/s7-3-bad-best.orig && echo save-unchanged; grep -c panicked scratch/s7-3-3.err; } > scratch/s7-3-3-counts.txt 2>&1
+```
+PASS iff `scratch/s7-3-3-exit.txt` is `exit=0` and `scratch/s7-3-3-counts.txt` is exactly these lines: `1`, `1`, `1`, `1`, `1`, `state quit|action quit|`, `settings-unchanged`, `save-unchanged`, `0` (the settings error names line 2; the save error names line 2; each refused file produced one "not saved" warning when a write was asked for; the game ran on defaults; both files are byte for byte what the test wrote; no panic).
+FAIL: any other line. A count of 0 where a 1 is expected is a missing refusal, not a pass.
+
+**3.4 The release folder holds what it must, and imports only Windows.** In Git Bash from the Broadsword root, `python -I -B scripts/package_race.py build --out scratch/s7-3-release > scratch/s7-3-4-build.txt 2>&1`, then `python -I -B scripts/package_race.py check --folder scratch/s7-3-release > scratch/s7-3-4-check.txt 2>&1`.
+PASS iff both commands exit 0, the last line of the build output is `package: ok folder=scratch/s7-3-release files=<n>`, and the check output has a `file <name> <bytes>` line, with a size above 0, for each of `race.exe`, `crash-sim.exe`, `cars/car_basic.bsn`, `tracks/oval.track`, `tracks/chicane.track`, `demo/oval_lap.input` and `README.txt`; an `import <exe> <dll> <allowed|beside>` line for every DLL each executable imports (none `MISSING`); no `leak` line; and the last line `release-check: ok files=<n> dlls=<m>`. The allow-list in `package_race.py` is the DLLs that every Windows 10 and 11 has: `kernel32.dll`, `ntdll.dll`, `user32.dll`, `gdi32.dll`, `ws2_32.dll`, `advapi32.dll`, `bcryptprimitives.dll`, `ucrtbase.dll`, `shell32.dll`, `ole32.dll`, `msvcrt.dll`, and any name that starts `api-ms-win-` (all case-insensitive); any other import must be a file beside the executable (`beside`). A `leak` line is a string in an executable that starts with a drive letter, a colon and a slash, other than one ending `.pdb` (the debug-information path that every MSVC build carries and that nothing reads). Nothing is written outside `scratch/`: the script refuses an `--out` that is not inside it.
+FAIL: a nonzero exit, a `MISSING` import, a `leak`, a missing file, or a missing last line.
+
+**3.5 The game runs from a clean copy, with nothing of ours on the machine path, and remembers.** In Git Bash from the Broadsword root:
+```
+rm -rf scratch/s7-3-clean; cp -r scratch/s7-3-release scratch/s7-3-clean
+printf 'select\nselect\nselect\ndrive s7-3-clean/demo/oval_lap.input\nback\ndown\nselect\nset volume 55\nset units mph\nselect\nback\ndown\nselect\n' > scratch/s7-3-a.script
+printf 'down\nselect\nback\ndown\nselect\n' > scratch/s7-3-b.script
+{ cd scratch; env -i PATH="/c/Windows/System32:/c/Windows" SYSTEMROOT="C:\\Windows" s7-3-clean/race.exe --script s7-3-a.script --no-window --today 2026-11-20 > s7-3-5a.txt 2>&1; echo "exit_a=$?"
+env -i PATH="/c/Windows/System32:/c/Windows" SYSTEMROOT="C:\\Windows" s7-3-clean/race.exe --script s7-3-b.script --no-window --today 2026-11-20 > s7-3-5b.txt 2>&1; echo "exit_b=$?"; } > scratch/s7-3-5-exit.txt 2>&1
+{ A=scratch/s7-3-5a.txt; B=scratch/s7-3-5b.txt
+T=$(tr -d '\r' < $A | grep -E '^race: ' | head -n 1 | sed -E 's/.* best_lap_s=([0-9]+\.[0-9]{3}).*/\1/'); echo "best_lap_s=$T"
+tr -d '\r' < $A | grep -c -E '^lap n=1 .* valid=yes '
+tr -d '\r' < $A | grep -c "^saved best track=oval seconds=$T\$"
+tr -d '\r' < $A | grep -c '^saved settings$'
+tr -d '\r' < $A | grep -c '^action start_race track=oval '
+tr -d '\r' < $A | tail -n 1
+tr -d '\r' < $B | grep -c "^best track=oval seconds=$T car=car_basic date=2026-11-20\$"
+tr -d '\r' < $B | grep -c '^settings width=1280 height=720 fullscreen=false volume=55 units=mph source=file$'
+tr -d '\r' < $B | tail -n 1
+Tn=$(echo "$T" | sed -E 's/0+$//; s/\.$//'); printf 'save 2\nbest oval %s car_basic 2026-11-20\n' "$Tn" | cmp - scratch/s7-3-clean/data/best.save && echo best-save-bytes-ok
+cmp scratch/s7-3-2-settings.want scratch/s7-3-clean/data/settings.txt && echo settings-bytes-ok
+ls scratch/s7-3-clean; } > scratch/s7-3-5-lines.txt 2>&1
+```
+PASS iff `scratch/s7-3-5-exit.txt` is `exit_a=0` and `exit_b=0`, and `scratch/s7-3-5-lines.txt` is: a line `best_lap_s=` with a value like `83.456` (not empty, not `none`), then `1`, `1`, `1`, `1`, `game: ok`, `1`, `1`, `game: ok`, `best-save-bytes-ok`, `settings-bytes-ok`, then the listing of the clean folder, which holds `README.txt`, `cars`, `crash-sim.exe`, `data`, `demo`, `race.exe` and `tracks` (and `vcruntime140.dll` only if 3.4 shows it as `beside`). (`Tn` is `T` without trailing zeros: the save file writes the number with Rust's shortest text, so 83.450 is saved as `83.45`.) This shows, with `PATH` holding only the Windows folders and the run started from another folder, that the executable finds its own files next to itself, drives a scripted lap through the real child process, saves that lap, and finds it again in a second process; the file `scratch/s7-3-2-settings.want` is 3.2's expected settings text (the same settings were set).
+FAIL: any difference; `game: FAIL ...`; a value `none` for `best_lap_s` (no valid lap, so nothing was saved and nothing proven).
+
+**3.6 A person on another machine or account runs it** (the human check; Lazlo, or a friend if he chooses one). Tell Lazlo first. The release folder of 3.4, as a zip or a copied folder, goes to a Windows 10 or 11 machine that has no Rust and no Broadsword, or, if there is only one PC, to a second Windows user account (a standard user, signed in, with no Rust toolchain in its profile). The person double-clicks `race.exe` (no command line), and: picks the oval and the car from the menu, drives at least one full timed lap, closes the game with the menu's quit, opens it again, and reads the best-lap list and the settings screen. The orchestrator records `evidence/stage-7-m3-human.md` before scratch can be wiped, with: the UTC date and time; who ran it; the machine (computer name, Windows version from `winver`, and whether it is another PC or a second account on the main PC: a second account does not test a missing runtime, which is why 3.4 reads the imports); the contents of the release folder as handed over; the lines the game printed to its log if it has one; and the answers, quoted verbatim from the person's own message: Q1 "Did it start by double-clicking race.exe, with nothing to install?", Q2 "Could you pick a track and a car and start a race?", Q3 "Did your lap time show in the best laps after you closed and opened the game again?", Q4 "Did a setting you changed (volume or units) still hold after reopening?", and "What felt wrong, or not like a game you could hand to a friend?", with one board task id or `IDEAS.md` line per point raised.
+PASS iff 3.1 to 3.5 pass, the record has every item above, and Q1 to Q4 are each answered yes in the person's own words. An agent never answers for them. The "felt wrong" points are not gated, but each needs its task or IDEAS line before the milestone is tagged.
+FAIL: no record, a paraphrase, any answer other than yes, or a missing item.
+
+**What guards against tuning to the test in milestone 3:** the expected text of the protocol is exact (3.2), so a menu that "works" in a different way fails; the state lines come from `menu::step` (n20-23's tests: no dead ends), so the shell is a thin layer; the restart in 3.2 and 3.5 is a second process reading what the first wrote, and the files are compared byte for byte; a corrupt file is shown to be refused, named and left alone (3.3); "no Rust, no Broadsword" is the environment of 3.5 and the import check of 3.4, not a claim; and the last word is a person on a machine that is not ours (3.6).
+
+### Milestone 4: two machines race each other
+
+**Lockstep, as built.** The sim is deterministic (STAGE6 3.5), so only inputs and state hashes cross the network (`src/net.rs`, `docs/NET.md`, `src/net/session.rs`). Both machines run the same two-car sim from the same files; the host's input drives car 1, the guest's drives car 2; a peer steps tick t only when it holds both inputs for t (a late input is waited for, never guessed); every N ticks both exchange a hash of the whole sim state, and a difference stops both with `desync at tick t` and both hashes. That is n20-25b's, merged. The input message carries throttle from -1 to 1 (reverse, crash-sim `6029157` on the wire, `15499f4` in the sim), brake 0 to 1 and steer -1 to 1, as integers in thousandths; the scripts of this milestone use no reverse. This milestone wires the session to the race and shows it on a real race.
+
+**The numbers, and why.**
+
+- **Tick rate 100 per second, one tick is one output step (`dt` 0.01 s, 10 substeps).** The input of a tick is held for its 10 substeps. 1000 ticks a second (one per substep) would need a round trip under 1 ms per tick, which no Wi-Fi LAN gives. `hello` carries the tick rate, so a peer with another `--dt` is refused (n20-25b: `HelloMismatch`).
+- **Input delay D = 6 ticks (60 ms).** An input given at tick t is applied at t + 6, so a message has 60 ms to arrive before the peer needs it. A home Wi-Fi round trip is usually 2 to 10 ms and spikes to 30 to 50 ms; 60 ms covers a spike with a margin, and is short enough to drive with. *Reasoned; the LAN check (4.7) records the round trips.*
+- **Hash every N = 100 ticks (1 s).** A divergence is found within one simulated second of its first visible effect. One hash is a 16-digit line.
+- **Timeout T = 5 s per message; connect timeout 30 s.** Longer than any stall of a healthy LAN peer, short enough to be a failure rather than a hang (the n20-25b test shows a silent peer ends within 2 x T). The connect timeout is longer because a person may have to click "Allow" on the Windows firewall prompt.
+- **`--duration 120` (12000 ticks, 120 hashes).** Milestone 1 says `oval_lap.input` drives one lap and brakes to a stop; the brief of n20-13 says two laps. Two laps at the 8 m/s floor of m2 are 2 x 48.6 = 97.2 s, plus the 1 s delay of the second car's script and its run-up of at most 5 s: 103.2 s, so 120 s holds either. After its script ends, a car keeps the last input (milestone 1: the script ends with a brake to a stop).
+- **Two different scripts.** Car 1 uses `oval_lap.input`; car 2 uses `oval_lap_b.input` (n20-27): the same lines with every time shifted by 1.000 s and a first line `0 0 0 0` added, so car 2 starts 1 s later. With one script on both sides a bug that applied the local input to car 1 on both machines would still print equal lines; with two, it cannot.
+- **A state hash that covers every field the next step reads** (n20-27): the tick, then for car 1 and car 2 in that order: every node's position and velocity, every wheel's spin and steer, every beam's rest length and broken flag, all as `f64` bit patterns (n20-24's `write_f64`; NaN refused). A field left out can diverge without a hash ever showing it, and plastic beam state is state. The test `state_hash_covers_every_state_field` changes each kind of field alone and requires a different hash each time.
+
+**Flags and output (n20-27).** `crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> --host <addr:port> | --join <addr:port> --input <file> --net-delay <ticks> --net-hash-every <ticks> --net-timeout <s> --net-connect-timeout <s> --net-seed <u64>`; the same program without a network, as the reference, is `--input <file> --input2 <file> --net-hash-every <ticks>` (car 1 from `--input`, car 2 from `--input2`, the same sim, the same hash lines, no `net` lines). `--host 127.0.0.1:0` binds an OS-chosen port and prints it; `--host 0.0.0.0:47000` is the LAN case; the host binds exactly the address it is given. The hello's tick rate is 1 / `--dt`. Both peers must be given the same `--body`, `--track`, `--grid-gap`, `--duration`, `--net-delay`, `--net-hash-every` and `--net-seed`; a difference is a desync by design (4.3). The host drives car 1, the guest car 2. Lines, in this order (the program's, after `broadsword`'s own when run through it):
+
+```
+net listening addr=<addr:port>                 host only, first, flushed before it waits
+net role=<host|guest> addr=<addr:port> tick_rate=<n> input_delay=<n> hash_every=<n> timeout_s=<3 decimals> seed=<n>
+car <k> start t=<4 decimals>                    k is 1 or 2; the lines of milestone 1, as in milestone 2
+car <k> checkpoint lap=<n> k=<n> t=<4 decimals>
+car <k> lap n=<n> ... 
+hash tick=<t> value=<16 lower-case hex>        after every hash_every-th tick, t = 99, 199, ...
+car <k> final t=<4 decimals> x=<4 decimals> z=<4 decimals> heading_deg=<2 decimals>
+net: ok ticks=<n> hashes=<n> last_hash=<16 hex>
+```
+or, instead of the last line, one of `net: FAIL desync at tick <t> own=<hex> peer=<hex>`, `net: FAIL timeout at tick <t> after <seconds, 3 decimals> s`, `net: FAIL disconnected at tick <t>`, `net: FAIL peer left at tick <t>`, `net: FAIL no peer within <seconds, 3 decimals> s`, `net: FAIL cannot connect to <addr:port>: <reason>`, with exit code 1; exit 2 for a usage error. A failure line is always the last line, and after a `desync` neither peer prints another `car` or `hash` line.
+
+#### Checks
+
+**4.1 Tests.** `broadsword test crash-sim > scratch/s7-4-1.txt 2>&1`
+PASS iff the last line is `test: ok — N passed, 0 failed`, N is at least the N of 3.1 plus the 8 tests named here, and the file contains `Running tests\two_player.rs` and each of `test two_peers_on_loopback_match_the_local_run ... ok`, `test forced_desync_is_reported_by_both_peers ... ok` (the peers are started with different `--grid-gap`), `test silent_peer_ends_with_timeout ... ok`, `test killed_peer_ends_with_a_named_error ... ok`, `test no_peer_ends_with_a_named_error ... ok`, `test state_hash_covers_every_state_field ... ok`, `test oval_lap_b_is_oval_lap_delayed_one_second ... ok`, `test host_and_guest_inputs_drive_their_own_cars ... ok` (swapping the two scripts changes which car moves) (n20-27), and the existing tests of `net_codec` (14), `net_session` (18) and `statehash` (7): `source scratch/s7-named.sh; named scratch/s7-4-1.txt net_codec 14; named scratch/s7-4-1.txt net_session 18; named scratch/s7-4-1.txt statehash 7 > scratch/s7-4-1-named.txt 2>&1` prints three `named ...: ok` lines and no `MISSING` line.
+FAIL: any failed or missing test, or a smaller N.
+
+**4.2 Two processes on one PC play the same race as one process.** The orchestrator saves the launcher and the verifier under "The m4 launcher and verifier" below as `scratch/s7-4-peers.sh` and `scratch/s7-4-verify.sh`. Then, in Git Bash from the Broadsword root:
+```
+G="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --grid-gap 10 --duration 120"
+mkdir -p scratch/s7-4
+build/bin/broadsword.exe run crash-sim -- cargo run --offline --release -- $G --input scenarios/tracks/oval_lap.input --input2 scenarios/tracks/oval_lap_b.input --net-hash-every 100 > scratch/s7-4-ref.txt 2>&1
+{ build/bin/broadsword.exe run crash-sim -- cargo build --offline --release; cp build/release/crash-sim.exe scratch/s7-4/crash-sim.exe && echo copied; } > scratch/s7-4-2-build.txt 2>&1
+bash scratch/s7-4-peers.sh p 10 10 120 no > scratch/s7-4-2-run.txt 2>&1
+bash scratch/s7-4-verify.sh > scratch/s7-4-2-verdict.txt 2>&1
+```
+The first command is the reference: the same program with no network, car 1 from `--input` and car 2 from `--input2`. The launcher starts the host on `127.0.0.1` with an OS-chosen port, reads the port from the host's `net listening` line, and starts the guest against it; the two are the copy of the built program, run directly (see "When a check runs a built program directly").
+PASS iff the reference output has `run: ok`, `scratch/s7-4-2-build.txt` contains `run: ok` and ends `copied`, `scratch/s7-4-2-run.txt` has `host_exit=0` and `guest_exit=0`, and the last line of `scratch/s7-4-2-verdict.txt` is `m4-local: ok`. The verifier, in order: the host's, the guest's and the reference's `car`/`hash` lines (the `start`, `checkpoint`, `lap` and `final` lines of both cars, and the `hash` lines) are identical, character for character, in all three files; there are exactly 120 `hash` lines in each; each peer's last line is `net: ok ticks=12000 hashes=120 last_hash=<H>` with `H` equal to the value of its `hash tick=11999` line and equal on both peers; car 1 and car 2 each have at least one `lap` line with `valid=yes`; and car 2's `start` time is more than 1.000 s after car 1's (car 2's script starts 1 s later and from 10 m farther back, so it reaches the line more than 1 s later: a swapped input would not show this). A run where a file has no lines, or where the reference has no hash lines, fails on the counts.
+FAIL: a difference between the three files (the network changed the simulation); a missing or different hash; a non-zero exit.
+
+**4.3 A forced desync is detected and reported by both peers.** In Git Bash from the Broadsword root, after 4.2 (the copy of the program is in place): `bash scratch/s7-4-peers.sh d 10 11 120 no > scratch/s7-4-3-run.txt 2>&1`. The host gets `--grid-gap 10`, the guest `--grid-gap 11`: the one parameter both sides must agree on differs, so the cars start from different places and the first hash, at tick 99, differs. Then `for p in host guest; do tr -d '\r' < scratch/s7-4-d-$p.txt | tail -n 1; done > scratch/s7-4-3-last.txt 2>&1`, and `grep -c '^net: ok' scratch/s7-4-d-host.txt scratch/s7-4-d-guest.txt > scratch/s7-4-3-ok.txt 2>&1; grep -c '^hash tick=' scratch/s7-4-d-host.txt scratch/s7-4-d-guest.txt > scratch/s7-4-3-hash.txt 2>&1`.
+PASS iff `scratch/s7-4-3-run.txt` has `host_exit=1` and `guest_exit=1`; `scratch/s7-4-3-last.txt` has two lines that each match `^net: FAIL desync at tick 99 own=[0-9a-f]{16} peer=[0-9a-f]{16}$`, with the host's `own` equal to the guest's `peer`, the host's `peer` equal to the guest's `own`, and `own` different from `peer` on each; and `scratch/s7-4-3-ok.txt` and `scratch/s7-4-3-hash.txt` each have two lines, one per file, and both end `:0` (no `net: ok` line and no `hash tick=` line: neither peer went on after the first hash). The tick is 99 because the first hash is exchanged after tick 99 and the cars differed from tick 0: it is the first hash after the divergence, and a peer that noticed later, or never, fails.
+FAIL: `net: ok` on either side; a desync reported at another tick; only one peer reporting it; a hang (the launcher runs each peer under `timeout 300`; a peer killed by it has exit 124 and fails).
+
+**4.4 A peer that dies ends the other with a named error, not a hang.** In Git Bash from the Broadsword root, after 4.2: `bash scratch/s7-4-peers.sh k 10 10 3000 yes > scratch/s7-4-4-run.txt 2>&1`, then `tr -d '\r' < scratch/s7-4-k-host.txt | tail -n 1 > scratch/s7-4-4-last.txt; grep -c '^hash tick=' scratch/s7-4-k-host.txt > scratch/s7-4-4-hash.txt; grep -c '^net: ok' scratch/s7-4-k-host.txt > scratch/s7-4-4-ok.txt`. The run is 3000 s of simulated time (300000 ticks), so the race cannot finish before the guest is stopped: the bench car case (`examples/bench.rs --case car`, crash-sim `3a11077`) says 10 s of the scripted lap took about 50 ms, about 5 ms per simulated second per car, so 3000 s of two cars is expected to take 30 s or more of wall time, against the half-second or less the launcher needs to see a hash line and stop the guest (*reasoned from that note, not measured*); the launcher stops the guest and its child with `taskkill //F //T` once the host has printed its first hash line.
+PASS iff `scratch/s7-4-4-run.txt` has `host_exit=1` and a `seconds_after_kill=` value of at most 15 (T is 5 s; 10 s is the margin); `scratch/s7-4-4-last.txt` matches `^net: FAIL (disconnected|timeout) at tick [0-9]+`; `scratch/s7-4-4-hash.txt` is at least 1 (the race was running when the guest died) and `scratch/s7-4-4-ok.txt` is 0.
+FAIL: `net: ok`; exit 124 (the host hung); a host that never printed a hash (the race did not start, so nothing was tested).
+
+**4.5 Waiting for a peer that never comes ends with a named error.** In Git Bash from the Broadsword root, after 4.2:
+```
+{ cd projects/crash-sim; X=../../scratch/s7-4/crash-sim.exe; C="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --grid-gap 10 --duration 120 --net-delay 6 --net-hash-every 100 --net-timeout 5 --net-connect-timeout 3 --net-seed 1"
+T0=$SECONDS; timeout 60 $X $C --host 127.0.0.1:0 --input scenarios/tracks/oval_lap.input > ../../scratch/s7-4-5a.txt 2>&1; echo "host_alone_exit=$? seconds=$((SECONDS - T0))"
+T0=$SECONDS; timeout 60 $X $C --join 127.0.0.1:1 --input scenarios/tracks/oval_lap_b.input > ../../scratch/s7-4-5b.txt 2>&1; echo "guest_alone_exit=$? seconds=$((SECONDS - T0))"; } > scratch/s7-4-5-run.txt 2>&1
+tr -d '\r' < scratch/s7-4-5a.txt | tail -n 1 > scratch/s7-4-5a-last.txt; tr -d '\r' < scratch/s7-4-5b.txt | tail -n 1 > scratch/s7-4-5b-last.txt
+```
+PASS iff `scratch/s7-4-5-run.txt` has `host_alone_exit=1` with `seconds=` 3 to 8 (a whole number from 3 to 8) and `guest_alone_exit=1` with `seconds=` 0 to 8; `scratch/s7-4-5a-last.txt` is exactly `net: FAIL no peer within 3.000 s`; and `scratch/s7-4-5b-last.txt` starts `net: FAIL cannot connect to 127.0.0.1:1: `.
+FAIL: a hang (exit 124), an earlier exit of the host, or any other last line.
+
+**4.6 The sim step uses no maths-library function that a second machine might compute differently.** Equal state hashes on one machine cannot show this: the same binary on two CPUs can give different last digits for `sin`, `cos`, `tanh` and the like (the Windows C runtime picks code by CPU features; a result can differ by one unit in the last place between CPUs), and one different bit becomes a desync at the next hash. The step's files are `src/lib.rs`, `src/solver.rs`, `src/collide.rs` and `src/vehicle.rs`. In Git Bash from the Broadsword root:
+```
+{ cd projects/crash-sim; grep -HnE '\.(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|exp2|exp_m1|ln|ln_1p|log|log2|log10|powf|cbrt|hypot|sin_cos)\(' src/lib.rs src/solver.rs src/collide.rs src/vehicle.rs | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1: /'; } > scratch/s7-4-6.txt 2>&1
+```
+The known list, on crash-sim `0bb2b5e` (read, with the reason each is or is not a risk): two `sin_cos` of a tilt angle in `src/lib.rs` (the gravity tilt of the built-in cube, computed once per run from a constant), `Ok((grip_frac * first.mu).atan())` in `src/vehicle.rs` (the slope angle of `--slope-grip-frac`, computed once, not in a race), `let (s, c) = (self.steer * self.max_steer).sin_cos();` in `src/vehicle.rs` (the steered wheels' direction, **every step of a race**), and `c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()` in `src/vehicle.rs` (rolling resistance, **every step of a race**, added by crash-sim `4fd84b0`). `sqrt` is exact in IEEE arithmetic and `powi` is plain multiplication; neither is listed.
+PASS iff `scratch/s7-4-6.txt` is exactly these five lines (`diff` against the block below prints nothing), so that no new maths-library call enters the step without a decision here:
+```
+src/lib.rs: let (s, c) = TILT_DEG.to_radians().sin_cos();
+src/lib.rs: let (s, c) = self.gravity_tilt.sin_cos();
+src/vehicle.rs: Ok((grip_frac * first.mu).atan())
+src/vehicle.rs: let (s, c) = (self.steer * self.max_steer).sin_cos();
+src/vehicle.rs: c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()
+```
+This check pins the list; it does not say the list is safe. 4.7 is the test of that. If 4.7 desyncs, the first suspects are the two per-step calls, and the remedy is a brief, not a looser check: replace each by a function built from `+ - * /` and `sqrt` only (so every IEEE machine gives the same bits), with a test against the library function and a re-run of the Stage 6 checks. That brief is the proposed **n20-27a**; the orchestrator may board it before 4.7 to save a failed LAN session.
+FAIL: any other output (a new call, a removed call, a changed line).
+
+**4.7 Two machines on the LAN** (the human check; Lazlo). Needs Lazlo's yes first (AGENTS.md: ask first for network services), and he is told that the host program will make Windows show a firewall prompt ("Allow access") on the first run, and that the host listens on the LAN while it runs. The same `crash-sim.exe` copy (the same file, copied, not rebuilt: a rebuild could differ) goes to both machines with `scenarios/` and the scripts. Host on one machine: `... --host 0.0.0.0:47000 --input scenarios/tracks/oval_lap.input`; guest on the other: `... --join <host LAN address>:47000 --input scenarios/tracks/oval_lap_b.input`, with the options of 4.2. The orchestrator saves both outputs, the exit codes, the two machines (computer name, Windows version, CPU model from `systeminfo`), the round-trip time of `ping -n 20 <other machine>` from each side, and the address used, in `evidence/stage-7-m4-human.md` before scratch can be wiped, and quotes Lazlo's answers verbatim: Q1 "Did both machines run the race to the end?", Q2 "Did you see anything freeze, stutter or jump?", and "What felt wrong, or not like two machines racing each other?", with one task id or `IDEAS.md` line per point.
+PASS iff both runs print `net: ok ticks=12000 hashes=120 ...`, both `last_hash` values are equal, the filtered lines (`car` and `hash` lines, as in 4.2) of the two machines are identical to each other and to 4.2's reference run on the main PC (`diff`), and Q1 is yes in Lazlo's words. The record must say whether the two machines have the same CPU model: if they differ and all hashes still match, that is the evidence 4.6 asks for. A `desync` here is a finding, not a failure to hide: record the tick and both hashes, and 4.6's remedy is the next task. The "felt wrong" points are not gated, but each needs its task or IDEAS line before the milestone is tagged.
+FAIL: any difference; `net: FAIL`; a missing record.
+
+#### The m4 launcher and verifier
+
+Save the first block as `scratch/s7-4-peers.sh` and the second as `scratch/s7-4-verify.sh`, unchanged. The launcher was run with a stand-in program (a shell script that printed the `net listening` line and hash lines) to see that it starts a host and a guest, reads the address, waits for both, and, with `yes`, stops the guest and its child with `taskkill //F //T` and reports `seconds_after_kill=`; it stopped the stand-in guest (throwaway scripts under `scratch/`, not committed). The verifier was run on synthetic files while this file was written: `m4-local: ok` on three matching files, and `m4-local: FAIL` after each of: a changed `lap` line on the guest, a missing hash line on the host, a wrong `last_hash`, `guest_exit=1`, car 2 starting 0.5 s after car 1, and an empty reference. That shows the scripts' logic only; the first real output is what shows the format matches.
+
+```
+# scratch/s7-4-peers.sh <prefix> <host grid gap> <guest grid gap> <duration s> <kill: yes|no>
+# Starts a host and a guest on loopback from projects/crash-sim with the copy scratch/s7-4/crash-sim.exe.
+# Writes scratch/s7-4-<prefix>-host.txt and scratch/s7-4-<prefix>-guest.txt; prints addr=, host_exit=, and
+# guest_exit= (kill no) or seconds_after_kill= (kill yes: the guest is stopped after the host's first hash line).
+P=$1; HG=$2; GG=$3; DUR=$4; KILL=$5
+R=$PWD; X=$R/scratch/s7-4/crash-sim.exe; H=$R/scratch/s7-4-$P-host.txt; G=$R/scratch/s7-4-$P-guest.txt
+cd projects/crash-sim || exit 2
+C="--body scenarios/car_basic.bsn --track scenarios/tracks/oval.track --duration $DUR --net-delay 6 --net-hash-every 100 --net-timeout 5 --net-connect-timeout 30 --net-seed 1"
+timeout 300 $X $C --grid-gap $HG --host 127.0.0.1:0 --input scenarios/tracks/oval_lap.input > $H 2>&1 &
+HP=$!
+for i in $(seq 1 60); do grep -q '^net listening addr=' $H && break; sleep 0.5; done
+ADDR=$(grep -m1 '^net listening addr=' $H | sed -E 's/^net listening addr=//' | tr -d '\r'); echo "addr=$ADDR"
+timeout 300 $X $C --grid-gap $GG --join "$ADDR" --input scenarios/tracks/oval_lap_b.input > $G 2>&1 &
+GP=$!
+if [ "$KILL" = yes ]; then
+  for i in $(seq 1 600); do [ "$(grep -c '^hash tick=' $H)" -ge 1 ] && break; sleep 0.1; done
+  taskkill //F //T //PID "$(cat /proc/$GP/winpid)" > /dev/null; T0=$SECONDS
+  wait $HP; echo "host_exit=$?"; echo "seconds_after_kill=$((SECONDS - T0))"; wait $GP 2>/dev/null
+else
+  wait $HP; echo "host_exit=$?"; wait $GP; echo "guest_exit=$?"
+fi
+```
+
+```
+# scratch/s7-4-verify.sh: prints labelled lines and a last line m4-local: ok | FAIL
+# reads scratch/s7-4-p-host.txt, scratch/s7-4-p-guest.txt, scratch/s7-4-ref.txt and scratch/s7-4-2-run.txt
+bad=0; f() { echo "FAIL $1"; bad=1; }
+F='^(car [12] (start|checkpoint|lap|final) |hash tick=)'
+src() { case $1 in host) echo scratch/s7-4-p-host.txt;; guest) echo scratch/s7-4-p-guest.txt;; ref) echo scratch/s7-4-ref.txt;; esac; }
+for p in host guest ref; do tr -d '\r' < "$(src $p)" | grep -E "$F" > scratch/s7-4-$p.lines; done
+echo "lines host=$(grep -c . scratch/s7-4-host.lines) guest=$(grep -c . scratch/s7-4-guest.lines) ref=$(grep -c . scratch/s7-4-ref.lines)"
+cmp -s scratch/s7-4-host.lines scratch/s7-4-ref.lines || f "host lines differ from the reference"
+cmp -s scratch/s7-4-guest.lines scratch/s7-4-ref.lines || f "guest lines differ from the reference"
+for p in host guest ref; do h=$(grep -c '^hash tick=' scratch/s7-4-$p.lines); echo "hashes $p=$h"; [ "$h" = 120 ] || f "$p has $h hash lines, need 120"; done
+for p in host guest; do
+  last=$(tr -d '\r' < "$(src $p)" | tail -n 1); echo "last $p: $last"
+  lh=$(grep '^hash tick=11999 ' scratch/s7-4-$p.lines | sed -E 's/.* value=//')
+  [ -n "$lh" ] && [ "$last" = "net: ok ticks=12000 hashes=120 last_hash=$lh" ] || f "$p last line is not net: ok with the hash of tick 11999"
+done
+[ "$(tail -n 1 "$(src host)" | tr -d '\r' | sed -E 's/.*last_hash=//')" = "$(tail -n 1 "$(src guest)" | tr -d '\r' | sed -E 's/.*last_hash=//')" ] || f "last_hash differs between peers"
+for k in 1 2; do n=$(grep -cE "^car $k lap n=[0-9]+ .* valid=yes " scratch/s7-4-ref.lines); echo "valid laps car $k=$n"; [ "$n" -ge 1 ] || f "car $k has no valid lap"; done
+S1=$(grep -m1 '^car 1 start t=' scratch/s7-4-ref.lines | sed -E 's/.* t=//'); S2=$(grep -m1 '^car 2 start t=' scratch/s7-4-ref.lines | sed -E 's/.* t=//')
+echo "start car1=$S1 car2=$S2"
+awk -v a="$S1" -v b="$S2" 'BEGIN { exit !(a != "" && b != "" && b + 0 > a + 1.0) }' || f "car 2 does not start more than 1.000 s after car 1"
+grep -qx 'host_exit=0' scratch/s7-4-2-run.txt && grep -qx 'guest_exit=0' scratch/s7-4-2-run.txt || f "an exit code is not 0"
+if [ $bad = 0 ]; then echo "m4-local: ok"; else echo "m4-local: FAIL"; fi
+```
+
+**What guards against tuning to the test in milestone 4:** the network run must equal a run with no network (4.2), so the lockstep cannot change the physics; two different scripts make a mix-up of the cars visible; the forced desync uses a real mismatch and must be reported by both peers at the first hash (4.3); a dead or absent peer ends with a named error under a time limit (4.4, 4.5); a list of every maths-library call in the step is pinned (4.6), because equal hashes on one machine cannot show a machine difference; and the last word is two real machines (4.7).
+
+### Milestone 5: a second game on the same toolkit
+
+**The genres, and the pick.**
+
+| Genre | What it asks of the engine | Verdict |
+|---|---|---|
+| **Demolition derby (recommended)**: 4 cars in a walled arena, last car still running wins | car-to-car contact (n20-19), beam yield and breaking (STAGE6), plane walls (STAGE6), the AI driver (n20-17) with another target, the state hash and the shell's files; all exist after milestone 2 | Reuses the whole toolkit; nothing new is needed from the engine, so "no engine change" is a real test and not a hope. The score comes from engine outputs (broken beams, contacts). |
+| Top-down physics puzzle: push a node-beam crate onto a target with the car | body-to-body contact between a car and a non-car body | n20-19 gives car-to-car contact only; a crate needs a second contact rule in the core. The genre would force the engine change that the milestone forbids. |
+| Stunt jumps: score for air time over a ramp | ramps (sloped planes) and a rollover rule | Walls are planes along the axes only; a ramp is a new collider kind in the core. |
+
+The pick is the demolition derby. It is a different genre (an arena with no track, no laps, no start line and damage as the goal) on the same solver, bodies, cars, input script, walls and hash, which is what "a small game in another genre on the same toolkit" means. The derby's rules are small: an arena `scenarios/derby/arena.bsn` (a flat pad with four wall planes 60 m apart, 30 m from the centre on every side), four cars from `car_basic.bsn` placed 10 m from the centre facing it at the four sides, a round of 60 s, one car driven by a script (or a person, see 5.5) and three by the m2 driver aimed at the nearest opponent. A car is **out** when at least 10% of its beams have broken, or when it has not moved faster than 0.5 m/s for 5 s after the first contact. The winner is the last car not out at the end; if several are not out, the one with the fewest broken beams (ties go to the lowest car number). The thresholds are first values: n20-derby (below) measures them in the first run and the check does not depend on them being right, only on the report being consistent (5.3). *Reasoned, not measured.*
+
+**What "without changes to the engine core" means, as a check.** The engine core is every file of `src/`, `tests/` and the two build files of each of the two repositories as they are on the commit before milestone 5 starts, except the files named "Not core" below. The check compares each repository's end ref (its HEAD while work is under way, its milestone tag at the end) with that commit and fails on any added, modified, deleted or renamed core file, except the new files of the second game (listed), plus one allowed line in `Cargo.toml`, `default-run = "crash-sim"`, if a second binary needs it. Two things keep the definition honest: the lists are read from this file *as it was at the start commit*, so an edit of this file later cannot move a file out of the core; and the check fails if no second-game file was added at all, so an empty comparison cannot pass. Racing's own files (`ai.rs`, `race.rs`, `shell.rs`, `speed_profile.rs`, `track.rs`) are "Not core": they belong to game 1 and may be fixed. The files that all games share (`lib.rs`, `solver.rs`, `collide.rs`, `format.rs`, `vehicle.rs`, `input.rs`, `trajectory.rs`, `settle.rs`, `statehash.rs`, `net.rs`, `net/session.rs`, `menu.rs`, `settings.rs`, `save.rs`, `pulse.rs`, `reference.rs`, `vec3.rs`, and `main.rs`, the program of game 1, kept in the core because the second game must not need it) are core. In `render`, all of `src/` is core; the examples (the front ends of the games) are not.
+
+The list below is the one to freeze. It was written on crash-sim `0bb2b5e` and render `c4fda9b`; when milestone 5 starts, the orchestrator re-reads `src/` of both repositories, puts any file added since in the right list, and commits this file as the **freeze commit**; then, in the next commit, writes the freeze commits' hashes on the two `Engine core start commit` lines. Nothing else in this file may start a line with the text those lines start with, or the check cannot read them.
+
+```
+Not core (crash-sim): src/ai.rs src/race.rs src/shell.rs src/speed_profile.rs src/track.rs tests/ai.rs tests/ai_race.rs tests/shell.rs tests/speed_profile.rs tests/track.rs
+New files allowed (crash-sim): src/bin/derby.rs src/bin/derby/ tests/derby.rs tests/data/derby/
+Not core (render): examples/drive.rs examples/race.rs
+New files allowed (render): examples/derby.rs
+Engine core start commit (crash-sim): none yet
+Engine core start commit (render): none yet
+```
+
+**Flags and output (n20-derby).** `derby --arena <file> --body <car.bsn> --ai <n> --input <file> --duration <s> --ai-params <file>` runs a round headless: `--ai` is 1 to 3 AI cars (the m2 driver and its params file, aimed at the nearest opponent), car 1 is the player's, driven by the script in `--input` (the format of `src/input.rs`); with `--live` and `--trajectory-v2` in place of `--input` it takes the player's lines on stdin and writes trajectory v2 frames of the whole arena, as `crash-sim --live` does, for the window of 5.5. The lines are those of 5.3. Exit 0 when the last line is `derby: ok`, 1 when it is `derby: FAIL ...`, 2 for a usage error or a refused file. These flags and the arena file are the m5 briefs' to create.
+
+#### Checks
+
+**5.1 The engine core is unchanged.** In Git Bash from the Broadsword root, the block below saved as `scratch/s7-5-core.sh`, then `bash scratch/s7-5-core.sh projects/crash-sim projects/render > scratch/s7-5-1.txt 2>&1` while the milestone is under way (it compares each repository's HEAD with its start commit), and, when it is done, again with the tag of the milestone as a third word, `bash scratch/s7-5-core.sh projects/crash-sim projects/render stage-7-m5 > scratch/s7-5-1-tag.txt 2>&1`: the orchestrator tags both repositories `stage-7-m5` after 5.1 to 5.5 pass, and the second run, on the tags, is the "no diff between the commit before m5 and the m5 tag" of the milestone.
+PASS iff the **last line** of `scratch/s7-5-1.txt` is exactly `core-unchanged: ok`, which is printed only when both start commits are single hex values that are ancestors of the end ref (HEAD, or the tag), each repository has at least one core file at its start commit, every difference in `src`, `tests`, `Cargo.toml` and `Cargo.lock` is a not-core file, a new allowed file or the one allowed `Cargo.toml` line, and at least one new allowed file was added in crash-sim (the second game exists). The output lists every file with its class (`not-core`, `new-allowed`, `changed`), the number of core files and the lists used, so the evidence shows what was compared. The script was run on 16 throwaway Git histories while this file was written (built by a throwaway test script under `scratch/`, not committed): it printed `core-unchanged: ok` for exactly these three: a derby binary and its test added (and a derby example in render); a derby binary added with a not-core file modified; a derby binary added with the `default-run` line added to `Cargo.toml`; and `core-unchanged: FAIL` for the others: a core source modified, a new source file outside the allowed list, a second new binary not on the list, another line added to `Cargo.toml`, an existing core test modified, a core file deleted, a core file renamed, a render core file modified, no second-game file added, a bad render start commit, a start-commit line that still says `none yet`, a not-core list loosened after the start (which the script ignores, reading the lists at the start commit) with a core file edited, and a core file edited after a tag (it fails at HEAD and prints `core-unchanged: ok` with the tag as the third word). If milestone 5 needs a core change, that is a finding recorded in `RETRO.md`, and the change goes through the orchestrator as a new decision (and this check is re-run against a new start commit, never loosened).
+FAIL: any `changed` line; a last line other than `core-unchanged: ok`.
+
+```
+# scratch/s7-5-core.sh <crash-sim repo> <render repo> [end ref, default HEAD]
+cs=$1; rd=$2; E=${3:-HEAD}
+rd_line() { tr -d '\r' < "$1" | grep -E "^$2: " ; }
+one() { [ "$(printf '%s\n' "$1" | grep -c .)" = 1 ] && printf '%s\n' "$1" | sed -E 's/^[^:]*: //'; }
+ok=1
+CS=$(one "$(rd_line "$cs/docs/STAGE7.md" 'Engine core start commit \(crash-sim\)')")
+RS=$(one "$(rd_line "$cs/docs/STAGE7.md" 'Engine core start commit \(render\)')")
+for pair in "crash-sim:$CS" "render:$RS"; do
+  n=${pair%%:*}; c=${pair#*:}; [ $n = crash-sim ] && R=$cs || R=$rd
+  if ! echo "$c" | grep -qxE '[0-9a-f]{7,40}' || ! git -C "$R" merge-base --is-ancestor "$c" "$E" 2>/dev/null; then
+    echo "core-unchanged: FAIL $n start commit is not one commit that is an ancestor of $E (value: ${c:-missing})"; ok=0; fi
+done
+if [ $ok = 1 ]; then
+  FD=$(git -C "$cs" show "$CS:docs/STAGE7.md" | tr -d '\r')
+  list() { echo "$FD" | grep -E "^$1: " | sed -E 's/^[^:]*: //'; }
+  for lab in 'Not core \(crash-sim\)' 'New files allowed \(crash-sim\)' 'Not core \(render\)' 'New files allowed \(render\)'; do
+    [ "$(echo "$FD" | grep -cE "^$lab: ")" = 1 ] || { echo "core-unchanged: FAIL the list '$lab' is not on exactly one line of the file at the start commit"; ok=0; }
+  done
+  NEWF=0
+  for n in crash-sim render; do
+    if [ $n = crash-sim ]; then R=$cs; C=$CS; else R=$rd; C=$RS; fi
+    NC=$(list "Not core \\($n\\)"); AN=$(list "New files allowed \\($n\\)")
+    CORE=$(git -C "$R" ls-tree -r --name-only "$C" -- src tests Cargo.toml Cargo.lock | while read -r f; do case " $NC " in *" $f "*) ;; *) echo "$f";; esac; done)
+    echo "$n start=$C core_files=$(echo "$CORE" | grep -c .) not_core=[$NC] new_allowed=[$AN]"
+    [ "$(echo "$CORE" | grep -c .)" -ge 1 ] || { echo "core-unchanged: FAIL $n has no core file at the start commit"; ok=0; }
+    DIFF=$(git -C "$R" diff --name-status --no-renames "$C" "$E" -- src tests Cargo.toml Cargo.lock) || { echo "core-unchanged: FAIL git diff failed in $n"; ok=0; DIFF=; }
+    while IFS=$'\t' read -r st f; do
+      [ -z "$st" ] && continue
+      case " $NC " in *" $f "*) echo "not-core $st $f"; continue;; esac
+      if [ "$f" = Cargo.toml ]; then
+        X=$(git -C "$R" diff -U0 "$C" "$E" -- Cargo.toml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vxF '+default-run = "crash-sim"')
+        if [ -z "$X" ]; then echo "allowed-line $n Cargo.toml default-run"; else echo "changed $st $n:$f"; ok=0; fi; continue; fi
+      if [ "$st" = A ]; then a=0; for p in $AN; do case "$f" in "$p"*) a=1;; esac; done
+        [ $a = 1 ] && { echo "new-allowed $f"; [ $n = crash-sim ] && NEWF=$((NEWF+1)); continue; }; fi
+      echo "changed $st $n:$f"; ok=0
+    done <<< "$DIFF"
+  done
+fi
+if [ $ok = 1 ]; then echo "second_game_files_added=$NEWF"; [ "$NEWF" -ge 1 ] || { echo "core-unchanged: FAIL no second-game file was added in crash-sim (nothing was checked)"; ok=0; }; fi
+if [ $ok = 1 ]; then echo "core-unchanged: ok"; else echo "core-unchanged: FAIL"; fi
+```
+
+**5.2 Both games' tests pass in one run.** `broadsword test crash-sim > scratch/s7-5-2.txt 2>&1` and `broadsword test render > scratch/s7-5-2-render.txt 2>&1`.
+PASS iff both end `test: ok — N passed, 0 failed`, crash-sim's N is at least the N of 4.1 plus the 6 tests named here, the file contains `Running tests\derby.rs` and each of `test derby_round_same_input_same_bytes ... ok`, `test derby_report_is_consistent_with_the_sim ... ok` (the 5.3 rules, in-process), `test derby_cars_make_contact_and_break_beams ... ok`, `test derby_uses_no_track_or_lap_code ... ok` (the derby sources name none of `track`, `LapTimer`, `speed_profile`, `race`), `test derby_refuses_bad_flags ... ok`, `test derby_winner_rule ... ok`, and every test the earlier checks name still passes (the first game still works): `source scratch/s7-named.sh; for t in "ai 14" "speed_profile 10" "settings 9" "save 13" "menu 8" "net_codec 14" "net_session 18" "statehash 7" "multi_car 5" "ai_race 8" "shell 7" "two_player 8"; do named scratch/s7-5-2.txt $t; done > scratch/s7-5-2-named.txt 2>&1` prints twelve `named ...: ok` lines and no `MISSING` line (the unquoted `$t` gives `named` the stem and the count as two words). No test file that existed at the start commit is changed (5.1 checks that).
+FAIL: a failed or missing test, a smaller N, or one of the first game's tests missing.
+
+**5.3 The derby round, headless.** Build and run, from the Broadsword root: `broadsword run crash-sim -- cargo run --offline --release --bin derby -- --arena scenarios/derby/arena.bsn --body scenarios/car_basic.bsn --ai 3 --input scenarios/derby/player.input --duration 60 --ai-params scenarios/ai_driver.params > scratch/s7-5-3.txt 2>&1`. The player's script `scenarios/derby/player.input` (n20-derby) drives car 1 forward at the nearest opponent. `--bin derby` is needed because crash-sim has two binaries (`default-run`, see "Where the game lives").
+PASS iff `run: ok` and the output has, in this order: a line `derby arena=arena cars=4 duration_s=60.000`; for each car k = 1 to 4 a line `car <k> hits=<n> broken_beams=<n> beams=<n> out=<yes|no> out_t=<4 decimals, or none>`; a line `winner car=<k> reason=<last_standing|fewest_broken>`; and a last line `derby: ok`. And, for the report to be consistent, in Git Bash: the winner is a car whose `out` is `no`, unless all four are out (then `reason=fewest_broken` among all); `out=yes` iff `out_t` is a number; no car has `broken_beams` above its `beams`; and the sum of `hits` over the cars is at least 1 and the sum of `broken_beams` is at least 1 (cars hit each other and break something: a derby in which nothing is damaged is not a derby). `hits` is the number of separate contacts between two cars (a contact is the interval of substeps in which the centres are closer than 4.40 m, the m2 rule, counted once per interval and per pair, and credited to both cars).
+FAIL: `run: FAILED`; a missing line; an inconsistent report; no damage.
+
+**5.4 The derby is deterministic and uses the toolkit, not a copy of it.** The 5.3 command twice, `cmp` of the program's lines (those starting `derby `, `car `, `winner ` and `derby:`); and in Git Bash `grep -ohE 'crash_sim::[a-z_]+' projects/crash-sim/src/bin/derby.rs projects/crash-sim/src/bin/derby/*.rs | sort -u > scratch/s7-5-4-uses.txt` and `grep -nE 'fn (step|integrate|advance)|impl[^{]*Solver' projects/crash-sim/src/bin/derby.rs projects/crash-sim/src/bin/derby/*.rs > scratch/s7-5-4-own.txt`.
+PASS iff the two runs' program lines are identical (the file has at least 6 lines), `scratch/s7-5-4-uses.txt` contains at least `crash_sim::collide`, `crash_sim::format` and `crash_sim::vehicle` (the derby builds on the engine's modules), and `scratch/s7-5-4-own.txt` is empty (the game has no integrator of its own). The `derby_uses_no_track_or_lap_code` test of 5.2 is the other half: the second game is not the first game with a different name.
+FAIL: a difference between the two runs; a missing module; a private step function.
+
+**5.5 It ships like the first game, and a person plays it** (the m3 checks again, on a folder that has the derby in it; the human check). `python -I -B scripts/package_race.py build --out scratch/s7-5-release --with derby` (the `--with derby` flag is added to the packaging script by the m5 brief n20-derby-pack) and `python -I -B scripts/package_race.py check --folder scratch/s7-5-release`, as in 3.4, and then the clean-folder run of 3.5 for `derby.exe` instead of `race.exe`: `env -i PATH="/c/Windows/System32:/c/Windows" SYSTEMROOT="C:\\Windows" s7-5-clean/derby.exe --arena arenas/arena.bsn --body cars/car_basic.bsn --ai 3 --input demo/player.input --duration 60 --ai-params demo/ai_driver.params`, run from `scratch/` after copying the release folder to `scratch/s7-5-clean`, saved as `scratch/s7-5-5.txt`.
+PASS iff 3.4's rules hold for the new folder (it now also lists `derby.exe`, `arenas/arena.bsn`, `demo/player.input`, `demo/ai_driver.params`), the clean run has the same lines as 5.3's (a `derby: ok` last line, the same four `car` lines, the same `winner` line: the packaged game plays the same round), and the human part of 3.6 is done for the derby: the same record format in `evidence/stage-7-m5-human.md`, with Q1 "Could you start the derby by double-clicking derby.exe?", Q2 "Could you drive your car and hit the others?", Q3 "Did the winner on screen match the printed winner line?" and "What felt wrong, or not like a different game from the racing one?". The derby's window is the render example `derby` (n20-derby-view): it starts `derby.exe --live` as a child, as the drive viewer starts crash-sim, and draws all four cars (trajectory v2 of the whole arena).
+FAIL: any rule of 3.4 or 3.5 failing on this folder, a different winner line in the clean run, a missing record, or any answer other than yes.
+
+**5.6 The retro.** The Stage 7 retro entry is due after 5.1 to 5.5 pass, and again carries the Stage 7 lesson: what the human checks found that the tests did not. This file keeps no further check for it.
+
+**What guards against tuning to the test in milestone 5:** the engine core is frozen by commit and the lists are read from the start commit, not from the current file (5.1); an empty comparison cannot pass (a second-game file must exist); the report is checked for consistency, not for a value (5.3); the game must show contact and damage, so it is a derby (5.3); it has no integrator of its own (5.4); and it must ship and be played the way the first game was (5.5).
+
+#### Where the second game lives
+
+Inside crash-sim, as `src/bin/derby.rs` (and `src/bin/derby/` for its modules), with `tests/derby.rs` and `scenarios/derby/`, and a render example `examples/derby.rs` for its window. Nothing is added to `src/lib.rs`: a `pub mod derby;` would be a change to the core, and the game needs none, because everything it uses is already public. Cargo finds `src/bin/derby.rs` by itself; `default-run = "crash-sim"` in `[package]` (the one allowed line of 5.1) keeps plain `cargo run` meaning the crash-sim program if milestone 1 has not already added it.
 
 ## Who builds what
 
@@ -361,3 +928,49 @@ Where a brief and this file differ, this file sets the check, and the brief's co
 - **nb-47**: the race program's flags, placement on the grid, output lines and exit codes; `default-run = "crash-sim"` in the commit that adds the binary; `oval_pinch.track` differs from `oval.track` only in the widths of points 5 to 10; the measured 1.6 difference in its report.
 - **nb-48**: the HUD's character set and refusal; `M:SS.mmm` from whole milliseconds, parsed from the race line's text; the viewer never parses a track file; it forwards the child's race lines unchanged and prints the `hud` line at close; **(not in the brief)** the end line of 1.8: the saved input ends with a line at the child's `final` `t=` text, so a replay ends at the live close time (1.9).
 - **nb-47** also: **(not in the brief)** in `--live`, end of input ends the run at the end of the current substep and the `final` line is printed at that time (1.8's T_end).
+
+## Who builds what, milestones 2 to 5
+
+Status is from the board as it was when this was written; brief files are in `state/next-batch-2026-11-20/`. "Proposed" briefs are not written yet: the orchestrator boards them, and each takes the text named in the last column from this file.
+
+| Brief | Board task | State | What it makes | Checks it must make pass |
+|---|---|---|---|---|
+| n20-17 AI driver | `t-20261119-223123-5` | merged | `src/ai.rs`, `tests/ai.rs` (14 tests) | 2.1, 2.4 (a) |
+| n20-18 speed profile | `t-20261119-223123-6` | merged | `src/speed_profile.rs`, `tests/speed_profile.rs` (10 tests) | 2.1 |
+| n20-13 headless timed lap | `t-20261121-001109-5` | open (after n20-09) | `--track` with `--input`: milestone 1's lap lines; `oval_lap.input` | 1.4 to 1.6, and the lap lines that 2.4 (b), 3.5 and 4.2 compare |
+| n20-19 several cars in one sim | not on the board yet | brief written | car-to-car contact in `src/vehicle.rs` and `src/collide.rs`; `tests/multi_car.rs` | 2.1 (the five `multi_car` tests), 2.4 (b), 4.2 |
+| n20-20 AI race | not on the board yet | brief written | `--ai`, `--laps`, `--time-limit`, `--grid-gap`, `--ai-params`, `--save-inputs`, `--grid-slot`; `src/race.rs`; `scenarios/ai_driver.params`, `scenarios/tracks/oval_tight.track`; `tests/ai_race.rs` | 2.1 to 2.6 |
+| n20-21 settings file | `t-20261119-223123-7` | merged | `src/settings.rs`, `tests/settings.rs` (9 tests) | 3.1, 3.2 (the canonical settings text) |
+| n20-22 save file | `t-20261119-223123-8` | merged | `src/save.rs`, `tests/save.rs` (13 tests) | 3.1, 3.2 (the canonical save text) |
+| n20-23 menu state machine | `t-20261119-223123-9` | merged | `src/menu.rs`, `tests/menu.rs` (8 tests) | 3.1, 3.2 (the state lines) |
+| n20-24 state hash | `t-20261119-223123-10` | merged | `src/statehash.rs`, `tests/statehash.rs` (7 tests) | 4.1, 4.2 (the hash lines) |
+| n20-25a message codec | `t-20261119-223123-11` | merged | `src/net.rs`, `tests/net_codec.rs` (14 tests), `docs/NET.md` | 4.1 |
+| n20-25b lockstep session | `t-20261120-175151` | merged | `src/net/session.rs`, `tests/net_session.rs` (18 tests) | 4.1 to 4.5 |
+| n20-26a game shell protocol | proposed | not written | `--shell` and its flags, `src/shell.rs`, `tests/shell.rs`, `docs/SHELL.md` | 3.1 to 3.3, 3.5 |
+| n20-26 game front end and release folder | not on the board yet | brief written (a draft) | `projects/render/examples/race.rs`, `scripts/package_race.py`, `scripts/test_package_race.py` | 3.1, 3.4, 3.5; 3.6 with the orchestrator |
+| n20-27 two-player lockstep race | not on the board yet | brief written (a draft) | `--host`, `--join`, `--net-*`, `--input2`; `scenarios/tracks/oval_lap_b.input`; `tests/two_player.rs` | 4.1 to 4.5; 4.7 with the orchestrator |
+| n20-27a deterministic maths for the step | proposed, optional | not written | `src/vehicle.rs` (the two per-step library calls of 4.6), a test against the library function, `docs/PHYSICS.md` | 4.6 (the pinned list changes in the same commit), 4.7 |
+| n20-derby the derby game | proposed (at the start of m5) | not written | `src/bin/derby.rs`, `src/bin/derby/`, `tests/derby.rs`, `scenarios/derby/`, `docs/DERBY.md` | 5.1 to 5.4 |
+| n20-derby-view the derby window | proposed (at the start of m5) | not written | `projects/render/examples/derby.rs` | 5.5 |
+| n20-derby-pack the derby in the release folder | proposed (at the start of m5) | not written | `scripts/package_race.py` (`--with derby`), `scripts/test_package_race.py` | 5.5 |
+| Orchestrator, with Lazlo | | | `evidence/stage-7-m2.md` to `-m5.md`; `evidence/stage-7-m3-human.md`, `-m4-human.md`, `-m5-human.md`; the freeze commit and the start-commit lines of m5 | 3.6, 4.7, 5.5, the evidence of every check |
+
+## What the briefs must take from this file, milestones 2 to 5
+
+Where a brief and this file differ, this file sets the check, and the brief's coder raises the difference with the orchestrator. Items marked **(not in the brief)** are additions or conflicts that the orchestrator must apply to the board brief before it starts.
+
+- **n20-13** (`t-20261121-001109-5`):
+  - **(not in the brief)** `--track` also works with `--live` (the race of milestone 1, with `track_line` lines before the first trajectory row): n20-14 (the viewer) and n20-26 (the game's race) both start crash-sim as a live child and need the lap lines in that mode. The brief names only `--track` with `--input`; either n20-13 takes `--live` or a brief for it is added before n20-14 and n20-26 start.
+  - **(not in the brief)** the `race:` line of a single-car run prints `best_lap_s=<3 decimals, or none>` as milestone 1 sets it; n20-26 and 3.5 read the best lap from it as text.
+  - **(not in the brief)** the program is `crash-sim` (the default binary), not `--bin race` as the m1 text of this file says; the orchestrator reconciles the two (see "Which program").
+- **n20-17 and n20-18 (merged):** nothing to change. 2.4 (a) pins `ai.rs`: no top-level `use`, no `crate::`, `crash_sim::`, `Sim` or `State`. The race calls `Driver::update` (the version with the integral state) every 0.02 s and takes the profile from `speed_profile::profile` over the track's centreline points (x, 0, z); `wheelbase` and `max_steer` of the driver's `CarState` come from the body file (the front-to-rear axle distance and the largest steer angle of the steerable wheels), and n20-20 states in `docs/` where it read them.
+- **n20-19:** car-to-car contact is **on** in the physics, and the m2 race requires **zero** of it (see "Car-to-car contact"): the brief's "contact or ghosting" is settled as contact. The five tests named in 2.1 and their rules: one car byte-identical to the single-car run; two cars driving apart never interact; a head-on test at low speed conserves momentum within a tolerance written in `docs/PHYSICS.md`; contact never creates energy (the settle energy rule); same inputs twice give the same bytes, with a fixed car order in every loop. **(not in the brief)** the multi-car sim exposes, per car, its chassis node positions and its wheel mount positions, which n20-20's wall rule reads, and its full state in a fixed order, which n20-27's hash reads.
+- **n20-20:** every flag, file, line and exit code of "Milestone 2", the eight `ai_race` tests of 2.1, and the numbers (3 laps, 160 s, 48.6 s, 4.40 m, grid gap 10 m, 50 Hz). **(not in the brief)** claims add `projects/crash-sim/src/lib.rs` (the `pub mod race;` line; `tests/ai_race.rs` cannot reach the module without it; `lib.rs` is also claimed by n20-19, so sequence after it), `projects/crash-sim/scenarios/ai_driver.params`, `projects/crash-sim/scenarios/tracks/oval_tight.track` and `projects/crash-sim/.gitattributes` if `*.params` files need LF (as `*.track` does). **(not in the brief)** `--grid-slot <k>` in the single-car mode that n20-13 adds. **(not in the brief)** `--save-inputs` writes the saved script as 2.4 (c) reads it, including the last line at the text of `end_t`. The brief's "grid start positions from the track file (or a stated rule)" is the stated rule of "The race": slot k is `grid + (k - 1) x grid_gap` before the line.
+- **n20-21, n20-22, n20-23 (merged):** nothing to change. The shell (n20-26a) prints `settings::write`'s canonical text and `Save::to_text`'s, which 3.2 pins byte for byte; the menu has no way to edit a setting, so the settings screen's `set` lines are the shell's, validated by `settings::validate`.
+- **n20-24 (merged):** nothing to change. n20-27 feeds the fields in the order of "Milestone 4" (tick, then car 1, then car 2: nodes, wheels, beams) and a NaN is a sim failure, not a hash.
+- **n20-25a and n20-25b (merged):** nothing to change. `hello` carries the seed and the tick rate only, so D and N are flags that both peers are given (`--net-delay`, `--net-hash-every`); a difference between the two is a sequence error or a desync by design. The session's `Timeout`, `Disconnected` and `PeerLeft` errors are what 4.4 and 4.5 print as `net: FAIL ...`.
+- **n20-26a (proposed):** the shell protocol of "Milestone 3" exactly (flags, event lines, output lines, exit codes), the seven `shell` tests of 3.1, `docs/SHELL.md` with the same text, and claims `src/shell.rs` (new), `src/lib.rs` (the `pub mod shell;` line), `src/main.rs` (the `--shell` branch), `tests/shell.rs` (new), `docs/SHELL.md` (new). It depends on n20-20 and n20-13 merged (both claim `main.rs` and `lib.rs`).
+- **n20-26:** the front end's flags, the `--script` grammar, the release folder's layout, the `data` folder next to the executable, `game: ok` and `game: FAIL`, and the two commands of `package_race.py` (`build --out` and `check --folder`), with the allow-list of 3.4. The choice between a static C runtime and an app-local `vcruntime140.dll` is made and recorded in the evidence. **(not in the brief)** it depends on n20-26a, and the brief's claim is enough for the files it names. **(not in the brief)** the packaging script never writes outside `scratch/`; its unit tests hold the four cases of 3.1. **(not in the brief; conflict)** the brief's "child process or a small text protocol: say which" is settled here: the text protocol of n20-26a, with a crash-sim child.
+- **n20-27:** every flag, line and exit code of "Milestone 4", the eight `two_player` tests of 4.1, the hash coverage rule, and the numbers (tick rate 100, D = 6, N = 100, T = 5 s, connect timeout 30 s, `--duration 120`). **(not in the brief)** claims add `scenarios/tracks/oval_lap_b.input` (new; `oval_lap.input` delayed by 1.000 s with a first line `0 0 0 0`; a test checks that exact relation), and the file that holds the two-car sim and its hash if it is not `net.rs`. **(not in the brief)** the host binds exactly the address it is given (`--host 127.0.0.1:0` for tests, `0.0.0.0:<port>` for the LAN) and prints `net listening addr=...` first. **(not in the brief)** the reference mode `--input2` with no network. **(not in the brief)** 4.6 pins five maths-library calls in the step; a new one is a decision for the orchestrator, not an edit of this check.
+- **n20-27a (proposed, optional):** replace the two per-step library calls (`sin_cos` of the steer angle and `tanh` of the rolling resistance, in `src/vehicle.rs`) by functions built from `+ - * /` and `sqrt` only, tested against the library function over the range the sim uses, and re-run the Stage 6 checks (the default CSV unchanged, the car checks, the 3.6 crash). The two `sin_cos` of the tilt angle in `src/lib.rs` are computed once per run from a constant and are left for the same task to decide. 4.6's list changes in the same commit. The orchestrator boards it before 4.7 if it wants no failed LAN session; otherwise 4.7 is the test.
+- **The m5 briefs (proposed, written at the start of m5):** the genre, the rules and the flags of "Milestone 5", the lists of the freeze commit, no change to any core file, no `pub mod` in `lib.rs`, and the six `derby` tests of 5.2. **(not in the brief)** the orchestrator writes the freeze commit and the two start-commit lines before the first m5 task starts.
