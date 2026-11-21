@@ -56,19 +56,47 @@ pub trait Solver {
 /// Semi-implicit (symplectic) Euler. Contact with the ground and the walls is not here:
 /// `Sim` applies `collide::apply` after every solver step.
 ///
-/// A non-finite node, or a non-finite force, stops the substep before anything is written: the
+/// A non-finite node, force or update stops the substep before anything is written: the
 /// first such error is kept (`check` returns it, so `Sim::check` ends the run with it) and no
 /// later substep applies anything. Build it with `SymplecticEuler::default()`.
+///
+/// The happy path is the old arithmetic plus one fused finiteness test per node, on the new
+/// position (a non-finite contribution makes the force sum non-finite, which makes the new
+/// velocity and position non-finite; so does a non-finite input node). The new values go to
+/// working buffers and are copied over `pos` and `vel` only if every node passed. Only on a
+/// failure does `diagnose` run, recomputing the forces contribution by contribution to name the
+/// node and the source.
 #[derive(Clone, Debug, Default)]
 pub struct SymplecticEuler {
     /// Substeps taken so far, counting the one in progress.
     substep: u64,
     /// The first error found, if any.
     error: Option<String>,
+    /// Working buffers, kept between substeps so the step allocates nothing once warm.
+    force: Vec<Vec3>,
+    new_vel: Vec<Vec3>,
+    new_pos: Vec<Vec3>,
 }
 
 fn finite(v: Vec3) -> bool {
     v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
+}
+
+/// The unchanged inputs of one failed substep, for `SymplecticEuler::diagnose`.
+struct Frame<'a> {
+    pos: &'a [Vec3],
+    vel: &'a [Vec3],
+    beams: &'a [Beam],
+    mass: &'a [f64],
+    gravity: f64,
+    extra: Option<&'a [Vec3]>,
+    h: f64,
+}
+
+/// Branch-light finiteness of a vector (no short circuit).
+#[inline(always)]
+fn finite_fused(v: Vec3) -> bool {
+    v.x.is_finite() & v.y.is_finite() & v.z.is_finite()
 }
 
 impl SymplecticEuler {
@@ -80,16 +108,64 @@ impl SymplecticEuler {
 
     /// The one symplectic Euler step. With `extra` None the arithmetic is exactly the old `step`
     /// (so the cube's output is byte-for-byte unchanged); with Some, each node's extra force is
-    /// added after its beam forces. Every value is checked before anything is written: on a
-    /// failure `pos` and `vel` are untouched.
+    /// added after its beam forces. On a failure `pos` and `vel` are untouched.
     fn step_inner(&mut self, s: State<'_>, extra: Option<&[Vec3]>, h: f64) {
         let State { pos, vel, beams, mass, gravity } = s;
         self.substep += 1;
-        let n = self.substep;
         if self.error.is_some() {
             return;
         }
-        // The state itself first: a non-finite node would spread through every beam force.
+        let mut force = std::mem::take(&mut self.force);
+        force.clear();
+        force.extend(mass.iter().map(|&m| Vec3::new(0.0, -gravity * m, 0.0)));
+        for bm in beams {
+            let d = pos[bm.b] - pos[bm.a];
+            let len = d.length();
+            if len < 1e-12 {
+                continue;
+            }
+            let dir = d * (1.0 / len);
+            let rel_v = (vel[bm.b] - vel[bm.a]).dot(dir);
+            let mag = bm.stiffness * (len - bm.rest) + bm.damping * rel_v;
+            let f = dir * mag;
+            force[bm.a] += f;
+            force[bm.b] += -f;
+        }
+        if let Some(extra) = extra {
+            for (f, e) in force.iter_mut().zip(extra) {
+                *f += *e;
+            }
+        }
+        let (mut nv, mut np) = (std::mem::take(&mut self.new_vel), std::mem::take(&mut self.new_pos));
+        nv.resize(pos.len(), Vec3::ZERO);
+        np.resize(pos.len(), Vec3::ZERO);
+        let mut ok = true;
+        for i in 0..pos.len() {
+            // semi-implicit Euler: velocity first, then position with the new velocity
+            let v = vel[i] + force[i] * (h / mass[i]);
+            let p = pos[i] + v * h;
+            // One test on the new position covers the rest: a non-finite input node, force sum
+            // or new velocity makes it non-finite too (h is finite and > 0, checked by `Config`).
+            ok &= finite_fused(p);
+            nv[i] = v;
+            np[i] = p;
+        }
+        if ok {
+            vel.copy_from_slice(&nv);
+            pos.copy_from_slice(&np);
+        } else {
+            self.diagnose(Frame { pos, vel, beams, mass, gravity, extra, h });
+        }
+        self.force = force;
+        self.new_vel = nv;
+        self.new_pos = np;
+    }
+
+    /// Cold path: the substep failed, nothing was written. Recomputes from the unchanged state,
+    /// checking each contribution, and records the first error with its node and source.
+    fn diagnose(&mut self, fr: Frame<'_>) {
+        let Frame { pos, vel, beams, mass, gravity, extra, h } = fr;
+        let n = self.substep;
         if let Some(i) = (0..pos.len()).find(|&i| !(finite(pos[i]) && finite(vel[i]))) {
             self.fail(format!("node {i} is not finite at substep {n}"));
             return;
@@ -99,8 +175,6 @@ impl SymplecticEuler {
             self.fail(format!("force on node {i} is not finite at substep {n} (from gravity)"));
             return;
         }
-        // Each contribution is computed in a local value and checked, with the sum it would
-        // make, before it is written: the force array never holds a non-finite value.
         for bm in beams {
             let d = pos[bm.b] - pos[bm.a];
             let len = d.length();
@@ -132,20 +206,13 @@ impl SymplecticEuler {
                 *f = sum;
             }
         }
-        // The update, checked on all nodes before any is written (the same arithmetic runs again
-        // in the write pass, so the checked values are the written ones).
-        for i in 0..pos.len() {
-            let nv = vel[i] + force[i] * (h / mass[i]);
-            if !(finite(nv) && finite(pos[i] + nv * h)) {
-                self.fail(format!("update of node {i} is not finite at substep {n}"));
-                return;
-            }
-        }
-        for i in 0..pos.len() {
-            // semi-implicit Euler: velocity first, then position with the new velocity
-            vel[i] += force[i] * (h / mass[i]);
-            pos[i] += vel[i] * h;
-        }
+        let i = (0..pos.len())
+            .find(|&i| {
+                let nv = vel[i] + force[i] * (h / mass[i]);
+                !(finite(nv) && finite(pos[i] + nv * h))
+            })
+            .unwrap_or(0);
+        self.fail(format!("update of node {i} is not finite at substep {n}"));
     }
 }
 
