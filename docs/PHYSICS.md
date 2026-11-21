@@ -192,7 +192,7 @@ A spring with angular frequency `omega` = sqrt(k/m) is stable under symplectic E
     omega_max <= sqrt(14 * BEAM_STIFFNESS / NODE_MASS) = sqrt(280000) = about 529 rad/s
     max_stable_step() = 2 / omega_max = about 0.00378 s
 
-`Config::validate()` refuses to run when `dt / substeps` is larger than `max_stable_step()`, and tells you to raise `--substeps` or lower `--dt`. It also rejects non-finite values, `dt <= 0`, `duration < 0`, `substeps < 1`, `drop_height < 0`, and `gravity <= 0`. The default 1 ms substep is about a quarter of the limit.
+`Config::validate()` refuses to run when `dt / substeps` is larger than `max_stable_step()`, and tells you to raise `--substeps` or lower `--dt`. It also rejects non-finite values, `dt <= 0`, `duration < 0`, `substeps < 1`, `drop_height < 0`, and gravity that is negative, NaN or infinite. Gravity must be finite and `>= 0`, enforced by `self.gravity.is_finite() && self.gravity >= 0.0` (`src/lib.rs` line 190): 0 is allowed for the headless pulse runs (the m4 frozen run flags start with `--gravity 0`). The default 1 ms substep is about a quarter of the limit.
 
 ### The damping limit
 
