@@ -1623,6 +1623,20 @@ fn refuse_tet_too_flat_for_its_size() {
     assert!(parse(&thin).is_ok(), "{:?}", parse(&thin).err());
 }
 
+/// The shape ratio is volume / L / L / L, never volume / L^3: a well-shaped tet whose edges
+/// are 5e102 m has a finite volume (2.1e307 m^3) but L^3 (3.5e308) overflows, and it must
+/// still be accepted, with the shape 1/(6 x 2^1.5) = 0.059 it has at any size.
+#[test]
+fn huge_well_shaped_tet_is_not_refused_by_an_overflowing_cube() {
+    let big = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 5e102 0 0 ", 1)
+        .replacen("node 2 0 1 0 ", "node 2 0 5e102 0 ", 1)
+        .replacen("node 3 0 0 1 ", "node 3 0 0 5e102 ", 1);
+    let body = parse(&big).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(body.tets.len(), 1);
+    assert_eq!(parse(&write(&body)).unwrap(), body);
+}
+
 #[test]
 fn refuse_tet_whose_volume_is_not_finite() {
     let far = v3("")
