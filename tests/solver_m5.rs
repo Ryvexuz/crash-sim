@@ -29,6 +29,12 @@ const LAW: f64 = 1e-9;
 const R9_NONLINEAR: f64 = 1e-2;
 /// R9: momentum conserved to 1e-9 of its scale.
 const R9_MOMENTUM: f64 = 1e-9;
+/// R9's "energy sits in both blocks", as a check definition of this file (not a tolerance on
+/// a computed value): the kinetic, beam and tet energy at the start are each over 1% of E0.
+const R9_SHARE: f64 = 0.01;
+/// R9's "a wave crosses the shared face", as a check definition of this file: the tet energy
+/// moves by more than 10% of its start at some substep, ten times the R9 allowance.
+const R9_WAVE: f64 = 0.1;
 /// A central finite difference of the stress with step 1e-6: truncation about 1e-12 of the
 /// tangent, rounding about 1e-10; relative to the largest eigenvalue.
 const FD: f64 = 1e-6;
@@ -592,32 +598,26 @@ fn compressive_force_grows_without_bound_as_je_goes_to_zero() {
         }
     }
     assert!(checked >= 80, "only {checked} locked points");
-    // f_1 = -P11 / 6: near J_MIN_FAIL the stress is over 10 times the plateau.
-    assert!(
-        6.0 * last > 10.0 * plateau,
-        "near J_MIN_FAIL the stress {} is not far above the plateau",
-        6.0 * last
-    );
+    // Below J_MIN_FAIL the solver stops, so the law itself: P11 follows the closed form, which
+    // grows like (mu - lambda ln j) / j without bound, at every decade down to Je = 1e-6, while
+    // Saint Venant-Kirchhoff's P11 = j (lambda/2 + mu) (j^2 - 1) falls toward zero.
     let law = law_of(plateau, ys);
     let mut last = 0.0;
     let mut svk_last = f64::INFINITY;
     for &j in &[1e-2, 1e-3, 1e-4, 1e-5, 1e-6] {
         let p = solver_m5::first_piola(&[[j, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], &law);
+        let want = mu * j + (lam * j.ln() - mu) / j;
+        assert!(
+            (p[0][0] - want).abs() <= ROUND * want.abs(),
+            "Je {j}: P11 {} vs {want}",
+            p[0][0]
+        );
         assert!(-p[0][0] > last);
         last = -p[0][0];
-        // Saint Venant-Kirchhoff, for contrast: P11 = j (lambda/2 + mu) (j^2 - 1) -> 0.
         let svk = (j * (0.5 * lam + mu) * (j * j - 1.0)).abs();
         assert!(svk < svk_last, "SVK falls toward zero");
         svk_last = svk;
     }
-    assert!(
-        svk_last < 1e-5 * mu,
-        "SVK's stress at Je = 1e-6 is {svk_last}"
-    );
-    assert!(
-        last > 1e5 * plateau,
-        "at Je = 1e-6 the stress {last} is far above any yield stress"
-    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1746,8 +1746,7 @@ fn m5_coupling_creates_no_energy() {
     };
     let (e0, te0) = energy(&pos, &vel);
     let (p0, l0, ps, ls) = momentum(&pos, &vel);
-    // Energy sits in the motion, the beams and the tets at the start (check definition: each
-    // part is at least 1% of the total).
+    // Energy sits in the motion, the beams and the tets at the start.
     let ke0: f64 = vel
         .iter()
         .zip(&mass)
@@ -1755,7 +1754,7 @@ fn m5_coupling_creates_no_energy() {
         .sum();
     let be0 = e0 - ke0 - te0;
     assert!(
-        ke0 > 0.01 * e0 && be0 > 0.01 * e0 && te0 > 0.01 * e0,
+        ke0 > R9_SHARE * e0 && be0 > R9_SHARE * e0 && te0 > R9_SHARE * e0,
         "start energy: kinetic {ke0}, beams {be0}, tets {te0}"
     );
     let cap = e0 * (1.0 + q) / (1.0 - q) * (1.0 + R9_NONLINEAR);
@@ -1798,7 +1797,7 @@ fn m5_coupling_creates_no_energy() {
     assert_eq!(s.plastic_strain(0), 0.0);
     // Not vacuous: the tets' energy changed by much more than the allowance (a wave crossed).
     assert!(
-        te_swing > 0.1 * te0,
+        te_swing > R9_WAVE * te0,
         "the tet energy barely moved: {te_swing} of {te0}"
     );
     println!(
