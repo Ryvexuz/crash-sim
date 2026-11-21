@@ -27,6 +27,20 @@ pub const TET_MIN_VOLUME: f64 = 1e-9;
 /// but whose rounded coordinates leave a volume above `TET_MIN_VOLUME` at a large size.
 pub const TET_MIN_SHAPE: f64 = 1e-6;
 
+/// The most `solid` lines a body may have. A solid is the material of one zone; m5 uses one
+/// (`crush_solid`, docs/M5-SOLVER.md section 8), and 1 000 leaves room for a body with a solid
+/// per part while bounding a hostile file. The 1 001st `solid` line is refused by name.
+pub const MAX_SOLIDS: usize = 1000;
+
+/// The most `tet` lines a body may have. The m5 solver takes at most `m5_max_tets` = 300
+/// (docs/M5-SOLVER.md section 8), but that is the solver's cap, not the format's: the format
+/// should also hold a finer crush zone for a mesh study, or a whole car in tets (about 60 000
+/// at 10 cm cells, 480 000 at 5 cm), and a 1e6-tet body that the solver itself must refuse
+/// (n20-11 R10). At the cap a parse holds of the order of 100 MB of tet records (an estimate
+/// from the record sizes, not measured), which bounds a hostile file.
+/// The 1 000 001st `tet` line is refused by name.
+pub const MAX_TETS: usize = 1_000_000;
+
 /// Why a file was refused. `line` is 1-based; `column` is the 1-based character column of the
 /// offending token when there is one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -594,11 +608,17 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
                 body.materials.push(Material { name: name.to_string(), stiffness, damping, yield_strain, break_strain });
             }
             "solid" => {
+                if body.solids.len() >= MAX_SOLIDS {
+                    return Err(t.err(Some(kc), format!("too many solids: a body has at most {MAX_SOLIDS} (MAX_SOLIDS)")));
+                }
                 let solid = parse_solid(&mut t, &solid_names)?;
                 solid_names.insert(solid.name.clone());
                 body.solids.push(solid);
             }
             "tet" => {
+                if body.tets.len() >= MAX_TETS {
+                    return Err(t.err(Some(kc), format!("too many tets: a body has at most {MAX_TETS} (MAX_TETS)")));
+                }
                 let tet = parse_tet(&mut t, &body, &node_ids, &solid_names, &mut tet_sets)?;
                 body.tets.push(tet);
             }
@@ -773,7 +793,9 @@ fn parse_solid(t: &mut Toks, names: &HashSet<String>) -> Result<Solid, ParseErro
 /// declared above, no other tet on the same set of nodes (in any order), a finite size, a rest
 /// volume `(b - a) . ((c - a) x (d - a)) / 6` of at least `TET_MIN_VOLUME` in size, a shape
 /// ratio (that volume over the cube of the longest edge) of at least `TET_MIN_SHAPE`, and a
-/// positive volume (the orientation). The checks run in that order.
+/// positive volume (the orientation). The checks run in that order; the size, volume and
+/// shape come from `tet_size`, which cannot overflow when the true values are finite. The
+/// `MAX_TETS` cap is checked by `parse` before this is called.
 fn parse_tet(
     t: &mut Toks,
     body: &Body,
@@ -816,22 +838,29 @@ fn parse_tet(
         ));
     }
     let p = ids.map(|id| body.nodes[node_ids[&id]].pos);
-    let volume = (p[1] - p[0]).dot((p[2] - p[0]).cross(p[3] - p[0])) / 6.0;
-    let mut longest = 0.0f64;
-    for (i, j) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
-        longest = longest.max((p[j] - p[i]).length());
-    }
-    if !volume.is_finite() || !longest.is_finite() {
-        return Err(t.err(at, format!("{label}: its size is not finite (rest volume {volume}, longest edge {longest}): the nodes are too far apart")));
-    }
+    let size = tet_size(p);
+    let (volume, longest, shape) = match size {
+        TetSize::EdgeNotFinite => {
+            return Err(t.err(
+                at,
+                format!("{label}: its size is not finite: an edge is longer than the largest f64 (the nodes are too far apart)"),
+            ));
+        }
+        TetSize::VolumeNotFinite { longest } => {
+            return Err(t.err(
+                at,
+                format!("{label}: its size is not finite: its rest volume overflows f64 (longest edge {longest})"),
+            ));
+        }
+        TetSize::Finite { volume, longest, shape } => (volume, longest, shape),
+    };
     if volume.abs() < TET_MIN_VOLUME {
         return Err(t.err(
             at,
             format!("{label}: its rest volume {volume} is below the minimum {TET_MIN_VOLUME} m^3"),
         ));
     }
-    // divided edge by edge, so that a large but well-shaped tet does not overflow the cube
-    if volume.abs() / longest / longest / longest < TET_MIN_SHAPE {
+    if shape.abs() < TET_MIN_SHAPE {
         return Err(t.err(
             at,
             format!("{label} is too flat: its rest volume {volume} is below {TET_MIN_SHAPE} times the cube of its longest edge {longest}"),
@@ -850,6 +879,85 @@ fn parse_tet(
         nodes: ids,
         solid: solid.to_string(),
     })
+}
+
+/// What `tet_size` found for four node positions.
+enum TetSize {
+    /// An edge's length overflows f64.
+    EdgeNotFinite,
+    /// Every edge is finite but the rest volume overflows f64.
+    VolumeNotFinite { longest: f64 },
+    /// `volume` = (b - a) . ((c - a) x (d - a)) / 6 (m^3), `longest` the longest of the six edges
+    /// (m), `shape` = volume / longest^3 (signed, like the volume).
+    Finite { volume: f64, longest: f64, shape: f64 },
+}
+
+/// 2^n, exactly, for -1022 <= n <= 1023 (a normal f64 built from its exponent bits).
+fn pow2(n: i32) -> f64 {
+    debug_assert!((-1022..=1023).contains(&n));
+    f64::from_bits(((n + 1023) as u64) << 52)
+}
+
+/// x * 2^n, in steps of at most 2^1000 so that no factor overflows. Each step moves |x| toward
+/// the result, so no intermediate overflows or underflows past it, and the result is exact
+/// whenever it is a normal number.
+fn scale2(mut x: f64, mut n: i32) -> f64 {
+    while n != 0 {
+        let step = n.clamp(-1000, 1000);
+        x *= pow2(step);
+        n -= step;
+    }
+    x
+}
+
+/// The length of `v` without overflow or underflow in the squares: the components are divided
+/// by the largest one first. Infinite when a component is not finite or the length overflows.
+fn length_scaled(v: Vec3) -> f64 {
+    if !(v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+        return f64::INFINITY;
+    }
+    let m = v.x.abs().max(v.y.abs()).max(v.z.abs());
+    if m == 0.0 {
+        return 0.0;
+    }
+    let (x, y, z) = (v.x / m, v.y / m, v.z / m);
+    m * (x * x + y * y + z * z).sqrt()
+}
+
+/// The rest volume, longest edge and shape ratio of a tet, with no intermediate value that
+/// overflows when the true values are finite (round 3 of t-20261121-005119). The three edges
+/// from `a` are scaled by 2^-k, the power of two nearest above the longest edge, so every
+/// component is at most about 1 and the triple product at most about 8; the shape ratio is
+/// taken in that scaled form; the volume is the scaled triple product / 6 scaled back by 2^3k.
+/// Scaling by a power of two is exact unless it makes a component subnormal (a component
+/// below 2^-1022 times the longest edge, where only that component's lowest bits are lost),
+/// so for every other tet whose plain triple product neither overflows nor underflows the
+/// volume is bit for bit `(b - a) . ((c - a) x (d - a)) / 6`. The
+/// volume can only underflow when the true volume is below about 2e-308 m^3, far below
+/// `TET_MIN_VOLUME`, so the minimum test is never passed or failed by an underflow.
+fn tet_size(p: [Vec3; 4]) -> TetSize {
+    let mut longest = 0.0f64;
+    for (i, j) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
+        let l = length_scaled(p[j] - p[i]);
+        if !l.is_finite() {
+            return TetSize::EdgeNotFinite;
+        }
+        longest = longest.max(l);
+    }
+    if longest == 0.0 {
+        return TetSize::Finite { volume: 0.0, longest, shape: 0.0 };
+    }
+    let k = longest.log2().ceil() as i32;
+    let scaled = |v: Vec3| Vec3::new(scale2(v.x, -k), scale2(v.y, -k), scale2(v.z, -k));
+    let (u, v, w) = (scaled(p[1] - p[0]), scaled(p[2] - p[0]), scaled(p[3] - p[0]));
+    let sixth = u.dot(v.cross(w)) / 6.0;
+    let ls = scale2(longest, -k);
+    let shape = sixth / ls / ls / ls;
+    let volume = scale2(sixth, 3 * k);
+    if !volume.is_finite() {
+        return TetSize::VolumeNotFinite { longest };
+    }
+    TetSize::Finite { volume, longest, shape }
 }
 
 /// `wheel <name> mount <id> [<id> ...] radius <r> width <w> mass <m> inertia <i>

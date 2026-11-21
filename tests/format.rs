@@ -4,7 +4,7 @@
 
 use crash_sim::format::{
     parse, write, Body, BodyBeam, Controls, Group, Material, Node, ParseError, Plane, Solid,
-    Suspension, Tet, Tyre, Velocity, Wheel, TET_MIN_SHAPE, TET_MIN_VOLUME,
+    Suspension, Tet, Tyre, Velocity, Wheel, MAX_SOLIDS, MAX_TETS, TET_MIN_SHAPE, TET_MIN_VOLUME,
 };
 use crash_sim::vec3::Vec3;
 use crash_sim::{Config, Sim, BEAM_DAMPING, BEAM_STIFFNESS, NODE_MASS};
@@ -1817,6 +1817,7 @@ const CAP_TETS: usize = 1_000_000;
 
 #[test]
 fn refuse_more_solids_than_the_cap() {
+    assert_eq!((MAX_SOLIDS, MAX_TETS), (CAP_SOLIDS, CAP_TETS), "the caps changed: change this test too");
     let mut text = String::from("bsn 3\n");
     for i in 0..CAP_SOLIDS + 1 {
         text.push_str(&format!("solid s{i} plateau_stress 1 yield_strain 0.5 damping_ratio 0\n"));
@@ -1892,8 +1893,15 @@ fn refuse_tet_whose_volume_is_not_finite() {
         &far,
         10,
         "tet ",
-        "tet 0 1 2 3: its size is not finite (rest volume inf",
+        "tet 0 1 2 3: its size is not finite: an edge is longer than the largest f64",
     );
+    // every edge finite (1.7e103 m at most), but the volume (1.2e103)^3 / 6 = 2.9e308 m^3 is
+    // above the largest f64
+    let vast = v3("")
+        .replacen("node 1 1 0 0 ", "node 1 1.2e103 0 0 ", 1)
+        .replacen("node 2 0 1 0 ", "node 2 0 1.2e103 0 ", 1)
+        .replacen("node 3 0 0 1 ", "node 3 0 0 1.2e103 ", 1);
+    expect_after(&vast, 10, "tet ", "tet 0 1 2 3: its size is not finite: its rest volume overflows f64");
 }
 
 #[test]
