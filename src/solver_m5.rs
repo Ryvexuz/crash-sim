@@ -580,6 +580,14 @@ impl SolverM5 {
                     b.material
                 ));
             };
+            // The format's ranges, again for a body built in code: a NaN or negative number
+            // here would silently weaken the stability bound.
+            if !(m.stiffness.is_finite() && m.stiffness > 0.0 && m.damping.is_finite() && m.damping >= 0.0) {
+                return Err(format!(
+                    "beam {i}: its material `{}` has stiffness {} and damping {}; they must be finite, stiffness > 0 and damping >= 0",
+                    m.name, m.stiffness, m.damping
+                ));
+            }
             beam_k[a] += 2.0 * m.stiffness;
             beam_k[c] += 2.0 * m.stiffness;
             beam_c[a] += 2.0 * m.damping;
@@ -606,6 +614,13 @@ impl SolverM5 {
                 return Err(format!(
                     "solid `{}`: damping_ratio {} must be >= 0 and <= 1",
                     s.name, s.damping_ratio
+                ));
+            }
+            let e = s.plateau_stress / s.yield_strain;
+            if !e.is_finite() {
+                return Err(format!(
+                    "solid `{}`: its elastic modulus E = plateau_stress / yield_strain = {e:e} Pa is not finite",
+                    s.name
                 ));
             }
         }
@@ -725,7 +740,7 @@ impl SolverM5 {
         let mut k_at = beam_k.clone();
         let mut c_at = beam_c.clone();
         let mut tets = Vec::with_capacity(raw.len());
-        for r in raw {
+        for (ti, r) in raw.into_iter().enumerate() {
             let law = &laws[r.solid];
             let zeta = body.solids[r.solid].damping_ratio;
             // Q3: the critical damping of a bar of the tet's smallest altitude 3 V / (largest
@@ -737,6 +752,11 @@ impl SolverM5 {
             } else {
                 0.0
             };
+            if !eta.is_finite() {
+                return Err(format!(
+                    "tet {ti}: its damping coefficient eta = 2 zeta L sqrt((lambda + 2 mu) rho) = {eta:e} Pa s is not finite"
+                ));
+            }
             let rows = [row(&r.dm_inv, 0), row(&r.dm_inv, 1), row(&r.dm_inv, 2)];
             let g0 = -(rows[0] + rows[1] + rows[2]);
             let g_rest = [
@@ -766,10 +786,20 @@ impl SolverM5 {
                 eta,
             });
         }
+        // Every node's sums, not only the largest: `f64::max` would drop a NaN silently.
+        if let Some(i) = (0..n).find(|&i| !(k_at[i].is_finite() && c_at[i].is_finite())) {
+            return Err(format!(
+                "node {}: its m5 stability sums (stiffness {:e}, damping {:e}) are not finite",
+                body.nodes[i].id, k_at[i], c_at[i]
+            ));
+        }
         let w2 = k_at.iter().cloned().fold(0.0, f64::max) / m_min;
         let g = c_at.iter().cloned().fold(0.0, f64::max) / m_min;
-        let w2 = if w2.is_finite() { w2 } else { 0.0 };
-        let g = if g.is_finite() { g } else { 0.0 };
+        if !(w2.is_finite() && g.is_finite()) {
+            return Err(format!(
+                "the m5 stability bound is not finite: w2 = {w2:e}, g = {g:e} (the lightest node is {m_min:e} kg)"
+            ));
+        }
         let x = h * h * w2 + 2.0 * h * g;
         if x.is_nan() || x >= 4.0 {
             let limit = 4.0 / (g + (g * g + 4.0 * w2).sqrt());
@@ -874,15 +904,26 @@ impl SolverM5 {
         self.add_tet_forces(pos, vel, &mut f);
         if self.check_forces(&f, "tets") {
             self.stiffness_verdict(h);
+        }
+        // The same gate as `step_inner`.
+        if !self.failed() {
             self.commit_tets();
         }
         f
     }
 
+    /// Records the first error. Every error of a substep goes through here, and `failed`
+    /// (the gate before anything is applied) reads what it sets.
     fn fail(&mut self, msg: String) {
         if self.error.is_none() {
             self.error = Some(msg);
         }
+    }
+
+    /// True once any error has been recorded: from then on no substep applies anything (the
+    /// run ends at the next `Sim::check`).
+    fn failed(&self) -> bool {
+        self.error.is_some()
     }
 
     /// True if every entry of the working force array is finite; else records
@@ -1155,11 +1196,15 @@ impl SolverM5 {
             ));
             return;
         }
-        // Every check passed: apply the substep.
         if !self.tets.is_empty() {
             self.stiffness_verdict(h);
-            self.commit_tets();
         }
+        // The one gate: every error path above (and any later one) goes through `fail`, so if
+        // an error is recorded, in this substep or before, nothing is applied.
+        if self.failed() {
+            return;
+        }
+        self.commit_tets();
         vel.copy_from_slice(&nv);
         pos.copy_from_slice(&np);
         self.force = force;

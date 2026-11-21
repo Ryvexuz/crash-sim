@@ -1405,6 +1405,149 @@ fn the_force_check_catches_every_source_before_anything_is_applied() {
     );
 }
 
+/// Round 4 (q-20261121-034426): every error path of a substep applies nothing. Body: tet 0
+/// (nodes 0-3) squeezed past yield, so a committed substep would change its plastic state;
+/// tet 1 (nodes 4-7); a beam between nodes 8 and 9. Each case adds one fault and checks the
+/// named error, that the state is bit-identical, and that neither tet's plastic state changed.
+/// The controls show tet 0 really flows at both steps when there is no fault. (The update
+/// overflow path needs h = 1 s, which a tet refuses; it is checked on a free node above.)
+#[test]
+fn every_error_path_of_a_substep_applies_nothing() {
+    let mut b = one_tet(1e6, 0.02, 0.0, 1.0, 2.0, Vec3::new(0.0, 10.0, 0.0));
+    for (i, q) in [
+        Vec3::new(5.0, 10.0, 0.0),
+        Vec3::new(6.0, 10.0, 0.0),
+        Vec3::new(5.0, 11.0, 0.0),
+        Vec3::new(5.0, 10.0, 1.0),
+        Vec3::new(10.0, 10.0, 0.0),
+        Vec3::new(11.0, 10.0, 0.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        add_node(&mut b, 4 + i as u32, *q, 2.0);
+    }
+    add_tet(&mut b, [4, 5, 6, 7], "s");
+    b.materials.push(Material {
+        name: "m".into(),
+        stiffness: 1e3,
+        damping: 0.0,
+        yield_strain: None,
+        break_strain: None,
+    });
+    add_beam(&mut b, 8, 9, "m");
+    let limit = SolverM5::from_body(&b, 1e-12).unwrap().step_limit();
+    let beams = Body::build(&b).beams;
+    let mass = vec![2.0; 10];
+    let eye_bits = |m: Mat3| m.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let identity = eye_bits([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    let squeezed = || {
+        let mut p = positions(&b);
+        p[1].x = 0.9; // tet 0: F = diag(0.9, 1, 1), past yield
+        p
+    };
+    // One substep with a fault; returns the error and the solver.
+    let run = |h: f64, pos: &mut Vec<Vec3>, gravity: f64, extra: Option<&[Vec3]>| -> (Option<String>, SolverM5) {
+        let mut s = SolverM5::from_body(&b, h).unwrap();
+        let mut vel = vec![Vec3::ZERO; 10];
+        let before = state_bits(pos, &vel);
+        let st = State {
+            pos,
+            vel: &mut vel,
+            beams: &beams,
+            mass: &mass,
+            gravity,
+        };
+        match extra {
+            Some(e) => s.step_with_forces(st, e, h),
+            None => s.step(st, h),
+        }
+        let err = s.check();
+        if err.is_some() {
+            assert!(state_bits(pos, &vel) == before, "{err:?}: the failed substep changed the state");
+            for t in 0..2 {
+                assert_eq!(s.plastic_strain(t), 0.0, "{err:?}: tet {t} kept a plastic flow");
+                assert!(eye_bits(s.fp(t)) == identity, "{err:?}: tet {t} kept a new Fp");
+            }
+        }
+        (err, s)
+    };
+    let (small, big) = (0.1 * limit, 0.9 * limit);
+    for h in [small, big] {
+        let (e, s) = run(h, &mut squeezed(), 9.81, None);
+        assert_eq!(e, None, "control at h = {h}");
+        assert!(s.plastic_strain(0) > 0.0, "control: tet 0 flows at h = {h}");
+    }
+    let mut p = squeezed();
+    p[8].x = f64::NAN;
+    assert_eq!(run(small, &mut p, 9.81, None).0.as_deref(), Some("node 8 is not finite at substep 1"));
+    assert_eq!(
+        run(small, &mut squeezed(), 1e308, None).0.as_deref(),
+        Some("force on node 0 is not finite at substep 1 (from gravity)")
+    );
+    let mut p = squeezed();
+    p[9].x = 1e200;
+    assert_eq!(
+        run(small, &mut p, 9.81, None).0.as_deref(),
+        Some("force on node 8 is not finite at substep 1 (from beams)")
+    );
+    let mut p = squeezed();
+    p[5].x = 1e305;
+    assert_eq!(
+        run(small, &mut p, 9.81, None).0.as_deref(),
+        Some("force on node 4 is not finite at substep 1 (from tets)")
+    );
+    let mut extra = vec![Vec3::ZERO; 10];
+    extra[8].x = f64::INFINITY;
+    assert_eq!(
+        run(small, &mut squeezed(), 9.81, Some(&extra)).0.as_deref(),
+        Some("force on node 8 is not finite at substep 1 (from extra forces)")
+    );
+    // The Je rule: tet 1's apex brought to 1 cm above its base.
+    let mut p = squeezed();
+    p[7].z = 0.01;
+    let e = run(small, &mut p, 9.81, None).0.unwrap();
+    assert!(e.starts_with("tet 1 inverted or collapsed at substep 1: Je = 0.0"), "{e}");
+    // The stiffness verdict: tet 1 sheared by 1.5 at h = 0.9 of the construction limit.
+    let mut p = squeezed();
+    p[5].y += 1.5;
+    let e = run(big, &mut p, 9.81, None).0.unwrap();
+    assert!(e.starts_with("stiffness bound exceeded at substep 1: h omega = "), "{e}");
+}
+
+/// Round 4 (q-20261121-034426): construction refuses, by name, every number its stability
+/// bound is built from that is not finite, instead of replacing it (the old code set a
+/// non-finite w2 or g to 0, which accepted any step).
+#[test]
+fn construction_refuses_every_non_finite_bound_input() {
+    let at = Vec3::new(0.0, 10.0, 0.0);
+    // The reviewer's case: plateau 1e308 Pa at yield 0.02 gives E = 5e309 Pa.
+    let e = refused(&one_tet(1e308, 0.02, 0.0, 1.0, 1.0, at), 1e-5);
+    assert_eq!(e, "solid `s`: its elastic modulus E = plateau_stress / yield_strain = inf Pa is not finite");
+    // E finite (1.7e308 Pa) but the tangent at rest times the headroom, 2 (2 mu + 3 lambda),
+    // overflows: refused at the node sums.
+    let e = refused(&one_tet(1.7e306, 0.01, 0.0, 1.0, 1.0, at), 1e-5);
+    assert!(e.starts_with("node 0: its m5 stability sums (stiffness inf"), "{e}");
+    // A beam whose doubled stiffness overflows (2 x 1e308).
+    let e = refused(&two_node_beam(2.0, 1.0, 1e308, 2.0), 1e-5);
+    assert!(e.starts_with("node 0: its m5 stability sums (stiffness inf"), "{e}");
+    // Finite sums over a node of 1e-300 kg: w2 = 2e10 / 1e-300 overflows.
+    let e = refused(&two_node_beam(2.0, 1e-300, 1e10, 2.0), 1e-5);
+    assert!(e.starts_with("the m5 stability bound is not finite: w2 = inf"), "{e}");
+    // The damping coefficient: E = 1e306 Pa and a zone density of 4800 kg/m^3 (200 kg nodes on
+    // a 1/6 m^3 tet; eps_D = 0.144, above the yield 0.01) make (lambda + 2 mu) rho overflow.
+    let e = refused(&one_tet(1e304, 0.01, 0.05, 1.0, 200.0, at), 1e-5);
+    assert!(e.starts_with("tet 0: its damping coefficient eta = 2 zeta L sqrt((lambda + 2 mu) rho) = inf"), "{e}");
+    // A material built in code with a NaN or a negative number (the format refuses both).
+    for (k, c) in [(f64::NAN, 0.0), (-1e3, 0.0), (1e3, f64::NAN), (1e3, -1.0)] {
+        let mut b = two_node_beam(2.0, 1.0, 1e3, 2.0);
+        b.materials[0].stiffness = k;
+        b.materials[0].damping = c;
+        let e = refused(&b, 1e-5);
+        assert!(e.starts_with("beam 0: its material `m` has stiffness"), "{e}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // R1, R10: every refusal of the constructor
 
