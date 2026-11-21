@@ -433,6 +433,259 @@ fn check_share_accepts_equal_values_zero_included() {
     assert!(e.contains("P3 damping_ratio"), "{e}");
 }
 
+/// What one run of the wall file measures at the wall (`wall_load_of`).
+#[derive(Debug)]
+struct WallLoad {
+    /// First substep with a node or tyre on or behind the wall, s (the pulse report's contact_s).
+    contact_s: f64,
+    /// Last substep of the window, s (contact + `frozen: window_s`).
+    window_end_s: f64,
+    /// Sum over the window of the wall's normal impulse on the nodes, and on the tyres, N s.
+    node_impulse_ns: f64,
+    tyre_impulse_ns: f64,
+    /// Height of the wall-force resultant over the window: sum of impulse x node height / impulse.
+    resultant_y_m: f64,
+    /// The sprung centre of gravity's height (mass-weighted node y), weighted the same way.
+    cg_y_m: f64,
+    /// Substeps in the window with a node or tyre on or behind the ground (the report's rule).
+    ground_contacts: usize,
+    /// Passenger-cell pitch (deg, + = nose up), its largest and smallest value at every substep
+    /// from the start to the window end, and when.
+    pitch_max: (f64, f64),
+    pitch_min: (f64, f64),
+}
+
+/// Pitch of the passenger cell, deg: the angle of the least-squares line of y against x over the
+/// nodes of stations 0 to 3 (ids 0 to 31, every node behind the crush beams).
+fn cell_pitch_deg(sim: &crash_sim::Sim, body: &Body) -> f64 {
+    let idx: Vec<usize> = (0..32u32)
+        .map(|id| body.node_index(id).expect("cell node"))
+        .collect();
+    let n = idx.len() as f64;
+    let mx = idx.iter().map(|&i| sim.pos[i].x).sum::<f64>() / n;
+    let my = idx.iter().map(|&i| sim.pos[i].y).sum::<f64>() / n;
+    let sxy: f64 = idx
+        .iter()
+        .map(|&i| (sim.pos[i].x - mx) * (sim.pos[i].y - my))
+        .sum();
+    let sxx: f64 = idx.iter().map(|&i| (sim.pos[i].x - mx).powi(2)).sum();
+    (sxy / sxx).atan().to_degrees()
+}
+
+/// Runs a wall file as the 4.4 command does (gravity 0, h = `frozen: h_s`, `frozen: duration_s`,
+/// stepped one substep at a time) and measures the wall's load on the car, nodes and tyres.
+///
+/// A node's wall contact is an impulse (`collide::apply` moves it back onto the plane and changes
+/// its velocity), so its load is measured as impulse. A second sim (`split`) is stepped by the
+/// same operations as `Sim::integrate`'s car path, written out here with the public parts
+/// (`Car::pre_step`, the default solver `SymplecticEuler`, `Car::post_step`, `collide::apply`),
+/// with one difference: the contact pass is applied with the ground alone and then with the wall
+/// alone, which per node is the same operations in the same order (`collide::apply` loops planes
+/// inside the node loop), and the momentum change of each node in the wall pass is the wall's
+/// impulse on it. A tyre's wall load is a force (`Wheel::load[1]`, at the wheel centre's height),
+/// taken times h. The split sim's node positions and velocities are compared bit for bit with the
+/// real sim's (`Sim::advance`) after every substep, so the measured run is the real run.
+fn wall_load_of(body: &Body, doc: &str) -> WallLoad {
+    use crash_sim::collide;
+    use crash_sim::solver::{Solver, State, SymplecticEuler};
+    use crash_sim::vehicle::Substep;
+    let one = |name: &str| {
+        let v = frozen(doc, name);
+        assert_eq!(v.len(), 1, "frozen: {name}");
+        v[0]
+    };
+    let (h, duration, window) = (one("h_s"), one("duration_s"), one("window_s"));
+    assert!(
+        body.materials.iter().all(|m| m.break_strain.is_none()),
+        "a material has a break_strain: the split run below has no break pass"
+    );
+    let cfg = crash_sim::Config {
+        duration,
+        dt: h,
+        substeps: 1,
+        gravity: 0.0,
+        ..crash_sim::Config::default()
+    };
+    let mut real = crash_sim::Sim::from_car(cfg.clone(), body).unwrap_or_else(|e| panic!("{e}"));
+    let mut split = crash_sim::Sim::from_car(cfg.clone(), body).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(split.planes.len(), 2, "the wall file has one plane");
+    let (ground_plane, wall) = (split.planes[0], split.planes[1]);
+    let mut solver = SymplecticEuler::default();
+    let gv = split.gravity_vector();
+    let mut extra: Vec<Vec3> = Vec::new();
+    let touches = |sim: &crash_sim::Sim, planes: &[collide::Plane]| {
+        collide::any_at_or_behind(&sim.pos, planes)
+            || sim.car.as_ref().is_some_and(|c| {
+                c.wheels
+                    .iter()
+                    .any(|w| planes.iter().any(|pl| pl.distance(w.pos) <= w.p.radius))
+            })
+    };
+    let n = crash_sim::step_count(&cfg) as usize;
+    let window_steps = (window / h * (1.0 + 1e-9)).floor() as usize;
+    let sprung: f64 = split.mass.iter().sum();
+    let p0 = cell_pitch_deg(&split, body);
+    let (mut contact, mut j_sum, mut jy_sum, mut jcg_sum, mut ground) = (None, 0.0, 0.0, 0.0, 0);
+    let (mut node_j, mut tyre_j) = (0.0, 0.0);
+    let (mut pmax, mut pmin) = ((f64::NEG_INFINITY, 0.0), (f64::INFINITY, 0.0));
+    for k in 1..=n {
+        real.advance();
+        real.check()
+            .unwrap_or_else(|e| panic!("unstable at substep {k}: {e}"));
+        // `Sim::integrate`'s car path, then its yield pass (`Sim::advance` with one substep).
+        extra.clear();
+        extra.extend(split.mass.iter().map(|&m| Vec3::new(m * gv.x, 0.0, 0.0)));
+        let car = split.car.as_mut().expect("the validation car has wheels");
+        car.pre_step(
+            &split.pos,
+            &split.vel,
+            &split.mass,
+            &split.planes,
+            Substep { gravity: gv, h },
+            &mut extra,
+        );
+        let tyre: Vec<(f64, f64)> = car.wheels.iter().map(|w| (w.load[1], w.pos.y)).collect();
+        let state = State {
+            pos: &mut split.pos,
+            vel: &mut split.vel,
+            beams: &split.beams,
+            mass: &split.mass,
+            gravity: -gv.y,
+        };
+        solver.step_with_forces(state, &extra, h);
+        car.post_step(
+            &mut split.pos,
+            &mut split.vel,
+            &split.mass,
+            &split.planes,
+            h,
+        );
+        collide::apply(&mut split.pos, &mut split.vel, &[ground_plane], h);
+        let before = split.vel.clone();
+        collide::apply(&mut split.pos, &mut split.vel, &[wall], h);
+        split.apply_yield();
+        assert!(
+            solver.check().is_none(),
+            "the split run's solver failed at substep {k}"
+        );
+        for i in 0..split.pos.len() {
+            for (a, b) in [(real.pos[i], split.pos[i]), (real.vel[i], split.vel[i])] {
+                assert!(
+                    a.x.to_bits() == b.x.to_bits()
+                        && a.y.to_bits() == b.y.to_bits()
+                        && a.z.to_bits() == b.z.to_bits(),
+                    "substep {k}, node {i}: the split run left the real run ({a:?} against {b:?})"
+                );
+            }
+        }
+        if contact.is_none() && touches(&real, &real.planes[1..]) {
+            contact = Some(k);
+        }
+        let Some(kc) = contact else { continue };
+        if k > kc + window_steps {
+            break;
+        }
+        let pitch = cell_pitch_deg(&split, body) - p0;
+        if pitch > pmax.0 {
+            pmax = (pitch, k as f64 * h);
+        }
+        if pitch < pmin.0 {
+            pmin = (pitch, k as f64 * h);
+        }
+        if touches(&real, &real.planes[..1]) {
+            ground += 1;
+        }
+        let cg_y = split
+            .pos
+            .iter()
+            .zip(&split.mass)
+            .map(|(p, m)| p.y * m)
+            .sum::<f64>()
+            / sprung;
+        for i in 0..split.pos.len() {
+            let j = split.mass[i] * (split.vel[i] - before[i]).dot(wall.normal);
+            j_sum += j;
+            jy_sum += j * split.pos[i].y;
+            jcg_sum += j * cg_y;
+            node_j += j;
+        }
+        for &(fz, y) in &tyre {
+            if fz > 0.0 {
+                j_sum += fz * h;
+                jy_sum += fz * h * y;
+                jcg_sum += fz * h * cg_y;
+                tyre_j += fz * h;
+            }
+        }
+    }
+    let kc = contact.expect("the car never reached the wall");
+    assert!(
+        kc + window_steps <= n,
+        "the window runs past the end of the run"
+    );
+    assert!(j_sum > 0.0, "no wall impulse in the window");
+    WallLoad {
+        contact_s: kc as f64 * h,
+        window_end_s: (kc + window_steps) as f64 * h,
+        node_impulse_ns: node_j,
+        tyre_impulse_ns: tyre_j,
+        resultant_y_m: jy_sum / j_sum,
+        cg_y_m: jcg_sum / j_sum,
+        ground_contacts: ground,
+        pitch_max: pmax,
+        pitch_min: pmin,
+    }
+}
+
+/// The car of test A at the wall: the wall-force resultant, measured over the pulse window from
+/// the run itself (`wall_load_of`), acts below the sprung centre of gravity, so the impact cannot
+/// pitch the car nose up (validation/CAR.md, "Pitch at the wall"); and no node or tyre reaches the
+/// ground in the window. Test A only: this file never opens the second test's files.
+#[test]
+fn validation_wall_load_acts_below_the_centre_of_gravity() {
+    let f = files();
+    let body = body_of(&f.wall_a);
+    let w = wall_load_of(&body, &f.doc);
+    print_wall_load("validation_wall.bsn", &w);
+    check_wall_load(&w).unwrap();
+}
+
+fn print_wall_load(name: &str, w: &WallLoad) {
+    println!(
+        "{name}: resultant_y_m={:.4} cg_y_m={:.4} arm_m={:+.4} node_impulse_ns={:.0} tyre_impulse_ns={:.0} ground_contacts={} pitch_deg max {:+.3} at {:.4} s, min {:+.3} at {:.4} s (every substep), window {:.4} to {:.4} s",
+        w.resultant_y_m,
+        w.cg_y_m,
+        w.resultant_y_m - w.cg_y_m,
+        w.node_impulse_ns,
+        w.tyre_impulse_ns,
+        w.ground_contacts,
+        w.pitch_max.0,
+        w.pitch_max.1,
+        w.pitch_min.0,
+        w.pitch_min.1,
+        w.contact_s,
+        w.window_end_s
+    );
+}
+
+/// The wall load acts below the centre of gravity and nothing reaches the ground in the window.
+fn check_wall_load(w: &WallLoad) -> Result<(), String> {
+    // NaN on either side fails too (partial_cmp is None).
+    if w.resultant_y_m.partial_cmp(&w.cg_y_m) != Some(std::cmp::Ordering::Less) {
+        return Err(format!(
+            "the wall load acts at {} m, not below the centre of gravity at {} m",
+            w.resultant_y_m, w.cg_y_m
+        ));
+    }
+    if w.ground_contacts != 0 {
+        return Err(format!(
+            "{} substeps in the window with a node or tyre on the ground",
+            w.ground_contacts
+        ));
+    }
+    Ok(())
+}
+
 /// Every check, run on a deliberately wrong copy of the real files, must fail with its own words.
 #[test]
 fn validation_checks_reject_wrong_copies() {
@@ -495,6 +748,23 @@ fn validation_checks_reject_wrong_copies() {
         .rest *= 1.2;
     let e = check_one_length(&crush_of(&b, f.steel_e).unwrap()).unwrap_err();
     assert!(e.contains("spread"), "{e}");
+    // The wall load: the layout before t-20261121-204929 (the four roof-level beams over the
+    // wheel mounts `crush` again, the rest of the file unchanged) loads the wall above the
+    // centre of gravity and pitches the car onto the ground.
+    let mut b = body_of(&f.wall_a);
+    let mut changed = 0;
+    for beam in b.beams.iter_mut() {
+        if [(27, 35), (29, 37), (35, 43), (37, 45)].contains(&(beam.a, beam.b)) {
+            assert_eq!(beam.material, "chassis");
+            beam.material = "crush".into();
+            changed += 1;
+        }
+    }
+    assert_eq!(changed, 4);
+    let w = wall_load_of(&b, &f.doc);
+    print_wall_load("16 crush beams", &w);
+    let e = check_wall_load(&w).unwrap_err();
+    assert!(e.contains("not below the centre of gravity"), "{e}");
     // A doc without the range lines is refused by name (no vacuous pass).
     let r = std::panic::catch_unwind(|| frozen("nothing here\n", "range crush.area_m2"));
     assert!(r.is_err(), "a missing frozen line was accepted");
