@@ -80,7 +80,7 @@ So the "fixes" column below is a **hypothesis from the model's structure**, tied
 
 `E_k <= E_0 (1 + q) / (1 - q)`,   `q = h omega_max / 2`,
 
-with `omega_max` the largest circular frequency (the code's Gershgorin value). With `h omega_max <= 0.2` the bound is 1.22. A broken coupling (a boundary force counted twice, dropped, or with the wrong sign, or the boundary node's mass counted from both sides) makes the energy drift past it, because it breaks the gradient structure.
+with `omega_max` the largest circular frequency (the code's Gershgorin value). With `h omega_max <= 0.2` the bound is 1.22. A broken coupling (a boundary force counted twice, dropped, or with the wrong sign) makes the energy drift past it, because it breaks the gradient structure. A boundary node's mass counted twice is different: the energy bound still passes, and only the momentum check catches it, failing at substep 1. This was measured in n20-11 core (t-20261121-021841), test `m5_coupling_creates_no_energy`; the energy bound alone does not catch it.
 
 **The test, `m5_coupling_creates_no_energy` (named in `docs/STAGE6-M4-M5.md:303`).**
 
