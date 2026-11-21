@@ -208,11 +208,13 @@ fn non_dividing_dt_ends_at_the_last_whole_step_not_after_duration() {
 }
 
 #[test]
-fn gravity_must_be_positive_and_finite() {
+fn gravity_must_be_non_negative_and_finite() {
     use crash_sim::Config;
     assert!(Config::default().validate().is_ok());
     assert_eq!(Config::default().gravity, 9.81);
-    for g in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+    // gravity 0 is valid since n20-07 (a car flying level into a wall)
+    assert!(Config { gravity: 0.0, ..Config::default() }.validate().is_ok());
+    for g in [-1.0, f64::NAN, f64::INFINITY] {
         assert!(Config { gravity: g, ..Config::default() }.validate().is_err(), "gravity {g} accepted");
     }
     assert!(Config { gravity: 1.62, ..Config::default() }.validate().is_ok());

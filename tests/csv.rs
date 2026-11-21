@@ -48,7 +48,7 @@ fn binary_stdout_matches_library_csv() {
 #[test]
 fn binary_rejects_invalid_argument_with_empty_stdout() {
     let out = Command::new(crash_sim_bin())
-        .args(["--gravity", "0"])
+        .args(["--gravity", "-1"])
         .output()
         .expect("run binary");
     assert!(!out.status.success(), "expected non-zero exit");
