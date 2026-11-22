@@ -1,0 +1,8 @@
+case_id,input,expected
+S-y,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=y swap_yz=0,displacement=4/3125 rotation=3/6250 moment=4 energy=2/3125
+S-z,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=z swap_yz=0,displacement=1/3125 rotation=3/25000 moment=4 energy=1/6250
+S-y90,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=y swap_yz=1,displacement=1/3125 rotation=3/25000 moment=4 energy=1/6250
+S-z90,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=z swap_yz=1,displacement=4/3125 rotation=3/6250 moment=4 energy=2/3125
+S-axial,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=axial swap_yz=0,displacement=1/50000 rotation=0 moment=0 energy=1/1000
+S-torsion,L=4 A=1/50 Iy=1/15000 Iz=1/60000 J=1/20000 E=1000000000 nu=1/4 mode=torsion swap_yz=0,displacement=0 rotation=1/5000 moment=1 energy=1/10000
+S-band,invalid=L_over_depth:1,error=OutsideBeamBand

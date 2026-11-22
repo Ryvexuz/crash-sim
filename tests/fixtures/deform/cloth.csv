@@ -1,0 +1,7 @@
+case_id,input,expected
+C-stretch,sx=11/10 sy=6/5 tx=0 ty=0,f1=-10:0 f2=0:-20 reaction=10:20 energy=5/2
+C-rigid,sx=1 sy=1 tx=1/10 ty=-1/10,f1=0:0 f2=0:0 reaction=0:0 energy=0
+C-compress,sx=9/10 sy=4/5 tx=0 ty=0,f1=0:0 f2=0:0 reaction=0:0 energy=0
+C-mixed,sx=9/10 sy=11/10 tx=0 ty=0,f1=0:0 f2=0:-10 reaction=0:10 energy=1/2
+C-area-zero,invalid=area:0,error=NonPositiveArea
+C-area-negative,invalid=area:-1,error=NonPositiveArea

@@ -1,0 +1,26 @@
+deform-fixtures 1
+inventory tests/fixtures/deform/tetra.csv d2 11 T-load T-translate T-rotate T-cancel T-min T-max T-count T-duplicate T-nan T-overflow T-subnormal
+inventory tests/fixtures/deform/cloth.csv d3 6 C-stretch C-rigid C-compress C-mixed C-area-zero C-area-negative
+inventory tests/fixtures/deform/axial.csv d4 6 A-elastic A-cycle A-break A-order A-mass-zero A-mass-negative
+inventory tests/fixtures/deform/section.csv d9 7 S-y S-z S-y90 S-z90 S-axial S-torsion S-band
+inventory tests/fixtures/deform/joint.csv d10 8 J-weld J-bolt J-combined J-above J-old J-new J-order J-time
+inventory_rule nonempty; exact ordered IDs; no duplicate or unlisted row; evaluate every row including expected errors before success token
+manifest_path tests/fixtures/deform/manifest.txt
+handoff S1 must record this exact path; S1 reconciliation is pending and blocks S4
+recipe d5 lighter_car_v1; original synthetic node-beam body; SI
+format bsn 1; keyword order and LF as docs/FORMAT.md
+frame x forward; y up; z right
+nodes ix=0..2 iy=0..1 iz=0..1; id=4*ix+2*iy+iz; position=(ix-1,iy+0.5,iz-0.5) m; mass=10 kg each
+beams each ix-cell contains all unordered pairs of its eight corner nodes; union pairs; sort by endpoint IDs; rest=Euclidean distance
+counts nodes=12 beams=50; lumped_mass=120 kg; no wheels; beams carry no additional mass
+material synthetic_beam stiffness=10000 N/m damping=10 N*s/m yield_strain=0.02 break_strain=0.20
+groups back=0..3 front=8..11 all=0..11; list each group's IDs ascending
+velocity all=(5,0,0) m/s
+wall plane=(1.1,0.5,0) m normal=(-1,0,0); fixed infinite rigid; free space x<=1.1
+ground existing bsn ground y=0; no other planes; gravity per S1 configuration
+seed 3202; generation deterministic and consumes no random draws
+settings required broadsword.toml [node_3_2].step_seconds and .run_seconds; no local timestep or duration value or fallback; any disagreement rejected as ConfigurationMismatch
+reuse scenarios/box_wall.bsn two-cell complete-pair topology, all/front/back groups, +x approach and inward wall normal
+reuse scenarios/car_basic.bsn axis convention and node-beam material/group idiom only
+differences translated two-cell geometry, new synthetic masses/stiffness/damping/failure/speed/wall; no wheels, tyres, suspension, controls or vehicle calibration
+oracle d5 conservation and deformation gates are candidates in docs/deform-reference.md, not measured outcomes

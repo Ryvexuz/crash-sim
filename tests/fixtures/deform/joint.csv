@@ -1,0 +1,9 @@
+case_id,input,expected
+J-weld,kind=weld id=3 generation=0 broken=0 u=9/1000:1/100:11/1000:0 v=0 theta=0 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1,normal=9:0:0:0 shear=0:0:0:0 moment=0:0:0:0 stored=81/2000:0:0:0 dissipated=0:1/20:1/20:1/20 mass=2 events=3:0:10:11:1/500
+J-bolt,kind=bolt id=4 generation=0 broken=0 u=9/1000:1/100:11/1000 v=0 theta=0 k=2000 kr=200 Nmax=20 Smax=10 Mmax=2,normal=18:0:0 shear=0:0:0 moment=0:0:0 stored=81/1000:0:0 dissipated=0:1/10:1/10 mass=2 events=4:0:10:11:1/500
+J-combined,kind=weld id=5 generation=0 broken=0 u=1/250 v=3/1000 theta=3/1000 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1,normal=0 shear=0 moment=0 stored=0 dissipated=259/20000 mass=2 events=5:0:10:11:1/1000
+J-above,kind=weld id=6 generation=0 broken=0 u=11/1000 v=0 theta=0 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1,normal=0 shear=0 moment=0 stored=0 dissipated=121/2000 mass=2 events=6:0:10:11:1/1000
+J-old,kind=weld id=3 generation=7 broken=1 u=1/10 v=0 theta=0 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1,normal=0 shear=0 moment=0 stored=0 dissipated=0 mass=2 events=none
+J-new,kind=weld id=3 generation=8 broken=0 u=9/1000:1/100 v=0 theta=0 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1 stale_event=3:7:10:11:1/1000,normal=9:0 shear=0:0 moment=0:0 stored=81/2000:0 dissipated=0:1/20 mass=2 events=3:8:10:11:1/500
+J-order,kind=weld ids=9:2 generation=0 broken=0 u=1/100 v=0 theta=0 k=1000 kr=100 Nmax=10 Smax=10 Mmax=1,normal=0:0 shear=0:0 moment=0:0 stored=0 dissipated=1/10 mass=4 events=2:0:10:11:1/1000;9:0:12:13:1/1000
+J-time,invalid=time:-1,error=InvalidTime
