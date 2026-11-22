@@ -257,7 +257,7 @@ Not calibrated, and why: geometry and masses (measured, n20-08); `cabin` (a fixe
 - **Model and effort:** gpt-6.2-astra, effort high. The orchestrator first chose gpt-6.1-astra; it returned HTTP 404 (not available), so the orchestrator chose 6.2 instead.
 - **Round 1: FAIL** (`scratch/step8-astra/answer.md`, 31,865 tokens, 36 s). One record point only; the calibration itself checked out. Quote: "attributes a failure to the renamed step 8 test. The cited log ... names the step 7 test."
 - **Round 3: PASS** (`scratch/step8-astra/answer-r3.md`, 21,871 tokens). Quote: "now cites the correct fail-first run. ... The round 3 finding is resolved."
-- **B car-file copies:** Lazlo, 2026-11-22 17:43Z: "yes, requeue step 8 with the B car-file copies".
+- **B car-file copies:** Lazlo, 2026-11-22 17:43:24Z, typed in the project thread (cmsg_019Gy38ApTnA8WHdHwRbXZzH4Gu95bocsFmszVuQStmuE6, recorded in `state/pc-progress.md` at 17:4xZ): "yes, requeue step 8 with the B car-file copies". This block records task t-20261122-084300 (step 8); it is written by the records task t-20261122-182339-2.
 
 n20-08 makes the `crush` beams of one file the same rest length within 5% (so L_c means something), and records L_c, m_c and the step limit at the top of P1's range in `validation/CAR.md`.
 
