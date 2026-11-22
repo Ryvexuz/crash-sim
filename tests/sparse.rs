@@ -296,3 +296,30 @@ fn pcg_zero_rhs_and_start_vector() {
     assert_eq!(iters, 0, "residual {res}");
     assert_eq!(x, x2);
 }
+
+#[test]
+fn pcg_rechecks_the_returned_solution_after_rescaling() {
+    // Review r1 (sparse.rs:376): x = b / a = 1e-616 underflows to 0 when scaled back; its true
+    // residual against the unscaled system is 1, so this must be an error, never a result.
+    let a = Csr::from_triplets(1, 1, &[(0, 0, 1e308)]).unwrap();
+    let r = pcg(&a, &[1e-308], None, 1e-10, 10);
+    assert!(
+        r.is_err(),
+        "an underflowed solution was returned as converged: {r:?}"
+    );
+    match r {
+        Err(SparseError::Unrepresentable { residual }) => assert_eq!(residual, 1.0),
+        other => panic!("expected Unrepresentable, got {other:?}"),
+    }
+    // A tiny but representable answer (a subnormal) is still solved, and its residual is the
+    // true one of the returned vector.
+    let a = Csr::from_triplets(1, 1, &[(0, 0, 1e300)]).unwrap();
+    let (x, _, res) = pcg(&a, &[1e-10], None, 1e-10, 10).unwrap();
+    assert!(x[0] > 0.0 && x[0] < f64::MIN_POSITIVE, "{x:?}");
+    assert!(res <= 1e-10, "{res}");
+    let back = (1e-10 - 1e300 * x[0]).abs() / 1e-10;
+    assert!(
+        (back - res).abs() <= 1e-12,
+        "returned residual {res} vs recomputed {back}"
+    );
+}

@@ -465,3 +465,36 @@ fn implicit_keeps_matrix_positive_under_compression() {
     assert!(len > 0.8 * 19.0, "chain did not expand: {len}");
     assert!(b.pos.iter().all(|p| p.y == 0.0 && p.z == 0.0));
 }
+
+#[test]
+fn implicit_solves_a_slightly_strained_stiff_beam() {
+    // Review r1 (solver_implicit.rs:18): two 1 kg nodes at rest, one stiff beam stretched by a
+    // strain of 1e-11. The whole residual is the small beam force; the step must still solve
+    // backward Euler, not return v' = v. Exact answer (1D, reduced mass mu = 0.5, w = relative
+    // velocity, u = stretch): mu w' = -h k (u + h w'), so w' = -h k u / (mu + h^2 k).
+    let (k, u, h) = (1.0e9, 1.0e-11, 1.0e-3);
+    let mut b = Body {
+        pos: vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0 + u, 0.0, 0.0)],
+        vel: vec![Vec3::ZERO; 2],
+        beams: vec![Beam {
+            a: 0,
+            b: 1,
+            rest: 1.0,
+            stiffness: k,
+            damping: 0.0,
+        }],
+        mass: vec![1.0; 2],
+    };
+    let u = b.pos[1].x - 1.0; // the stretch as stored
+    let w = -h * k * u / (0.5 + h * h * k);
+    let mut s = implicit(TOL);
+    step(&mut s, &mut b, 0.0, h);
+    assert_eq!(s.check(), None);
+    let got = b.vel[1].x - b.vel[0].x;
+    assert!(got != 0.0, "the step returned the start velocity unsolved");
+    assert!(
+        (got - w).abs() <= 1e-6 * w.abs(),
+        "relative velocity {got} vs backward Euler {w}"
+    );
+    assert!(s.stats().newton_iters >= 1);
+}

@@ -15,12 +15,18 @@
 //! (M is diagonal and positive). Both only slow Newton: `g` is always the exact residual, so a
 //! converged step solves the exact backward-Euler equations.
 //!
-//! **Convergence** is `||g(v')||_2 <= newton_rtol * scale(v')`, where `scale` is the 2-norm of
-//! the sizes of the terms that `g` sums, per component: `m (|v'| + |v|) + h (|W| + sum over the
-//! node's beams of |d| (k (len + rest) + c (|v'_a| + |v'_b|)))`, `W` the gravity and extra
-//! forces. So the test is relative to the terms that cancel (a beam at its rest length has
-//! `k len - k rest = 0` with a round-off of about 1e-16 of `k len`), never to a round-off sized
-//! residual; a body whose terms are all zero has `g = 0` and is converged at once.
+//! **Convergence (the one rule, in `ImplicitEuler::solve`).** A step is converged when
+//!     `||g(v')||_2 <= max(newton_rtol * ||g(v)||_2, ROUNDOFF * size(v'))`.
+//! The first term is relative to the residual at the START of the step (`v' = v`), so the
+//! start velocity is accepted only if `||g(v)|| <= ROUNDOFF * size(v)`, i.e. only if the whole
+//! residual is within round-off of the terms it is made of: then no `f64` computation of `g`
+//! can tell it from zero. `size` is the 2-norm, over all components, of the sizes of the terms
+//! `g` sums, in units of momentum (M v): `m (|v'| + |v|) + h (|W| + sum over the node's beams of
+//! |d| (k (|x_a| + |x_b| + rest) + c (|v'_a| + |v'_b|)))`, with `W` the gravity and extra
+//! forces and `x_a`, `x_b` the guessed end positions (the beam's direction is a difference of
+//! them, so its round-off is about 1e-16 of `|x_a| + |x_b|`). `ROUNDOFF` = 64 f64 epsilons.
+//! Review r1 of task t-20261122-195241 showed that a tolerance relative to `size` alone
+//! accepts the start velocity of a resting beam with a strain below `newton_rtol`.
 //!
 //! **Fails closed.** A non-finite input node, residual or new state, a `pcg` error (not
 //! converged, matrix not positive definite, ...) and Newton reaching `newton_max_iter` are
@@ -72,6 +78,10 @@ pub struct ImplicitEuler {
     error: Option<String>,
     stats: Stats,
 }
+
+/// The round-off floor of the convergence rule (module docs): 64 f64 epsilons of the size of
+/// the terms the residual sums. A numerical constant of the method, not a tuning knob.
+const ROUNDOFF: f64 = 64.0 * f64::EPSILON;
 
 fn finite(v: Vec3) -> bool {
     v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
@@ -205,23 +215,27 @@ impl ImplicitEuler {
             .map(|i| Vec3::new(0.0, -s.gravity * mass[i], 0.0) + extra.map_or(Vec3::ZERO, |e| e[i]))
             .collect();
         let mut vn: Vec<Vec3> = vel.to_vec();
-        let (mut g, mut scale) = residual(pos, vel, &vn, beams, mass, &ext, h)?;
+        let (mut g, mut size) = residual(pos, vel, &vn, beams, mass, &ext, h)?;
+        let g0 = norm2(&g);
         let (mut iters, mut cg_total) = (0usize, 0usize);
         loop {
             let gn = norm2(&g);
-            if !(gn.is_finite() && scale.is_finite()) {
+            if !(gn.is_finite() && size.is_finite() && g0.is_finite()) {
                 return Err(format!(
                     "Newton residual is not finite after {iters} iterations"
                 ));
             }
-            let goal = self.tol.newton_rtol * scale;
+            // The convergence rule (module docs): relative to the start residual, with a floor
+            // at the round-off of the terms g is made of.
+            let goal = (self.tol.newton_rtol * g0).max(ROUNDOFF * size);
             if gn <= goal {
                 return Ok((vn, iters, cg_total));
             }
             if iters >= self.tol.newton_max_iter {
                 return Err(format!(
-                    "Newton did not converge in {iters} iterations (residual {gn:e} > {goal:e} = newton_rtol {} x scale {scale:e})",
-                    self.tol.newton_rtol
+                    "Newton did not converge in {iters} iterations (residual {gn:e} > {goal:e} = max(newton_rtol {} x start residual {g0:e}, round-off floor {:e}))",
+                    self.tol.newton_rtol,
+                    ROUNDOFF * size
                 ));
             }
             let guess: Vec<Vec3> = (0..nn).map(|i| pos[i] + vn[i] * h).collect();
@@ -236,7 +250,7 @@ impl ImplicitEuler {
                 vn[i] += Vec3::new(dv[3 * i], dv[3 * i + 1], dv[3 * i + 2]);
             }
             iters += 1;
-            (g, scale) = residual(pos, vel, &vn, beams, mass, &ext, h)?;
+            (g, size) = residual(pos, vel, &vn, beams, mass, &ext, h)?;
         }
     }
 }
@@ -270,9 +284,9 @@ fn residual(
         let f = dir * mag;
         force[bm.a] += f;
         force[bm.b] += -f;
-        // The sizes of the terms `mag` sums: k len and k rest cancel at rest, as do the two
-        // velocities in rel_v.
-        let mag_size = bm.stiffness.abs() * (len + bm.rest.abs())
+        // The sizes of the terms `mag` sums: d is a difference of the two end positions, k len
+        // and k rest cancel at rest, as do the two velocities in rel_v.
+        let mag_size = bm.stiffness.abs() * (pa.length() + pb.length() + bm.rest.abs())
             + bm.damping.abs() * (vn[bm.a].length() + vn[bm.b].length());
         let s = abs(dir) * mag_size;
         size[bm.a] += s;

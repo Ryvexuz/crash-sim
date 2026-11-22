@@ -27,6 +27,15 @@
 //! (for example `diag(1e300, 1e-10)`) gives `NonFinite { what: "inverse diagonal" }`, and a
 //! start vector whose scaled copy overflows gives `NonFinite { what: "x0" }`. `A` is not checked
 //! for symmetry; an indefinite `A` is found only if `p^T A p <= 0` occurs (`Domain`).
+//!
+//! **One difference in behaviour from the numerics module** (review r1 of task
+//! t-20261122-195241, sparse.rs:376): numerics returns the scaled-back solution with the
+//! residual of the SCALED system, so an answer that underflows when scaled back (`A = [1e308]`,
+//! `b = [1e-308]`: `x` becomes 0) is returned as converged with residual 0. Here every returned
+//! solution is rechecked against the unscaled system first (`accept`), and that failure is
+//! `Unrepresentable`. Inside the normal range the scaling is exact, so the result is unchanged.
+//! The recheck computes `A x` unscaled, so a system whose individual products `a_ij x_j`
+//! overflow (although `A x` would not) is now `NonFinite { what: "A x of the solution" }`.
 
 use std::fmt;
 
@@ -52,6 +61,10 @@ pub enum SparseError {
     NotConverged { iterations: usize, residual: f64 },
     /// `p^T A p <= 0`: the matrix is not positive definite.
     Domain,
+    /// The iteration converged on the scaled system, but the solution scaled back into `f64`
+    /// (an underflow or a loss of precision there) does not meet `rtol` against the unscaled
+    /// system: `residual` is its true relative residual `||b - A x||_2 / ||b||_2`.
+    Unrepresentable { residual: f64 },
 }
 
 impl fmt::Display for SparseError {
@@ -80,6 +93,10 @@ impl fmt::Display for SparseError {
             SparseError::Domain => write!(
                 f,
                 "pcg: p^T A p is not positive (matrix not positive definite)"
+            ),
+            SparseError::Unrepresentable { residual } => write!(
+                f,
+                "pcg: the solution scaled back into f64 has true relative residual {residual:e}, above rtol"
             ),
         }
     }
@@ -279,15 +296,54 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     s
 }
 
+/// The only way `pcg` returns a solution: the vector it will return, already scaled back, is
+/// checked against the UNSCALED `a` and `b`. It must be finite, `a x` must be finite, and its
+/// true relative residual `||b - a x||_2 / ||b||_2` must be at most `rtol`; that residual is the
+/// one returned. Scaling by powers of two is exact unless it under- or overflows, so for a
+/// system inside the normal range this is the scaled residual's value again; when the scaling
+/// back loses the answer (for example `x = 1e-308 / 1e308` underflows to 0) it is
+/// `Unrepresentable`, never a result.
+fn accept(
+    a: &Csr,
+    b: &[f64],
+    x: Vec<f64>,
+    iters: usize,
+    rtol: f64,
+) -> Result<(Vec<f64>, usize, f64), SparseError> {
+    if !all_finite(&x) {
+        return Err(SparseError::NonFinite { what: "solution" });
+    }
+    let mut ax = vec![0.0; a.nrows];
+    a.mul_into(&x, &mut ax);
+    if !all_finite(&ax) {
+        return Err(SparseError::NonFinite {
+            what: "A x of the solution",
+        });
+    }
+    let r: Vec<f64> = b.iter().zip(&ax).map(|(b, ax)| b - ax).collect();
+    let res = norm2_vec(&r) / norm2_vec(b);
+    if !res.is_finite() {
+        return Err(SparseError::NonFinite {
+            what: "residual of the solution",
+        });
+    }
+    if res > rtol {
+        return Err(SparseError::Unrepresentable { residual: res });
+    }
+    Ok((x, iters, res))
+}
+
 /// Solves `A x = b` for symmetric positive definite `A` by conjugate gradients with the Jacobi
 /// (diagonal) preconditioner. Stops when the true relative residual `||b - A x||_2 / ||b||_2 <=
-/// rtol`; returns `(x, iterations, that residual)`. A zero `b` gives `(0, 0, 0.0)`. `x0` is the
+/// rtol`, rechecked on the returned (scaled back) `x` against the unscaled system (`accept`);
+/// returns `(x, iterations, that residual)`. A zero `b` gives `(0, 0, 0.0)`. `x0` is the
 /// start vector (zeros if `None`).
 ///
 /// Errors: `NotSquare`; `Shape` (`b` or `x0` length); `BadParam` (`rtol` not finite or not
 /// positive, `max_iter` 0); `NonFinite` (NaN or infinity in `b` or `x0`, an overflowing iterate
 /// or solution); `NonPositiveDiagonal { row }`; `Domain` (`p^T A p <= 0`);
-/// `NotConverged { iterations, residual }` when `max_iter` steps did not reach `rtol`.
+/// `NotConverged { iterations, residual }` when `max_iter` steps did not reach `rtol`;
+/// `Unrepresentable { residual }` when the scaled-back solution fails the recheck.
 pub fn pcg(
     a: &Csr,
     b: &[f64],
@@ -375,10 +431,7 @@ pub fn pcg(
             let t = true_residual(&y, &mut r, &mut ap);
             if t <= rtol {
                 let x: Vec<f64> = y.iter().map(|&v| mul_pow2(v, eb - ea)).collect();
-                if !all_finite(&x) {
-                    return Err(SparseError::NonFinite { what: "solution" });
-                }
-                return Ok((x, iters, t));
+                return accept(a, b, x, iters, rtol);
             }
             rel = t;
             restart = true;
