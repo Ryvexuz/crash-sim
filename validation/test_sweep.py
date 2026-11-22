@@ -338,9 +338,9 @@ class Sandbox(unittest.TestCase):
         self.assertTrue(lines[4].startswith("run A node-beam 4 ")
                         and lines[4].endswith("damping_ratio=0.05 score=2.0040 verdict=FAIL"))
         self.assertEqual(len(lines), 5)
-        # Each variant is the wall file with only the two crush lines changed, under scratch/m4-sweep.
+        # Each variant is the wall file with only the two crush lines changed, under scratch/m4-sweep/<task id>.
         wall = sweep.read_text(os.path.join(self.repo, "scenarios", "validation_wall.bsn"))
-        sweep_dir = os.path.join(self.root, "scratch", "m4-sweep")
+        sweep_dir = os.path.join(self.root, "scratch", "m4-sweep", "t-1")
         for i in range(1, 5):
             v = sweep.read_text(os.path.join(sweep_dir, f"point-{i:03d}.bsn"))
             d = [(a, b) for a, b in zip(wall.split("\n"), v.split("\n")) if a != b]
@@ -351,7 +351,7 @@ class Sandbox(unittest.TestCase):
         cmd, kw = self.calls[0]
         self.assertEqual(cmd[0], os.path.join(self.root, "build/bin", "broadsword.exe" if os.name == "nt" else "broadsword"))
         self.assertEqual(kw["cwd"], self.root)
-        self.assertEqual(cmd[cmd.index("--body") + 1], "../../../scratch/m4-sweep/point-001.bsn")
+        self.assertEqual(cmd[cmd.index("--body") + 1], "../../../scratch/m4-sweep/t-1/point-001.bsn")
         self.assertEqual(cmd[cmd.index("--pulse-report") + 1], "validation/test-a.pulse.csv")
 
     def test_not_a_result_stops_the_chunk(self):

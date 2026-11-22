@@ -9,7 +9,7 @@ rear would leave the frozen ranges is logged `refused` without a run.
     python -I -B validation/sweep.py --run --task <task id> --from <i> --to <j>
         Runs grid points i..j (1-based, inclusive) through `broadsword run crash-sim --task <id>`.
         Each point's body is a variant of scenarios/validation_wall.bsn that differs only in the
-        two crush material lines, written to <Broadsword root>/<scratch_dir>/m4-sweep/, with the run's
+        two crush material lines, written to <Broadsword root>/<scratch_dir>/m4-sweep/<task id>/, with the run's
         whole output next to it. Lines are appended to validation/CALIBRATION.md (created with its
         `calibration 1` line by the first chunk); i must be the next index not yet logged, so the
         grid can be run in chunks but never twice or out of order.
@@ -400,7 +400,8 @@ def do_run(task, first, last, env, runner=subprocess.run, repo=REPO, log=LOG, ro
         raise SweepError("refusing to start inside a Broadsword job (CARGO_TARGET_DIR or BROADSWORD_JOB "
                          "is set): run the sweep from a plain shell; it starts its own jobs")
     root = broadsword_root(root_from)
-    exe, sweep_dir = broadsword_paths(root)
+    exe, sweep_base = broadsword_paths(root)
+    sweep_dir = os.path.join(sweep_base, task)  # one folder per task: an earlier try's files are never mixed in
     doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
     pts = grid(doc)
     flags = run_flags(doc)
