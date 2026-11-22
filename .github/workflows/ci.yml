@@ -29,7 +29,7 @@ jobs:
         run: cargo build --offline --locked
       - name: Test
         run: cargo test --offline --locked
-      - name: Python validation tests
-        run: |
-          python -I -B validation/test_convert.py
-          python -I -B validation/test_v6_scatter.py
+      - name: Python validation tests (convert)
+        run: python -I -B validation/test_convert.py
+      - name: Python validation tests (v6 scatter)
+        run: python -I -B validation/test_v6_scatter.py
