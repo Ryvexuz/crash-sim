@@ -199,6 +199,14 @@ Grid size: 7 x 5 x 4 = 140, the cap of `docs/STAGE6-M4-M5.md:293`. Three calibra
 5. **Numerics.** Dropping n20-05 (section 6) and not adding a path dependency from crash-sim to numerics for now; if (1) is ever wanted, the ADR 0001 T4 and ADR 0003 decision comes first.
 6. **The constitutive law and its failure rule** (R4, R5): Neo-Hookean with a log-volume term, `J_MIN_FAIL` = 0.05, a run that ends with a named error on an inverted tet or an exceeded stiffness bound, with no subdivision. Changing the law or the constant after n20-11 starts is a change to the frozen method line.
 
+## 12. Chosen: (1), with the numerics code copied (2026-11-22)
+
+The m4 table read against section 7 matched **W3** (the calibrated point is at its area floor, 20 of the 140 grid points were refused for the step limit) and W2 does not hold, so by W3's row the question went to Lazlo. He chose **option (1), implicit backward-Euler node-beam, with numerics' CSR and Jacobi-PCG COPIED into crash-sim** (no path dependency, because `../numerics` does not resolve in a task worktree, section 6): 2026-11-22 19:50:55Z, "1", message cmsg_019Gy38ApTnA8WHdHwRbXZzHMk1wmBWuaRZB9vKMgoR7pq (recorded in the Broadsword `state/standing-orders.md`). This supersedes the recommendation of section 4 and the "No" of section 6 for m5; ADR 0001 T4 (one shared numerics crate) stays open, and the copy follows ADR 0001's copy policy, as `Vec3` does.
+
+- **Built so far** (task t-20261122-195241): `src/sparse.rs` (the copy, numerics `src/sparse.rs` at 8132cfa, same algorithm and checks) and `src/solver_implicit.rs` (`ImplicitEuler`: Newton on the backward-Euler equations, `M + h C + h^2 K` assembled as CSR with a compressed beam's negative geometric term dropped so it stays positive definite, `pcg` per Newton iteration; Newton and CG caps and tolerances are required arguments and fail closed). No command-line flag, no scenario file, no calibration.
+- **Kept, not wired:** the option (2) code already on main (`src/solver_m5.rs`, the `bsn 3` `solid`/`tet` format, `Solver::handles_solids` and `Solver::check`) is unchanged; nothing selects it from the command line.
+- **Before the m5 calibration:** `--solver` for the implicit solver with its tolerances, `Sim`'s explicit step-limit refusal made solver-aware, option (1)'s frozen lines (ranges, grid, N5) written here, the 5.1 test names for option (1) settled in `docs/STAGE6-M4-M5.md`, and the gate record (`evidence/stage-6-m5-gate.md`, the orchestrator's). No frozen line of this note changes in this task.
+
 ## Figures from memory
 
 - **M1.** The densification strain of a cellular solid, `1 - 1.4 phi` (Gibson and Ashby; `phi` the solid fraction). It sets `eps_D` in the lock-up line; for this car it is capped at 0.7 so a wrong constant cannot give a zone that never locks. To verify against a source before the first calibration run; a wrong formula is corrected in section 8 first.
