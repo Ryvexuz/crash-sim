@@ -262,6 +262,9 @@ pub struct Sim {
     /// Per beam: the strain beyond which it yields (its rest length moves, see
     /// `apply_yield`), or None for an elastic beam. One entry per beam, same order.
     pub yield_strain: Vec<Option<f64>>,
+    /// Per beam: its rest length when the sim was built (rest0), same order as `beams`. Never
+    /// changes. Compressive yield flows at the force k * y * rest0 (`apply_yield`).
+    pub rest0: Vec<f64>,
     /// Indices of beams that exceeded their yield strain while their two nodes were (almost)
     /// at the same place, where the new rest length would be zero: their rest length was left
     /// alone and `check` reports them.
@@ -335,7 +338,8 @@ impl Sim {
         let n = pos.len();
         let yield_strain = vec![None; beams.len()];
         let n_beams = beams.len();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0, extra_scratch: Vec::new() }
+        let rest0 = beams.iter().map(|b| b.rest).collect();
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, rest0, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0, extra_scratch: Vec::new() }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -442,6 +446,7 @@ impl Sim {
             }
         }
         let n_beams = built.beams.len();
+        let rest0 = built.beams.iter().map(|b| b.rest).collect();
         let first_contact_s = if collide::any_at_or_behind(&built.pos, &planes) { Some(0.0) } else { None };
         Ok(Sim {
             cfg,
@@ -452,6 +457,7 @@ impl Sim {
             first_contact_s,
             planes,
             yield_strain,
+            rest0,
             yield_refused: Vec::new(),
             break_strain,
             broken: vec![false; n_beams],
@@ -591,15 +597,19 @@ impl Sim {
         n
     }
 
-    /// Plastic flow, after a substep. For every beam with a yield strain y whose strain
-    /// s = (len - rest) / rest has |s| > y, the rest length moves so that the strain returns to
-    /// the yield limit at the current length (perfectly plastic):
-    ///     stretched (s > y):    rest' = len / (1 + y)     so that (len - rest') / rest' = +y
-    ///     compressed (s < -y):  rest' = len / (1 - y)     so that (len - rest') / rest' = -y
-    /// Positions and velocities are untouched, and |len - rest'| < |len - rest|, so the stored
-    /// elastic energy only goes down. A beam whose new rest length would not be a positive
-    /// finite number (length below 1e-12 m, where the force step skips it too) keeps its
-    /// rest length and its index goes into `yield_refused`. Returns how many beams yielded.
+    /// Plastic flow, after a substep. For every beam with a yield strain y (t = y + YIELD_EPS),
+    /// strain s = (len - rest) / rest and rest0 its rest length when the sim was built:
+    ///     stretched (s > t):                 rest' = len / (1 + y)    so that (len - rest') / rest' = +y
+    ///     crushed ((len - rest) / rest0 < -t): rest' = len + y rest0    so that k (len - rest') = -k y rest0
+    /// Tension returns the strain to the yield limit (perfectly plastic, as before). Compression
+    /// flows at the constant force k y rest0 (task t-20261122-013607): the old compressive rule,
+    /// rest' = len / (1 - y), let the force k y len / (1 - y) fall as the beam crushed. A beam
+    /// whose strain s is NaN never yields. Positions and velocities are untouched, and
+    /// |len - rest'| < |len - rest| (in compression rest - len > t rest0 > y rest0 = rest' - len),
+    /// so the stored elastic energy only goes down. A beam whose new rest length would not be a
+    /// positive finite number, or whose length is below 1e-12 m (where the force step skips it
+    /// too), keeps its rest length and its index goes into `yield_refused`. Returns how many
+    /// beams yielded. Breaking (`apply_breaks`) still measures strain against the current rest.
     pub fn apply_yield(&mut self) -> usize {
         let mut yielded = 0;
         for (i, bm) in self.beams.iter_mut().enumerate() {
@@ -607,21 +617,30 @@ impl Sim {
             if self.broken[i] {
                 continue;
             }
+            let t = y + YIELD_EPS;
+            let rest0 = self.rest0[i];
             let d = self.pos[bm.a] - self.pos[bm.b];
-            // Cheap exit with no sqrt: a beam whose squared length is clearly inside the yield
-            // band cannot exceed it (see `clearly_within`). Anything else, NaN included, takes
-            // the exact path below, which is the code as it was.
-            if clearly_within(d.dot(d), bm.rest, y + YIELD_EPS) {
+            // Cheap exit with no sqrt. `clearly_within` certifies computed s inside [-t, t], so
+            // no tensile flow. With rest0 / 2 <= rest <= rest0 it also certifies no compressive
+            // flow: it puts len above rest (1 - t) (1 + 5e-10), so len - rest > -t rest0 +
+            // 5e-11 rest >= -t rest0 + 2.5e-11 rest0 (t <= 0.9), far beyond the few 1e-16 rest0
+            // rounding of (len - rest) / rest0. Anything else, NaN included, takes the exact path.
+            if bm.rest <= rest0 && bm.rest >= 0.5 * rest0 && clearly_within(d.dot(d), bm.rest, t) {
                 continue;
             }
             let len = d.length();
             let strain = (len - bm.rest) / bm.rest;
-            // exceeds is false for NaN (strain or y), so NaN skips the beam as before.
-            let exceeds = strain.abs() > y + YIELD_EPS;
-            if !exceeds {
+            // A NaN strain skips the beam, as before; a NaN y fails both comparisons below.
+            if strain.is_nan() {
                 continue;
             }
-            let new_rest = if strain > 0.0 { len / (1.0 + y) } else { len / (1.0 - y) };
+            let new_rest = if strain > t {
+                len / (1.0 + y)
+            } else if (len - bm.rest) / rest0 < -t {
+                len + y * rest0
+            } else {
+                continue;
+            };
             if len < 1e-12 || !(new_rest.is_finite() && new_rest > 0.0) {
                 if !self.yield_refused.contains(&i) {
                     self.yield_refused.push(i);

@@ -78,9 +78,12 @@ fn material_without_yield_strain_never_moves_its_rest_length() {
 }
 
 /// The yield rule alone, at the instant it fires: positions and velocities are not touched, the
-/// strain after is the yield limit, and the stored elastic energy goes down.
+/// beam is left at the yield limit (stretched: strain +y; crushed: len - rest = -y rest0, the
+/// constant yield force, task t-20261122-013607), and the stored elastic energy goes down.
 #[test]
 fn yield_returns_the_strain_to_the_limit_and_lowers_the_energy() {
+    // limit: the wanted strain after the yield (stretched), or the wanted (len - rest) / rest0
+    // (crushed; rest0 = 1 m, so it is len - rest in metres).
     for (x, limit) in [(1.2, 0.05), (0.8, -0.05)] {
         let mut sim = pair(" yield_strain 0.05");
         sim.pos[1].x = x;
@@ -90,7 +93,8 @@ fn yield_returns_the_strain_to_the_limit_and_lowers_the_energy() {
         let after = total_energy(&sim.pos, &sim.vel, &sim.beams, &sim.mass, sim.cfg.gravity);
         assert_eq!(sim.pos, pos);
         assert_eq!(sim.vel, vel);
-        let strain = (len(&sim) - sim.beams[0].rest) / sim.beams[0].rest;
+        let rest = sim.beams[0].rest;
+        let strain = if x > 1.0 { (len(&sim) - rest) / rest } else { (len(&sim) - rest) / sim.rest0[0] };
         assert!((strain - limit).abs() < 1e-12, "strain after yield {strain}, wanted {limit}");
         assert!(after < before, "energy went from {before} to {after} through the yield");
         // A second pass has nothing left to do.
