@@ -452,6 +452,95 @@ class Sandbox(unittest.TestCase):
             f.write(line + "\nfreeze = " + "a" * 40 + "\n")
         self.assertTrue(sweep.verify(self.repo, self.log).startswith("calibration: FAIL the calibrated line is not"))
 
+    def four4_out(self, body="scenarios/validation_wall.bsn", score="0.6832", flags=None):
+        flags = sweep.run_flags(DOC_TEXT) if flags is None else flags
+        cmd = " ".join(["--body", body, "--pulse-report", sweep.PULSE_A] + flags)
+        path = os.path.join(self.root, f"four4-{len(os.listdir(self.root))}.txt")  # a new file each call
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"     Running `C:\\x\\crash-sim.exe {cmd}`\npulse_score={score}\npulse: ok\n"
+                    "--- summary ---\nrun: ok (6.4 s)\n")
+        return path
+
+    def record_deviation(self, note="chosen elsewhere; no threshold change"):
+        self.full_log({41: "0.6456"})
+        sweep.do_record_deviation(self.four4_out(), note, self.repo, self.log)
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write("freeze = " + "a" * 40 + "\n")
+
+    def write_log(self, text):
+        with open(self.log, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+
+    def test_deviation_accepted_with_the_car_files_values(self):
+        self.record_deviation()
+        lines = sweep.read_text(self.log).splitlines()
+        rng = sweep.ranges(DOC_TEXT)
+        self.assertEqual(lines[-4], sweep.grid_best_line(sweep.log_runs(sweep.read_text(self.log))[40], rng))
+        self.assertTrue(lines[-4].startswith("grid_best node-beam 41 ") and lines[-4].endswith(" verdict=FAIL"))
+        self.assertEqual(lines[-3], "deviation: chosen elsewhere; no threshold change")
+        self.assertTrue(lines[-2].startswith("calibrated node-beam deviation area_m2="))
+        self.assertTrue(lines[-2].endswith(" score=0.6832"), lines[-2])
+        car = sweep.car_point(self.repo, DOC_TEXT)
+        self.assertEqual(lines[-2], f"calibrated node-beam deviation area_m2={car[0]} yield_strain={car[1]} "
+                                    f"damping_ratio={car[2]} score=0.6832")
+        self.assertAlmostEqual(float(car[0]) / 7e-5, 1.0, places=9)  # step 8's point in main's files
+        self.assertEqual(car[1], "0.0024")
+        self.assertAlmostEqual(float(car[2]) / 0.015, 1.0, places=5)
+        self.assertEqual(sweep.verify(self.repo, self.log), "calibration: ok")
+        with self.assertRaises(sweep.SweepError):  # nothing to apply
+            sweep.do_apply(self.repo, self.log)
+        with self.assertRaises(sweep.SweepError):  # recorded once only
+            sweep.do_record_deviation(self.four4_out(), "again", self.repo, self.log)
+
+    def test_deviation_fails_when_the_car_file_differs(self):
+        self.record_deviation()
+        for rel in ("scenarios/validation_car.bsn", "scenarios/validation_wall.bsn"):
+            path = os.path.join(self.repo, rel)
+            text = sweep.read_text(path)
+            for stage in sweep.STAGES:  # both stages, so the car file stays a valid two-stage car
+                line = [l for l in text.split("\n") if l.startswith(f"material {stage} ")][0]
+                t = line.split()
+                t[7] = "0.0025"
+                text = text.replace(line, " ".join(t))
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+        self.assertTrue(sweep.verify(self.repo, self.log).startswith(
+            "calibration: FAIL the deviation's calibrated line is not the car file's values"))
+
+    def test_deviation_fails_on_edited_values(self):
+        self.record_deviation()
+        text = sweep.read_text(self.log)
+        self.write_log(text.replace(" yield_strain=0.0024 ", " yield_strain=0.0025 "))
+        self.assertTrue(sweep.verify(self.repo, self.log).startswith(
+            "calibration: FAIL the deviation's calibrated line is not the car file's values"))
+
+    def test_deviation_needs_grid_best_and_a_reason(self):
+        self.record_deviation()
+        text = sweep.read_text(self.log)
+        best = [l for l in text.splitlines() if l.startswith("grid_best ")][0]
+        self.write_log(text.replace(best + "\n", ""))
+        self.assertTrue(sweep.verify(self.repo, self.log).startswith("calibration: FAIL a deviation needs"))
+        self.write_log(text.replace(best, best.replace("score=0.6456", "score=0.6455")))
+        self.assertTrue(sweep.verify(self.repo, self.log).startswith("calibration: FAIL the grid_best line is not"))
+        self.write_log(text.replace("deviation: chosen elsewhere; no threshold change", "deviation: "))
+        self.assertEqual(sweep.verify(self.repo, self.log), "calibration: FAIL the deviation line gives no reason")
+        # Without the deviation marker the grid rule applies again: the grid's choice is #41.
+        cal = [l for l in text.splitlines() if l.startswith("calibrated ")][0]
+        self.write_log(text.replace(cal, cal.replace("node-beam deviation", "node-beam 41")))
+        self.assertTrue(sweep.verify(self.repo, self.log).startswith("calibration: FAIL grid_best or deviation lines"))
+
+    def test_deviation_score_is_a_4_4_run_on_the_wall_file(self):
+        self.full_log({41: "0.6456"})
+        for path, why in ((self.four4_out(body="../x/point-041.bsn"), "not the 4.4 command"),
+                          (self.four4_out(flags=sweep.run_flags(DOC_TEXT)[:-2]), "not the 4.4 command"),
+                          (self.four4_out(score="0.683"), "pulse_score lines")):
+            with self.assertRaises(sweep.SweepError) as e:
+                sweep.do_record_deviation(path, "x", self.repo, self.log)
+            self.assertIn(why, str(e.exception))
+            self.assertFalse(any(l.startswith("calibrated ") for l in sweep.read_text(self.log).splitlines()))
+        with self.assertRaises(sweep.SweepError):
+            sweep.do_record_deviation(self.four4_out(), " ", self.repo, self.log)
+
     def test_verify_catches_a_reordered_grid(self):
         self.full_log({})
         text = sweep.read_text(self.log).split("\n")

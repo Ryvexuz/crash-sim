@@ -19,6 +19,10 @@ rear would leave the frozen ranges is logged `refused` without a run.
         Writes the calibrated point into the two crush lines of test A's car and wall files, each
         stage computed from the file's own L_c and m_c, the rear by the frozen ratio. The other
         car's copies are not this script's: they are edited by their own task.
+    python -I -B validation/sweep.py --record-deviation --score-from <4.4 output> --note <reason>
+        Instead of --choose, a recorded deviation: appends the grid's own choice (`grid_best`),
+        `deviation: <reason>` and `calibrated node-beam deviation ...` with the values computed
+        back from test A's car file and the score of a saved 4.4 run on its wall file.
     python -I -B validation/sweep.py --verify
         Check 4.3: the log is the grid in order, inside the ranges, the calibrated line follows the
         rule, and a `freeze =` line follows it. Last line `calibration: ok` or `calibration: FAIL ...`.
@@ -56,9 +60,16 @@ RUN_RE = re.compile(
     r"score=(\d+\.\d{4}|none) verdict=(ok|FAIL|refused)$"
 )
 CAL_RE = re.compile(
-    r"^calibrated node-beam (\d+) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
+    r"^calibrated node-beam (\d+|deviation) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
     r"score=(\d+\.\d{4})( edge)?$"
 )
+# A recorded deviation (orchestrator decision of 2026-11-22, docs/STAGE6-M4-M5.md, "Calibration
+# n20-10"): the calibrated point is not the grid's choice but the values the test A car file
+# already carries. The log then holds, after the run lines and in this order, the grid's own
+# choice as `grid_best node-beam ... verdict=<v>`, one `deviation: <reason>` line, and
+# `calibrated node-beam deviation ...` whose values are computed back from the car file.
+DEVIATION_PREFIX = "deviation: "
+CAR_A = "scenarios/validation_car.bsn"
 
 
 class SweepError(Exception):
@@ -469,7 +480,88 @@ def calibrated_point(text):
     cal = [CAL_RE.match(l) for l in text.splitlines() if l.startswith("calibrated ")]
     if len(cal) != 1 or cal[0] is None:
         raise SweepError("the log needs exactly one well-formed calibrated line")
+    if cal[0].group(1) == "deviation":
+        raise SweepError("the calibrated line is a recorded deviation: its values are the car file's, "
+                         "so there is nothing to apply")
     return tuple(float(v) for v in cal[0].groups()[1:4])
+
+
+def car_point(repo, doc):
+    """(area_m2, yield_strain, damping_ratio) of test A's car file, the front stage's P1 to P3
+    computed back as tests/validation_files.rs does, as logged text (fmt). The rear stage must be
+    the frozen ratio times the front's P1 with the same P2 and P3 (within 1e-9), and the wall file
+    the car file plus one plane line, or SweepError."""
+    steel_e = frozen_numbers(doc, "steel_E_pa")[0]
+    ratio = strength_ratio(doc)
+    car = read_text(os.path.join(repo, CAR_A))
+    wall = read_text(os.path.join(repo, WALL_A))
+    rest = wall[len(car):] if wall.startswith(car) else None
+    if rest is None or len(rest.splitlines()) != 1 or not rest.startswith("plane "):
+        raise SweepError(f"{WALL_A} is not {CAR_A} plus one plane line")
+    vals = {}
+    for stage in STAGES:
+        idx, lc, mc = parse_crush(car, stage)
+        t = car.split("\n")[idx].split()
+        if len(t) != 8 or t[2::2] != ["stiffness", "damping", "yield_strain"]:
+            raise SweepError(f"the `{stage}` line has other fields: {' '.join(t)}")
+        k, c, y = float(t[3]), float(t[5]), float(t[7])
+        vals[stage] = (k * lc / steel_e, y, c / (2.0 * math.sqrt(k * mc)))
+    f, r = vals["crush_front"], vals["crush_rear"]
+
+    def close(a, b, tol):
+        return a == b or abs(a - b) <= tol * max(abs(a), abs(b))
+
+    # The strength ratio within 1e-9, as tests/validation_files.rs checks it. P3 within 1e-6: step
+    # 8's files print the damping to 3 decimals, so the two stages' P3 differ by about 4e-7.
+    if not (close(r[0] * r[1], ratio * f[0] * f[1], 1e-9) and r[1] == f[1] and close(r[2], f[2], 1e-6)):
+        raise SweepError(f"the car file's rear stage {r} is not {ratio} x the front's P1 with its P2, P3 {f}")
+    return tuple(fmt(v) for v in f)
+
+
+def grid_best_line(run, rng):
+    return "grid_best " + calibrated_line(run, rng)[len("calibrated "):] + f" verdict={run[5]}"
+
+
+def deviation_lines(runs, rng, note, values, score):
+    """The three lines a recorded deviation appends after the run lines."""
+    if not note.strip() or "\n" in note:
+        raise SweepError("a deviation needs a one-line reason")
+    point = tuple(float(v) for v in values)
+    edge = " edge" if is_edge(point, rng) else ""
+    return [grid_best_line(choose(runs), rng), DEVIATION_PREFIX + note.strip(),
+            f"calibrated node-beam deviation area_m2={values[0]} yield_strain={values[1]} "
+            f"damping_ratio={values[2]} score={score}{edge}"]
+
+
+def score_of_4_4(out, doc):
+    """The `pulse_score=` of a saved 4.4 run on test A's wall file with the frozen run flags."""
+    want = " ".join(["--body", WALL_A, "--pulse-report", PULSE_A] + run_flags(doc))
+    lines = out.splitlines()
+    marks = [i for i, l in enumerate(lines) if l == "--- summary ---"]
+    if not marks:
+        raise SweepError("the 4.4 output has no `--- summary ---` line")
+    sim = lines[:marks[-1]]
+    if not any(l.strip().startswith("Running `") and l.rstrip().endswith(" " + want + "`") for l in sim):
+        raise SweepError("the 4.4 output is not the 4.4 command on test A's wall file with the frozen flags")
+    scores = [l[len("pulse_score="):] for l in sim if l.startswith("pulse_score=")]
+    if len(scores) != 1 or not re.fullmatch(r"\d+\.\d{4}", scores[0]):
+        raise SweepError(f"the 4.4 output has {len(scores)} pulse_score lines, not one with 4 decimals")
+    return scores[0]
+
+
+def do_record_deviation(score_file, note, repo=REPO, log=LOG):
+    doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
+    text = read_log(log)
+    if text is None:
+        raise SweepError("no validation/CALIBRATION.md")
+    if any(l.startswith(("calibrated ", "grid_best ", DEVIATION_PREFIX)) for l in text.splitlines()):
+        raise SweepError("the log already has a calibrated, grid_best or deviation line")
+    runs = log_runs(text)
+    check_runs_are_grid(runs, grid(doc))
+    score = score_of_4_4(read_text(score_file), doc)
+    out = deviation_lines(runs, ranges(doc), note, car_point(repo, doc), score)
+    append(log, "\n".join(out) + "\n")
+    print("\n".join(out))
 
 
 def do_apply(repo=REPO, log=LOG):
@@ -526,12 +618,31 @@ def verify(repo=REPO, log=LOG):
         cal_at = [i for i, l in enumerate(lines) if l.startswith("calibrated ")]
         if len(cal_at) != 1:
             raise SweepError(f"{len(cal_at)} calibrated lines, not 1")
-        want = calibrated_line(choose(runs), rng)
-        if lines[cal_at[0]] != want:
-            raise SweepError(f"the calibrated line is not `{want}`")
         last_run = max(i for i, l in enumerate(lines) if l.startswith("run A node-beam "))
         if cal_at[0] < last_run:
             raise SweepError("the calibrated line comes before a run line")
+        extra = [i for i, l in enumerate(lines) if l.startswith(("grid_best ", DEVIATION_PREFIX))]
+        m = CAL_RE.match(lines[cal_at[0]])
+        if m is not None and m.group(1) == "deviation":
+            # A recorded deviation: the grid's own choice is still logged, a reason is given, and
+            # the calibrated values are exactly the ones the test A car file carries.
+            if extra != [cal_at[0] - 2, cal_at[0] - 1] or cal_at[0] - 2 <= last_run:
+                raise SweepError("a deviation needs `grid_best` then `deviation:` right before the calibrated line")
+            want_best = grid_best_line(choose(runs), rng)
+            if lines[cal_at[0] - 2] != want_best:
+                raise SweepError(f"the grid_best line is not `{want_best}`")
+            if not lines[cal_at[0] - 1][len(DEVIATION_PREFIX):].strip():
+                raise SweepError("the deviation line gives no reason")
+            car = car_point(repo, doc)
+            want = deviation_lines(runs, rng, "x", car, m.group(5))[2]
+            if lines[cal_at[0]] != want:
+                raise SweepError(f"the deviation's calibrated line is not the car file's values: `{want}`")
+        else:
+            if extra:
+                raise SweepError("grid_best or deviation lines without a deviation calibrated line")
+            want = calibrated_line(choose(runs), rng)
+            if lines[cal_at[0]] != want:
+                raise SweepError(f"the calibrated line is not `{want}`")
         after = lines[cal_at[0] + 1:]
         if not after or not re.fullmatch(r"freeze = [0-9a-f]{40}", after[0]):
             raise SweepError("no `freeze = <40 hex>` line follows the calibrated line")
@@ -553,6 +664,9 @@ def main(argv, env):
         if args == ["--apply"]:
             do_apply()
             return 0
+        if len(args) == 5 and args[0] == "--record-deviation" and args[1] == "--score-from" and args[3] == "--note":
+            do_record_deviation(args[2], args[4])
+            return 0
         if len(args) == 7 and args[0] == "--run" and args[1] == "--task" and args[3] == "--from" and args[5] == "--to":
             do_run(args[2], int(args[4]), int(args[6]), env)
             return 0
@@ -562,8 +676,8 @@ def main(argv, env):
     except ValueError as e:
         print(f"sweep: {e}", file=sys.stderr)
         return 2
-    print("usage: sweep.py --run --task <id> --from <i> --to <j> | --choose | --apply | --verify",
-          file=sys.stderr)
+    print("usage: sweep.py --run --task <id> --from <i> --to <j> | --choose | --apply | --verify"
+          " | --record-deviation --score-from <4.4 output> --note <reason>", file=sys.stderr)
     return 2
 
 
