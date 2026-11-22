@@ -29,8 +29,6 @@ pub mod vehicle;
 pub use format::{Body, ParseError};
 pub use sim::{Config, Beam, Sample, BreakEvent, Sim};
 
-use sim::build_cube;
-
 use collide::Plane;
 use solver::{Solver, State, SymplecticEuler};
 use vec3::Vec3;
