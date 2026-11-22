@@ -252,6 +252,13 @@ Not calibrated, and why: geometry and masses (measured, n20-08); `cabin` (a fixe
 - **Test A at the chosen values** (the 4.4 command, `validation/CAR.md`, "Calibration step 8"): dv norm 0.9947, peak 0.0873, peak time 0.6818, duration 0.4813, OLC 0.9218, static crush 0.9325, all ok; `pulse_score=0.6832`, `pulse: ok`.
 - **Test B:** not run, and its pulse, reference, meta and thresholds not opened or changed. Only the B car files were edited to match, as the task and Lazlo's orders allow (2026-11-22 03:12Z, "edit the test B car files to match. Don't open test B results"; 04:37Z, edits to `validation_car_b.bsn`, `validation_wall_b.bsn` and `CAR_B.md`, never results): B's crush lines carry A's P1 to P3, computed back from A's printed lines, for B's own L_c and m_c (`validation/CAR_B.md`, "Calibration step 8").
 
+**Independent Astra review (step 8, task t-20261122-084300, merged as d193e00 on crash-sim main).** Recorded under Lazlo's standing order of 2026-11-22 04:47:49Z (`state/standing-orders.md`): a design-value change is approved by an independent Astra high review, and the verdict and quote go next to the change.
+
+- **Model and effort:** gpt-6.2-astra, effort high. The orchestrator first chose gpt-6.1-astra; it returned HTTP 404 (not available), so the orchestrator chose 6.2 instead.
+- **Round 1: FAIL** (`scratch/step8-astra/answer.md`, 31,865 tokens, 36 s). One record point only; the calibration itself checked out. Quote: "attributes a failure to the renamed step 8 test. The cited log ... names the step 7 test."
+- **Round 3: PASS** (`scratch/step8-astra/answer-r3.md`, 21,871 tokens). Quote: "now cites the correct fail-first run. ... The round 3 finding is resolved."
+- **B car-file copies:** Lazlo, 2026-11-22 17:43Z: "yes, requeue step 8 with the B car-file copies".
+
 n20-08 makes the `crush` beams of one file the same rest length within 5% (so L_c means something), and records L_c, m_c and the step limit at the top of P1's range in `validation/CAR.md`.
 
 ### The calibration procedure (n20-10)
