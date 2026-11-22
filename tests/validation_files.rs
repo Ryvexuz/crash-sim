@@ -513,7 +513,7 @@ fn crush_rear_stronger_than_front_by_frozen_ratio() {
 
 /// docs/STAGE6-M4-M5.md, rule change of 2026-11-22 (calibration step 7): the rear stage's
 /// plateau strength is 3 times the front's (was 2).
-const REAR_TO_FRONT_STRENGTH: f64 = 3.0;
+const REAR_TO_FRONT_STRENGTH: f64 = 4.0;
 /// docs/STAGE6-M4-M5.md, "The passenger cell", rule change of 2026-11-22 (calibration step 7):
 /// `cabin` damping is 10 times step 1's 666.667 N s/m; its stiffness is unchanged.
 const CABIN_STIFFNESS: f64 = 1_000_000.0;

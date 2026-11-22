@@ -1,8 +1,8 @@
 bsn 2
 material chassis stiffness 300000 damping 200 yield_strain 0.02
 material cabin stiffness 1000000 damping 6666.67 yield_strain 0.02
-material crush_front stiffness 62820512.821 damping 1597.524 yield_strain 0.00167
-material crush_rear stiffness 188461538.463 damping 3785.621 yield_strain 0.00167
+material crush_front stiffness 35897435.897 damping 724.569 yield_strain 0.0024
+material crush_rear stiffness 143589743.59 damping 1982.618 yield_strain 0.0024
 node 0 -2.261 0.55 -0.844 mass 18.25
 node 1 -2.261 1.95 -0.844 mass 14.75
 node 2 -2.261 0.55 -0.75425 mass 18.25
