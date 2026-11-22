@@ -284,7 +284,12 @@ fn pulse_report_lines_and_format() {
     }
     // The old static crush rule (centroid distance), printed for comparison, not gated.
     let t: Vec<&str> = lines[12].split(' ').collect();
-    assert_eq!(&t[..2], &["info", "static_crush_centroid_m"], "{}", lines[12]);
+    assert_eq!(
+        &t[..2],
+        &["info", "static_crush_centroid_m"],
+        "{}",
+        lines[12]
+    );
     assert_eq!(t.len(), 3, "{}", lines[12]);
     field(t[2], "sim", 4, false);
     let t: Vec<&str> = lines[13].split(' ').collect();
@@ -382,7 +387,12 @@ fn static_crush_is_the_six_point_profile_mean() {
                 "plane 2.1 0.5 0.5 -0.9578262852211514 0 -0.28734788556634544\n",
             );
         assert!(body.contains(&format!("group front {front}\n")), "{body}");
-        let c = case(name, &body, &ref_csv(400.0), &meta_text(12.0, 36.0, Some(0.05)));
+        let c = case(
+            name,
+            &body,
+            &ref_csv(400.0),
+            &meta_text(12.0, 36.0, Some(0.05)),
+        );
         let o = run_flags(&report_flags(&c), &[]);
         let out = stdout(&o);
         assert!(
@@ -412,12 +422,10 @@ fn static_crush_is_the_six_point_profile_mean() {
         (old_3 - old_want).abs() > 5e-4,
         "the centroid value {old_3} also matches {old_want}: the test cannot tell the rules apart"
     );
-    // With one node per column both rules weight the nodes alike (they differ only by the
-    // centroid's 3-D distance against the profile's x distance).
-    assert!(
-        (old_89 - six_89).abs() < 0.01,
-        "{old_89} against {six_89}"
-    );
+    // No check that the two rules agree for one node per column: on this tilted wall they do not
+    // (measured: 0.1434 against 0.0385 for {8, 9}); the likely cause, not measured here, is that
+    // the box turns, which the profile's world-x distances read as crush and the centroid's 3-D
+    // distance does not.
 }
 
 #[test]

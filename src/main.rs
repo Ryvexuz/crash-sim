@@ -1678,10 +1678,15 @@ fn profile_weights(z: &[f64]) -> Vec<f64> {
 
 /// The six-point profile depth (m): the weighted mean (`profile_weights`) over the front group
 /// `b` of each node's x ahead of the plain mean x of the reference group `a`. Static crush is its
-/// start value minus its mean over the tail.
+/// start value minus its mean over the tail. Known limit: it measures along the world x axis, so a
+/// body that turns about y reads its rotation as crush; the validation runs hit a wall square to x
+/// with a car symmetric in z.
 fn profile_depth(sim: &crash_sim::Sim, a: &[usize], b: &[usize], w: &[f64]) -> f64 {
     let xa = a.iter().map(|&i| sim.pos[i].x).sum::<f64>() / a.len() as f64;
-    b.iter().zip(w).map(|(&i, wi)| wi * (sim.pos[i].x - xa)).sum()
+    b.iter()
+        .zip(w)
+        .map(|(&i, wi)| wi * (sim.pos[i].x - xa))
+        .sum()
 }
 
 /// True if any node is on or behind one of `planes[range]`, or any wheel (a tyre) is within its

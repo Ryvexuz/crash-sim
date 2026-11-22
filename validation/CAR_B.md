@@ -76,6 +76,15 @@ material crush_rear stiffness 128785982.47909631 damping 3133.6769998649047 yiel
 
 The rear's P1 x P2 is 1.9999999999999993 times the front's (`crush_rear_stronger_than_front_by_frozen_ratio`, against `frozen: crush.rear_to_front_strength` = 2). The test reads only the car file; B's pulse was not opened and the B files were not run. The table above with one material is of the zone before this change.
 
+**Calibration step 7 (t-20261122-042859; docs/STAGE6-M4-M5.md, Lazlo's approvals of 2026-11-22).** The B car files were edited to match A's rules; no B file was run and B's pulse, reference and meta were not opened. Lines 3 and 5 of `scenarios/validation_car_b.bsn` (and of `validation_wall_b.bsn`) are now:
+
+```
+material cabin stiffness 1000000 damping 6666.67 yield_strain 0.02
+material crush_rear stiffness 193178973.71864465 damping 3837.9543414706195 yield_strain 0.00167
+```
+
+`cabin` damping is 10 x 666.667; `crush_rear` stiffness is 3 x the front's 64392991.23954822 (one rest length, 0.3995 m), its damping 3133.6769998649047 x sqrt(1.5), the same damping ratio; `crush_front` is unchanged. The test prints `rear / front 3.0000000000000018, frozen 3` (`crush_rear_stronger_than_front_by_frozen_ratio`, against `frozen: crush.rear_to_front_strength` = 3), and `step7_rear_ratio_three_and_cabin_damping_tenfold` checks the ratio and the cabin numbers. Step limit, a calculation on the car file (`scratch/t-20261122-042859/gersh3.py`, the beams-only bound, no run): **0.000115 s** at the current values; at the top the ratio allows (rear A = 0.002 m^2, front 0.002 / 3, zeta 0.05, m_c 30.5 and 15.6667 kg) **0.000085 s, below h = 0.0001 s** (the cabin's damping sets g, as for A, where the binary refuses that point: `validation/CAR.md`, "Calibration step 7").
+
 ### Step limit at the top of the stiffness range
 
 h = 0.0001 s (`frozen: h_s`). At the top of P1 (A = 0.002 m^2, k = 1051314142.678 N/m with L_c = 0.3995 m) and zeta at its top (0.05), the current m_c = 25.25 kg gives c = 16292.8457006836 N s/m. A hand calculation (Gershgorin formula) from the current beam list (`scenarios/validation_car_b.bsn:52-347`, masses at lines 4-51, chassis damping at line 2) using `src/solver.rs`'s Gershgorin formula gives w2 = 285712309.878874 and g = 4825.17849510063, hence a limit of 4 / (g + sqrt(g^2 + 4 w2)) = 0.000102632926135736 s (0.000103 s to six decimals). This is a calculation, not a new run or a check of B's pulse. The historical CLI checks below predate the layout fix. The margin above h is thin, as for A (now 0.000104 s, `validation/CAR.md`), and a change that lowers the lightest node mass (14.75 kg) or adds beams at a node needs this calculation again.
