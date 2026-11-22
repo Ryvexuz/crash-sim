@@ -323,3 +323,169 @@ fn pcg_rechecks_the_returned_solution_after_rescaling() {
         "returned residual {res} vs recomputed {back}"
     );
 }
+
+/// The test's own true relative residual `||b - A x|| / ||b||` (dense, unscaled `A x`), with
+/// both norms scaled by the same power of two (2^-e, e from max |b|) before squaring, so a
+/// huge or tiny `b` neither overflows nor underflows. Independent of `src/sparse.rs`.
+fn independent_rel_residual(n: usize, t: &[(usize, usize, f64)], x: &[f64], b: &[f64]) -> f64 {
+    let ax = dense_mul(n, t, x);
+    assert!(
+        ax.iter().all(|v| v.is_finite()),
+        "A x overflowed in the test: {ax:?}"
+    );
+    let mb = b.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let e = mb.log2().floor() as i32;
+    let s = |v: f64| {
+        // v * 2^-e in two exact steps (each factor is a normal power of two)
+        let h = -e / 2;
+        v * 2f64.powi(h) * 2f64.powi(-e - h)
+    };
+    let nr: f64 = b
+        .iter()
+        .zip(&ax)
+        .map(|(b, a)| s(b - a).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let nb: f64 = b.iter().map(|&v| s(v).powi(2)).sum::<f64>().sqrt();
+    nr / nb
+}
+
+#[test]
+fn pcg_extreme_magnitudes_table() {
+    let i4: Vec<(usize, usize, f64)> = (0..4).map(|i| (i, i, 1.0)).collect();
+    let pair = |s: f64| vec![(0, 0, 2.0 * s), (0, 1, s), (1, 0, s), (1, 1, 2.0 * s)];
+    let near = (1.0 - 1e-8) * 1e308;
+    // (name, n, A, b, x0, rtol, Ok expected)
+    #[allow(clippy::type_complexity)]
+    let cases: Vec<(
+        &str,
+        usize,
+        Vec<(usize, usize, f64)>,
+        Vec<f64>,
+        Option<Vec<f64>>,
+        f64,
+        bool,
+    )> = vec![
+        (
+            "review r2: ||b|| above f64::MAX, x0 near b",
+            4,
+            i4.clone(),
+            vec![1e308; 4],
+            Some(vec![near; 4]),
+            1e-7,
+            true,
+        ),
+        (
+            "||b|| above f64::MAX, no x0",
+            4,
+            i4.clone(),
+            vec![1e308; 4],
+            None,
+            1e-10,
+            true,
+        ),
+        (
+            "review r1: x underflows to 0",
+            1,
+            vec![(0, 0, 1e308)],
+            vec![1e-308],
+            None,
+            1e-10,
+            false,
+        ),
+        (
+            "x subnormal",
+            1,
+            vec![(0, 0, 1e300)],
+            vec![1e-10],
+            None,
+            1e-10,
+            true,
+        ),
+        (
+            "x overflows",
+            1,
+            vec![(0, 0, 1e-300)],
+            vec![1e300],
+            None,
+            1e-10,
+            false,
+        ),
+        (
+            "A 1e300, b 1e300",
+            2,
+            pair(1e300),
+            vec![1e300, -1e300],
+            None,
+            1e-12,
+            true,
+        ),
+        (
+            "A 1e-300, b 1e-300",
+            2,
+            pair(1e-300),
+            vec![1e-300, 1e-300],
+            None,
+            1e-12,
+            true,
+        ),
+        (
+            "A and b subnormal",
+            2,
+            pair(1e-310),
+            vec![1e-310, 2e-310],
+            None,
+            1e-6,
+            true,
+        ),
+        (
+            "b mixed 1e300 and 1e-300",
+            2,
+            pair(1.0),
+            vec![1e300, 1e-300],
+            None,
+            1e-12,
+            true,
+        ),
+        (
+            "diagonal spans beyond f64",
+            2,
+            vec![(0, 0, 1e300), (1, 1, 1e-300)],
+            vec![1.0, 1.0],
+            None,
+            1e-10,
+            false,
+        ),
+        (
+            "A 1e300, b 1e-300: x 1e-600 underflows",
+            2,
+            pair(1e300),
+            vec![1e-300, 1e-300],
+            None,
+            1e-12,
+            false,
+        ),
+    ];
+    for (name, n, t, b, x0, rtol, want_ok) in cases {
+        let a = Csr::from_triplets(n, n, &t).unwrap();
+        let r = pcg(&a, &b, x0.as_deref(), rtol, 1_000);
+        match (&r, want_ok) {
+            (Ok((x, _, res)), true) => {
+                let indep = independent_rel_residual(n, &t, x, &b);
+                assert!(
+                    indep <= rtol,
+                    "{name}: Ok with true residual {indep} > rtol {rtol}"
+                );
+                assert!(
+                    (res - indep).abs() <= 1e-3 * indep + 1e-300,
+                    "{name}: returned residual {res} but the true one is {indep}"
+                );
+            }
+            (Err(_), false) => {}
+            _ => panic!(
+                "{name}: expected {}, got {r:?}",
+                if want_ok { "Ok" } else { "Err" }
+            ),
+        }
+    }
+}

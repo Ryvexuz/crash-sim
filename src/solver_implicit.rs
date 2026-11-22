@@ -38,7 +38,7 @@
 //! `pcg`'s fixed order. The same input gives the same bytes.
 
 use crate::solver::{Solver, State};
-use crate::sparse::{pcg, Csr};
+use crate::sparse::{norm2, pcg, Csr};
 use crate::vec3::Vec3;
 use crate::Beam;
 
@@ -85,14 +85,6 @@ const ROUNDOFF: f64 = 64.0 * f64::EPSILON;
 
 fn finite(v: Vec3) -> bool {
     v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
-}
-
-fn norm2(x: &[f64]) -> f64 {
-    let m = x.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    if m == 0.0 || !m.is_finite() {
-        return m;
-    }
-    m * x.iter().map(|v| (v / m) * (v / m)).sum::<f64>().sqrt()
 }
 
 fn comp(v: Vec3, k: usize) -> f64 {

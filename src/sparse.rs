@@ -116,24 +116,58 @@ fn all_finite(x: &[f64]) -> bool {
     x.iter().all(|v| v.is_finite())
 }
 
-fn norm_inf_vec(x: &[f64]) -> f64 {
+/// THE vector 2-norm of this crate (sparse.rs and solver_implicit.rs use nothing else, review
+/// r2 of task t-20261122-195241): `||x||_2 = s * 2^e`, with `e` the binary exponent of
+/// `max |x_i|` and `s = sqrt(sum (x_i 2^-e)^2)`, the scaling by an exact power of two (as
+/// LAPACK's dnrm2 scales by the largest entry). Neither the squares nor the sum can overflow,
+/// and only entries below `2^-1074` times the largest one underflow. `None` if any entry is
+/// not finite; `(0.0, 0)` for a zero (or empty) vector.
+fn norm2_parts(x: &[f64]) -> Option<(f64, i32)> {
     let mut m: f64 = 0.0;
     for &v in x {
-        if v.is_nan() {
-            return f64::NAN;
+        if !v.is_finite() {
+            return None;
         }
         m = m.max(v.abs());
     }
-    m
+    if m == 0.0 {
+        return Some((0.0, 0));
+    }
+    let e = exp2_of(m);
+    let mut sum = 0.0;
+    for &v in x {
+        let w = mul_pow2(v, -e);
+        sum += w * w;
+    }
+    Some((sum.sqrt(), e))
 }
 
-/// 2-norm, scaled by the largest entry so it does not overflow (numerics `tol::norm2_vec`).
-fn norm2_vec(x: &[f64]) -> f64 {
-    let m = norm_inf_vec(x);
-    if m == 0.0 || !m.is_finite() {
-        return m;
+/// `||x||_2` from `norm2_parts`: `+inf` when the norm itself is above `f64::MAX`, NaN when an
+/// entry is not finite. Callers treat a non-finite norm as an error (fail closed).
+pub fn norm2(x: &[f64]) -> f64 {
+    match norm2_parts(x) {
+        Some((s, e)) => mul_pow2(s, e),
+        None => f64::NAN,
     }
-    m * x.iter().map(|v| (v / m) * (v / m)).sum::<f64>().sqrt()
+}
+
+/// `||r||_2 / ||b||_2` without forming either norm: `(s_r / s_b) 2^(e_r - e_b)`, so it is right
+/// even when `||b||` or `||r||` is outside the `f64` range. NaN when an entry is not finite;
+/// `+inf` for a non-zero `r` over a zero `b`, `0` for a zero `r`. Every residual ratio of
+/// this crate is formed here.
+pub fn rel_norm2(r: &[f64], b: &[f64]) -> f64 {
+    match (norm2_parts(r), norm2_parts(b)) {
+        (Some((sr, er)), Some((sb, eb))) => {
+            if sr == 0.0 {
+                0.0
+            } else if sb == 0.0 {
+                f64::INFINITY
+            } else {
+                mul_pow2(sr / sb, er - eb)
+            }
+        }
+        _ => f64::NAN,
+    }
 }
 
 impl Csr {
@@ -263,7 +297,8 @@ fn pow2(k: i32) -> f64 {
     f64::from_bits(((1023 + k) as u64) << 52)
 }
 
-/// `x * 2^k` in steps that stay inside the exponent range.
+/// `x * 2^k` in steps that stay inside the exponent range (exact unless the result over- or
+/// underflows).
 fn mul_pow2(mut x: f64, mut k: i32) -> f64 {
     while k != 0 {
         let s = k.clamp(-500, 500);
@@ -321,7 +356,7 @@ fn accept(
         });
     }
     let r: Vec<f64> = b.iter().zip(&ax).map(|(b, ax)| b - ax).collect();
-    let res = norm2_vec(&r) / norm2_vec(b);
+    let res = rel_norm2(&r, b);
     if !res.is_finite() {
         return Err(SparseError::NonFinite {
             what: "residual of the solution",
@@ -409,14 +444,13 @@ pub fn pcg(
             what: "inverse diagonal",
         });
     }
-    let nb = norm2_vec(&bs);
     let (mut r, mut ap) = (vec![0.0; n], vec![0.0; n]);
     let true_residual = |y: &[f64], r: &mut [f64], ap: &mut [f64]| -> f64 {
         sa.mul_into(y, ap);
         for i in 0..n {
             r[i] = bs[i] - ap[i];
         }
-        norm2_vec(r) / nb
+        rel_norm2(r, &bs)
     };
     let mut rel = true_residual(&y, &mut r, &mut ap);
     let (mut z, mut p, mut rz) = (vec![0.0; n], vec![0.0; n], 0.0);
@@ -470,6 +504,6 @@ pub fn pcg(
             p[i] = z[i] + beta * p[i];
         }
         rz = rz_new;
-        rel = norm2_vec(&r) / nb;
+        rel = rel_norm2(&r, &bs);
     }
 }
