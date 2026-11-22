@@ -511,18 +511,18 @@ fn crush_rear_stronger_than_front_by_frozen_ratio() {
     }
 }
 
-/// docs/STAGE6-M4-M5.md, rule change of 2026-11-22 (calibration step 7): the rear stage's
-/// plateau strength is 3 times the front's (was 2).
+/// docs/STAGE6-M4-M5.md, rule changes of 2026-11-22: the rear stage's plateau strength is 4 times
+/// the front's (calibration step 8; 3 since step 7, 2 before).
 const REAR_TO_FRONT_STRENGTH: f64 = 4.0;
 /// docs/STAGE6-M4-M5.md, "The passenger cell", rule change of 2026-11-22 (calibration step 7):
 /// `cabin` damping is 10 times step 1's 666.667 N s/m; its stiffness is unchanged.
 const CABIN_STIFFNESS: f64 = 1_000_000.0;
 const CABIN_DAMPING: f64 = 6666.67;
 
-/// Calibration step 7 on both cars: the frozen ratio line is 3 and both cars meet it
-/// (`check_stages`), and `cabin` has the stiffness of step 1 and 10 times its damping.
+/// Calibration steps 7 and 8 on both cars: the frozen ratio line is 4 (step 8) and both cars meet
+/// it (`check_stages`), and `cabin` has the stiffness of step 1 and 10 times its damping (step 7).
 #[test]
-fn step7_rear_ratio_three_and_cabin_damping_tenfold() {
+fn step8_rear_ratio_four_and_cabin_damping_tenfold() {
     let f = files();
     let ratio = frozen(&f.doc, "crush.rear_to_front_strength");
     assert_eq!(
