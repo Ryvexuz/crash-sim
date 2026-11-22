@@ -7,7 +7,12 @@ use crash_sim::solver_implicit::{ImplicitEuler, Tolerances};
 use crash_sim::vec3::Vec3;
 use crash_sim::*;
 
-const TOL: Tolerances = Tolerances { newton_rtol: 1e-10, newton_max_iter: 50, cg_rtol: 1e-12, cg_max_iter: 2_000 };
+const TOL: Tolerances = Tolerances {
+    newton_rtol: 1e-10,
+    newton_max_iter: 50,
+    cg_rtol: 1e-12,
+    cg_max_iter: 2_000,
+};
 
 /// A free body: a regular tetrahedron of four 1 kg nodes, all six pairs joined by beams of
 /// stiffness k, no damping, gravity 0. It starts strained (node 3 pulled out by 2 % of the
@@ -29,29 +34,69 @@ fn tetra(k: f64, damping: f64) -> Body {
     let mut beams = Vec::new();
     for a in 0..4 {
         for b in a + 1..4 {
-            beams.push(Beam { a, b, rest: (rest_pos[b] - rest_pos[a]).length(), stiffness: k, damping });
+            beams.push(Beam {
+                a,
+                b,
+                rest: (rest_pos[b] - rest_pos[a]).length(),
+                stiffness: k,
+                damping,
+            });
         }
     }
     let mut pos = rest_pos.to_vec();
     pos[3] = pos[3] * 1.02;
-    let vel = pos.iter().map(|p| Vec3::new(p.z * 0.5, 0.1, -p.x * 0.5)).collect();
-    Body { pos, vel, beams, mass: vec![1.0; 4] }
+    let vel = pos
+        .iter()
+        .map(|p| Vec3::new(p.z * 0.5, 0.1, -p.x * 0.5))
+        .collect();
+    Body {
+        pos,
+        vel,
+        beams,
+        mass: vec![1.0; 4],
+    }
 }
 
 /// A straight chain of `n` 1 kg nodes, spacing 1 m, every rest length 1 m, squeezed to 80 %.
 fn compressed_chain(n: usize, k: f64) -> Body {
-    let pos = (0..n).map(|i| Vec3::new(0.8 * i as f64, 0.0, 0.0)).collect();
+    let pos = (0..n)
+        .map(|i| Vec3::new(0.8 * i as f64, 0.0, 0.0))
+        .collect();
     let vel = vec![Vec3::ZERO; n];
-    let beams = (0..n - 1).map(|i| Beam { a: i, b: i + 1, rest: 1.0, stiffness: k, damping: 0.0 }).collect();
-    Body { pos, vel, beams, mass: vec![1.0; n] }
+    let beams = (0..n - 1)
+        .map(|i| Beam {
+            a: i,
+            b: i + 1,
+            rest: 1.0,
+            stiffness: k,
+            damping: 0.0,
+        })
+        .collect();
+    Body {
+        pos,
+        vel,
+        beams,
+        mass: vec![1.0; n],
+    }
 }
 
 fn step(s: &mut dyn Solver, b: &mut Body, gravity: f64, h: f64) {
-    s.step(State { pos: &mut b.pos, vel: &mut b.vel, beams: &b.beams, mass: &b.mass, gravity }, h);
+    s.step(
+        State {
+            pos: &mut b.pos,
+            vel: &mut b.vel,
+            beams: &b.beams,
+            mass: &b.mass,
+            gravity,
+        },
+        h,
+    );
 }
 
 fn energy(b: &Body) -> f64 {
-    let ke: f64 = (0..b.pos.len()).map(|i| 0.5 * b.mass[i] * b.vel[i].dot(b.vel[i])).sum();
+    let ke: f64 = (0..b.pos.len())
+        .map(|i| 0.5 * b.mass[i] * b.vel[i].dot(b.vel[i]))
+        .sum();
     let pe: f64 = b
         .beams
         .iter()
@@ -104,11 +149,20 @@ fn implicit_matches_explicit_at_small_h() {
     assert!(moved > 1e-3, "the body barely moved: {moved}");
     for (g, h) in [(g1, 2.0e-5), (g2, 1.0e-5)] {
         let tol = omega * h * omega * t_end * d0;
-        assert!(g < tol, "implicit vs explicit at h = {h}: gap {g} >= tolerance {tol}");
-        assert!(g > 0.0, "implicit and explicit gave the same positions: not two integrators");
+        assert!(
+            g < tol,
+            "implicit vs explicit at h = {h}: gap {g} >= tolerance {tol}"
+        );
+        assert!(
+            g > 0.0,
+            "implicit and explicit gave the same positions: not two integrators"
+        );
     }
     let ratio = g1 / g2;
-    assert!((1.6..=2.4).contains(&ratio), "gap is not first order in h: {g1} / {g2} = {ratio}");
+    assert!(
+        (1.6..=2.4).contains(&ratio),
+        "gap is not first order in h: {g1} / {g2} = {ratio}"
+    );
 }
 
 #[test]
@@ -141,7 +195,10 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
     let probe = tetra(k, 0.0);
     let limit = gershgorin_step_limit(4, &probe.beams, &probe.mass);
     let h = 5.0 * limit;
-    assert!(body_step_error(h, &probe.beams, &probe.mass).is_some(), "the explicit check must refuse h = {h}");
+    assert!(
+        body_step_error(h, &probe.beams, &probe.mass).is_some(),
+        "the explicit check must refuse h = {h}"
+    );
 
     let e0 = energy(&probe);
     let mut se_body = tetra(k, 0.0);
@@ -155,7 +212,10 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
             break;
         }
     }
-    assert!(blew_up, "symplectic Euler stayed bounded at 5x its limit: the test body is not stiff enough");
+    assert!(
+        blew_up,
+        "symplectic Euler stayed bounded at 5x its limit: the test body is not stiff enough"
+    );
 
     let mut b = tetra(k, 0.0);
     let mut s = implicit(TOL);
@@ -163,7 +223,10 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
         step(&mut s, &mut b, 0.0, h);
         assert_eq!(s.check(), None, "implicit step {n} failed");
         let e = energy(&b);
-        assert!(e <= e0 * (1.0 + 1e-9), "energy rose at step {n}: {e} > {e0}");
+        assert!(
+            e <= e0 * (1.0 + 1e-9),
+            "energy rose at step {n}: {e} > {e0}"
+        );
     }
     let st = s.stats();
     assert_eq!(st.steps, 2_000);
@@ -173,7 +236,10 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
 #[test]
 fn implicit_solver_plugs_in() {
     // 0.5 s of the default drop (still in the air), through `Sim`, the way `--solver` will.
-    let cfg = Config { duration: 0.5, ..Config::default() };
+    let cfg = Config {
+        duration: 0.5,
+        ..Config::default()
+    };
     let steps = (cfg.duration / cfg.dt).round() as u64;
     let mut sim = Sim::with_solver(cfg.clone(), Box::new(implicit(TOL)));
     let mut reference = Sim::new(cfg);
@@ -185,12 +251,23 @@ fn implicit_solver_plugs_in() {
         a.push(sim.sample());
         b.push(reference.sample());
     }
-    assert_ne!(to_csv(&a), to_csv(&b), "same CSV as symplectic Euler: the implicit solver is not being used");
+    assert_ne!(
+        to_csv(&a),
+        to_csv(&b),
+        "same CSV as symplectic Euler: the implicit solver is not being used"
+    );
     // Under a constant force backward Euler's update is symplectic Euler's (v' = v - g h,
     // x' = x + h v'), so the two differ only through the beams' tiny vibration: well under
     // the 2.5 mm (g h t / 2 at t = 0.5 s, h = 1 ms) that either lags the exact fall by.
-    let worst = a.iter().zip(&b).map(|(x, y)| (x.center_y - y.center_y).abs()).fold(0.0, f64::max);
-    assert!(worst < 5e-3, "implicit solver diverges from symplectic Euler: {worst}");
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x.center_y - y.center_y).abs())
+        .fold(0.0, f64::max);
+    assert!(
+        worst < 5e-3,
+        "implicit solver diverges from symplectic Euler: {worst}"
+    );
     let fell = a[0].center_y - a.last().unwrap().center_y;
     assert!((fell - 9.81 * 0.25 / 2.0).abs() < 1e-2, "fell {fell}");
 }
@@ -205,7 +282,13 @@ fn implicit_same_input_same_bytes() {
             step(&mut s, &mut b, 9.81, h);
         }
         assert_eq!(s.check(), None);
-        let bits: Vec<u64> = b.pos.iter().chain(&b.vel).flat_map(|v| [v.x, v.y, v.z]).map(f64::to_bits).collect();
+        let bits: Vec<u64> = b
+            .pos
+            .iter()
+            .chain(&b.vel)
+            .flat_map(|v| [v.x, v.y, v.z])
+            .map(f64::to_bits)
+            .collect();
         (bits, s.stats())
     };
     let (a, sa) = run();
@@ -220,11 +303,27 @@ fn fails_closed(s: &mut ImplicitEuler, b: &mut Body, h: f64) -> String {
     let (p0, v0) = (b.pos.clone(), b.vel.clone());
     step(s, b, 0.0, h);
     let err = s.check().expect("the step must fail");
-    let same = |x: &[Vec3], y: &[Vec3]| x.iter().zip(y).all(|(p, q)| p.x.to_bits() == q.x.to_bits() && p.y.to_bits() == q.y.to_bits() && p.z.to_bits() == q.z.to_bits());
-    assert!(same(&b.pos, &p0) && same(&b.vel, &v0), "a failed step wrote the state");
+    let same = |x: &[Vec3], y: &[Vec3]| {
+        x.iter().zip(y).all(|(p, q)| {
+            p.x.to_bits() == q.x.to_bits()
+                && p.y.to_bits() == q.y.to_bits()
+                && p.z.to_bits() == q.z.to_bits()
+        })
+    };
+    assert!(
+        same(&b.pos, &p0) && same(&b.vel, &v0),
+        "a failed step wrote the state"
+    );
     step(s, b, 0.0, h);
-    assert!(same(&b.pos, &p0) && same(&b.vel, &v0), "a step after an error wrote the state");
-    assert_eq!(s.check().as_deref(), Some(err.as_str()), "the first error is kept");
+    assert!(
+        same(&b.pos, &p0) && same(&b.vel, &v0),
+        "a step after an error wrote the state"
+    );
+    assert_eq!(
+        s.check().as_deref(),
+        Some(err.as_str()),
+        "the first error is kept"
+    );
     assert_eq!(s.stats().steps, 0);
     err
 }
@@ -234,18 +333,32 @@ fn implicit_newton_cap_fails_closed() {
     // One Newton iteration cannot solve a nonlinear step at 5x the explicit limit to 1e-10.
     let mut b = tetra(1.0e6, 0.0);
     let h = 5.0 * gershgorin_step_limit(4, &b.beams, &b.mass);
-    let mut s = implicit(Tolerances { newton_max_iter: 1, ..TOL });
+    let mut s = implicit(Tolerances {
+        newton_max_iter: 1,
+        ..TOL
+    });
     let err = fails_closed(&mut s, &mut b, h);
-    assert!(err.contains("Newton did not converge in 1 iterations") && err.contains("at substep 1"), "{err}");
+    assert!(
+        err.contains("Newton did not converge in 1 iterations") && err.contains("at substep 1"),
+        "{err}"
+    );
 }
 
 #[test]
 fn implicit_cg_cap_fails_closed() {
     let mut b = tetra(1.0e6, 0.0);
     let h = 5.0 * gershgorin_step_limit(4, &b.beams, &b.mass);
-    let mut s = implicit(Tolerances { cg_max_iter: 1, ..TOL });
+    let mut s = implicit(Tolerances {
+        cg_max_iter: 1,
+        ..TOL
+    });
     let err = fails_closed(&mut s, &mut b, h);
-    assert!(err.contains("linear solve of Newton iteration 1 failed: pcg not converged after 1 iterations"), "{err}");
+    assert!(
+        err.contains(
+            "linear solve of Newton iteration 1 failed: pcg not converged after 1 iterations"
+        ),
+        "{err}"
+    );
 }
 
 #[test]
@@ -269,14 +382,62 @@ fn implicit_nan_node_fails_closed() {
 #[test]
 fn implicit_refuses_bad_tolerances() {
     let bad = [
-        (Tolerances { newton_rtol: 0.0, ..TOL }, "newton_rtol"),
-        (Tolerances { newton_rtol: -1e-9, ..TOL }, "newton_rtol"),
-        (Tolerances { newton_rtol: f64::NAN, ..TOL }, "newton_rtol"),
-        (Tolerances { newton_rtol: f64::INFINITY, ..TOL }, "newton_rtol"),
-        (Tolerances { cg_rtol: 0.0, ..TOL }, "cg_rtol"),
-        (Tolerances { cg_rtol: f64::NAN, ..TOL }, "cg_rtol"),
-        (Tolerances { newton_max_iter: 0, ..TOL }, "newton_max_iter"),
-        (Tolerances { cg_max_iter: 0, ..TOL }, "cg_max_iter"),
+        (
+            Tolerances {
+                newton_rtol: 0.0,
+                ..TOL
+            },
+            "newton_rtol",
+        ),
+        (
+            Tolerances {
+                newton_rtol: -1e-9,
+                ..TOL
+            },
+            "newton_rtol",
+        ),
+        (
+            Tolerances {
+                newton_rtol: f64::NAN,
+                ..TOL
+            },
+            "newton_rtol",
+        ),
+        (
+            Tolerances {
+                newton_rtol: f64::INFINITY,
+                ..TOL
+            },
+            "newton_rtol",
+        ),
+        (
+            Tolerances {
+                cg_rtol: 0.0,
+                ..TOL
+            },
+            "cg_rtol",
+        ),
+        (
+            Tolerances {
+                cg_rtol: f64::NAN,
+                ..TOL
+            },
+            "cg_rtol",
+        ),
+        (
+            Tolerances {
+                newton_max_iter: 0,
+                ..TOL
+            },
+            "newton_max_iter",
+        ),
+        (
+            Tolerances {
+                cg_max_iter: 0,
+                ..TOL
+            },
+            "cg_max_iter",
+        ),
     ];
     for (t, name) in bad {
         let err = ImplicitEuler::new(t).expect_err(name);

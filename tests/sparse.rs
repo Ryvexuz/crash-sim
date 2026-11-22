@@ -21,7 +21,9 @@ fn dense_mul(n: usize, t: &[(usize, usize, f64)], x: &[f64]) -> Vec<f64> {
     for &(r, c, v) in t {
         a[r * n + c] += v;
     }
-    (0..n).map(|i| (0..n).map(|j| a[i * n + j] * x[j]).sum()).collect()
+    (0..n)
+        .map(|i| (0..n).map(|j| a[i * n + j] * x[j]).sum())
+        .collect()
 }
 
 fn norm(x: &[f64]) -> f64 {
@@ -63,7 +65,14 @@ fn plain_cg(a: &Csr, b: &[f64], rtol: f64, max_iter: usize) -> usize {
 
 #[test]
 fn csr_sums_duplicate_triplets() {
-    let t = [(0, 0, 1.0), (1, 1, 2.0), (0, 0, 3.0), (0, 1, 0.5), (0, 0, -0.25), (1, 0, 4.0)];
+    let t = [
+        (0, 0, 1.0),
+        (1, 1, 2.0),
+        (0, 0, 3.0),
+        (0, 1, 0.5),
+        (0, 0, -0.25),
+        (1, 0, 4.0),
+    ];
     let a = Csr::from_triplets(2, 2, &t).unwrap();
     assert_eq!(a.nnz(), 4, "the three (0, 0) triplets are one entry");
     assert_eq!(a.diag(), vec![3.75, 2.0]);
@@ -88,7 +97,12 @@ fn csr_mul_vec_matches_dense() {
     let y = a.mul_vec(&x).unwrap();
     let d = dense_mul(n, &t, &x);
     for i in 0..n {
-        assert!((y[i] - d[i]).abs() <= 1e-12 * (1.0 + d[i].abs()), "row {i}: {} vs {}", y[i], d[i]);
+        assert!(
+            (y[i] - d[i]).abs() <= 1e-12 * (1.0 + d[i].abs()),
+            "row {i}: {} vs {}",
+            y[i],
+            d[i]
+        );
     }
     // a rectangular matrix too
     let r = Csr::from_triplets(2, 3, &[(0, 2, 2.0), (1, 0, -1.0)]).unwrap();
@@ -99,21 +113,43 @@ fn csr_mul_vec_matches_dense() {
 #[test]
 fn csr_refuses_bad_input() {
     assert_eq!(Csr::from_triplets(0, 2, &[]), Err(SparseError::Empty));
-    assert_eq!(Csr::from_triplets(2, 2, &[(2, 0, 1.0)]), Err(SparseError::BadIndex));
-    assert_eq!(Csr::from_triplets(2, 2, &[(0, 2, 1.0)]), Err(SparseError::BadIndex));
+    assert_eq!(
+        Csr::from_triplets(2, 2, &[(2, 0, 1.0)]),
+        Err(SparseError::BadIndex)
+    );
+    assert_eq!(
+        Csr::from_triplets(2, 2, &[(0, 2, 1.0)]),
+        Err(SparseError::BadIndex)
+    );
     assert_eq!(
         Csr::from_triplets(2, 2, &[(0, 0, f64::NAN)]),
-        Err(SparseError::NonFinite { what: "triplet values" })
+        Err(SparseError::NonFinite {
+            what: "triplet values"
+        })
     );
     assert_eq!(
         Csr::from_triplets(2, 2, &[(0, 0, f64::MAX), (0, 0, f64::MAX)]),
-        Err(SparseError::NonFinite { what: "summed duplicate entry" })
+        Err(SparseError::NonFinite {
+            what: "summed duplicate entry"
+        })
     );
     let a = Csr::from_triplets(2, 2, &[(0, 0, 1.0)]).unwrap();
-    assert_eq!(a.mul_vec(&[1.0]), Err(SparseError::Shape { expected: 2, got: 1 }));
-    assert_eq!(a.mul_vec(&[f64::INFINITY, 0.0]), Err(SparseError::NonFinite { what: "x" }));
+    assert_eq!(
+        a.mul_vec(&[1.0]),
+        Err(SparseError::Shape {
+            expected: 2,
+            got: 1
+        })
+    );
+    assert_eq!(
+        a.mul_vec(&[f64::INFINITY, 0.0]),
+        Err(SparseError::NonFinite { what: "x" })
+    );
     let big = Csr::from_triplets(1, 1, &[(0, 0, f64::MAX)]).unwrap();
-    assert_eq!(big.mul_vec(&[2.0]), Err(SparseError::NonFinite { what: "product" }));
+    assert_eq!(
+        big.mul_vec(&[2.0]),
+        Err(SparseError::NonFinite { what: "product" })
+    );
 }
 
 #[test]
@@ -125,7 +161,10 @@ fn pcg_solves_1d_beam_chain() {
     assert!(res <= 1e-10, "residual {res}");
     assert!(iters > 0 && iters <= 10_000);
     let again = rel_residual(&a, &x, &b);
-    assert!((again - res).abs() <= 1e-12, "returned residual {res} vs recomputed {again}");
+    assert!(
+        (again - res).abs() <= 1e-12,
+        "returned residual {res} vs recomputed {again}"
+    );
 }
 
 #[test]
@@ -167,21 +206,51 @@ fn pcg_same_input_same_bytes() {
 #[test]
 fn pcg_refuses_non_square_size_mismatch_and_nonpositive_diagonal() {
     let rect = Csr::from_triplets(2, 3, &[(0, 0, 1.0), (1, 1, 1.0)]).unwrap();
-    assert_eq!(pcg(&rect, &[1.0, 1.0], None, 1e-8, 10), Err(SparseError::NotSquare));
+    assert_eq!(
+        pcg(&rect, &[1.0, 1.0], None, 1e-8, 10),
+        Err(SparseError::NotSquare)
+    );
     let a = Csr::from_triplets(2, 2, &[(0, 0, 2.0), (1, 1, 2.0)]).unwrap();
-    assert_eq!(pcg(&a, &[1.0], None, 1e-8, 10), Err(SparseError::Shape { expected: 2, got: 1 }));
+    assert_eq!(
+        pcg(&a, &[1.0], None, 1e-8, 10),
+        Err(SparseError::Shape {
+            expected: 2,
+            got: 1
+        })
+    );
     assert_eq!(
         pcg(&a, &[1.0, 1.0], Some(&[0.0]), 1e-8, 10),
-        Err(SparseError::Shape { expected: 2, got: 1 })
+        Err(SparseError::Shape {
+            expected: 2,
+            got: 1
+        })
     );
-    assert_eq!(pcg(&a, &[f64::NAN, 1.0], None, 1e-8, 10), Err(SparseError::NonFinite { what: "b" }));
-    assert_eq!(pcg(&a, &[1.0, 1.0], None, 0.0, 10), Err(SparseError::BadParam { name: "rtol" }));
-    assert_eq!(pcg(&a, &[1.0, 1.0], None, f64::NAN, 10), Err(SparseError::BadParam { name: "rtol" }));
-    assert_eq!(pcg(&a, &[1.0, 1.0], None, 1e-8, 0), Err(SparseError::BadParam { name: "max_iter" }));
+    assert_eq!(
+        pcg(&a, &[f64::NAN, 1.0], None, 1e-8, 10),
+        Err(SparseError::NonFinite { what: "b" })
+    );
+    assert_eq!(
+        pcg(&a, &[1.0, 1.0], None, 0.0, 10),
+        Err(SparseError::BadParam { name: "rtol" })
+    );
+    assert_eq!(
+        pcg(&a, &[1.0, 1.0], None, f64::NAN, 10),
+        Err(SparseError::BadParam { name: "rtol" })
+    );
+    assert_eq!(
+        pcg(&a, &[1.0, 1.0], None, 1e-8, 0),
+        Err(SparseError::BadParam { name: "max_iter" })
+    );
     let zero_diag = Csr::from_triplets(2, 2, &[(0, 0, 2.0), (0, 1, 1.0), (1, 0, 1.0)]).unwrap();
-    assert_eq!(pcg(&zero_diag, &[1.0, 1.0], None, 1e-8, 10), Err(SparseError::NonPositiveDiagonal { row: 1 }));
+    assert_eq!(
+        pcg(&zero_diag, &[1.0, 1.0], None, 1e-8, 10),
+        Err(SparseError::NonPositiveDiagonal { row: 1 })
+    );
     let neg = Csr::from_triplets(2, 2, &[(0, 0, -2.0), (1, 1, 2.0)]).unwrap();
-    assert_eq!(pcg(&neg, &[1.0, 1.0], None, 1e-8, 10), Err(SparseError::NonPositiveDiagonal { row: 0 }));
+    assert_eq!(
+        pcg(&neg, &[1.0, 1.0], None, 1e-8, 10),
+        Err(SparseError::NonPositiveDiagonal { row: 0 })
+    );
 }
 
 #[test]
@@ -190,7 +259,10 @@ fn pcg_nonconvergence_is_error() {
     let a = Csr::from_triplets(n, n, &chain(n, 1.0)).unwrap();
     let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
     match pcg(&a, &b, None, 1e-10, 1) {
-        Err(SparseError::NotConverged { iterations, residual }) => {
+        Err(SparseError::NotConverged {
+            iterations,
+            residual,
+        }) => {
             assert_eq!(iterations, 1);
             assert!(residual > 1e-10 && residual.is_finite(), "{residual}");
         }
@@ -201,15 +273,22 @@ fn pcg_nonconvergence_is_error() {
 #[test]
 fn pcg_refuses_indefinite_matrix() {
     // Positive diagonal, but eigenvalues 3 and -1: CG meets p^T A p <= 0.
-    let a = Csr::from_triplets(2, 2, &[(0, 0, 1.0), (1, 1, 1.0), (0, 1, 2.0), (1, 0, 2.0)]).unwrap();
-    assert_eq!(pcg(&a, &[1.0, -1.0], None, 1e-10, 50), Err(SparseError::Domain));
+    let a =
+        Csr::from_triplets(2, 2, &[(0, 0, 1.0), (1, 1, 1.0), (0, 1, 2.0), (1, 0, 2.0)]).unwrap();
+    assert_eq!(
+        pcg(&a, &[1.0, -1.0], None, 1e-10, 50),
+        Err(SparseError::Domain)
+    );
 }
 
 #[test]
 fn pcg_zero_rhs_and_start_vector() {
     let n = 50;
     let a = Csr::from_triplets(n, n, &chain(n, 10.0)).unwrap();
-    assert_eq!(pcg(&a, &vec![0.0; n], None, 1e-10, 100), Ok((vec![0.0; n], 0, 0.0)));
+    assert_eq!(
+        pcg(&a, &vec![0.0; n], None, 1e-10, 100),
+        Ok((vec![0.0; n], 0, 0.0))
+    );
     let b: Vec<f64> = (0..n).map(|i| i as f64).collect();
     let (x, _, _) = pcg(&a, &b, None, 1e-12, 10_000).unwrap();
     // Starting at the answer converges with no iteration.

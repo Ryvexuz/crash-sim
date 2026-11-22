@@ -98,10 +98,16 @@ impl ImplicitEuler {
     /// positive and a cap of zero.
     pub fn new(tol: Tolerances) -> Result<ImplicitEuler, String> {
         if !(tol.newton_rtol.is_finite() && tol.newton_rtol > 0.0) {
-            return Err(format!("implicit solver: newton_rtol = {} must be finite and > 0", tol.newton_rtol));
+            return Err(format!(
+                "implicit solver: newton_rtol = {} must be finite and > 0",
+                tol.newton_rtol
+            ));
         }
         if !(tol.cg_rtol.is_finite() && tol.cg_rtol > 0.0) {
-            return Err(format!("implicit solver: cg_rtol = {} must be finite and > 0", tol.cg_rtol));
+            return Err(format!(
+                "implicit solver: cg_rtol = {} must be finite and > 0",
+                tol.cg_rtol
+            ));
         }
         if tol.newton_max_iter == 0 {
             return Err("implicit solver: newton_max_iter must be at least 1".to_string());
@@ -109,7 +115,12 @@ impl ImplicitEuler {
         if tol.cg_max_iter == 0 {
             return Err("implicit solver: cg_max_iter must be at least 1".to_string());
         }
-        Ok(ImplicitEuler { tol, substep: 0, error: None, stats: Stats::default() })
+        Ok(ImplicitEuler {
+            tol,
+            substep: 0,
+            error: None,
+            stats: Stats::default(),
+        })
     }
 
     pub fn tolerances(&self) -> Tolerances {
@@ -135,9 +146,15 @@ impl ImplicitEuler {
         let n = self.substep;
         match self.solve(&s, extra, h) {
             Ok((new_vel, newton, cg)) => {
-                let new_pos: Vec<Vec3> = (0..s.pos.len()).map(|i| s.pos[i] + new_vel[i] * h).collect();
-                if let Some(i) = (0..new_pos.len()).find(|&i| !(finite(new_pos[i]) && finite(new_vel[i]))) {
-                    self.fail(format!("implicit solver: update of node {i} is not finite at substep {n}"));
+                let new_pos: Vec<Vec3> = (0..s.pos.len())
+                    .map(|i| s.pos[i] + new_vel[i] * h)
+                    .collect();
+                if let Some(i) =
+                    (0..new_pos.len()).find(|&i| !(finite(new_pos[i]) && finite(new_vel[i])))
+                {
+                    self.fail(format!(
+                        "implicit solver: update of node {i} is not finite at substep {n}"
+                    ));
                     return;
                 }
                 s.vel.copy_from_slice(&new_vel);
@@ -152,7 +169,12 @@ impl ImplicitEuler {
     }
 
     /// Newton for v'. Returns (v', Newton iterations, CG iterations) or the error text.
-    fn solve(&self, s: &State<'_>, extra: Option<&[Vec3]>, h: f64) -> Result<(Vec<Vec3>, usize, usize), String> {
+    fn solve(
+        &self,
+        s: &State<'_>,
+        extra: Option<&[Vec3]>,
+        h: f64,
+    ) -> Result<(Vec<Vec3>, usize, usize), String> {
         let (pos, vel, beams, mass) = (&*s.pos, &*s.vel, s.beams, s.mass);
         let nn = pos.len();
         if !(h.is_finite() && h > 0.0) {
@@ -170,7 +192,10 @@ impl ImplicitEuler {
             return Err(format!("node {i} is not finite"));
         }
         if let Some(i) = (0..nn).find(|&i| !(mass[i].is_finite() && mass[i] > 0.0)) {
-            return Err(format!("mass of node {i} = {} must be finite and > 0", mass[i]));
+            return Err(format!(
+                "mass of node {i} = {} must be finite and > 0",
+                mass[i]
+            ));
         }
         if !s.gravity.is_finite() {
             return Err("gravity is not finite".to_string());
@@ -185,7 +210,9 @@ impl ImplicitEuler {
         loop {
             let gn = norm2(&g);
             if !(gn.is_finite() && scale.is_finite()) {
-                return Err(format!("Newton residual is not finite after {iters} iterations"));
+                return Err(format!(
+                    "Newton residual is not finite after {iters} iterations"
+                ));
             }
             let goal = self.tol.newton_rtol * scale;
             if gn <= goal {
@@ -200,8 +227,10 @@ impl ImplicitEuler {
             let guess: Vec<Vec3> = (0..nn).map(|i| pos[i] + vn[i] * h).collect();
             let a = assemble(&guess, beams, mass, h)?;
             let rhs: Vec<f64> = g.iter().map(|v| -v).collect();
-            let (dv, cg, _) = pcg(&a, &rhs, None, self.tol.cg_rtol, self.tol.cg_max_iter)
-                .map_err(|e| format!("linear solve of Newton iteration {} failed: {e}", iters + 1))?;
+            let (dv, cg, _) =
+                pcg(&a, &rhs, None, self.tol.cg_rtol, self.tol.cg_max_iter).map_err(|e| {
+                    format!("linear solve of Newton iteration {} failed: {e}", iters + 1)
+                })?;
             cg_total += cg;
             for i in 0..nn {
                 vn[i] += Vec3::new(dv[3 * i], dv[3 * i + 1], dv[3 * i + 2]);
@@ -243,8 +272,8 @@ fn residual(
         force[bm.b] += -f;
         // The sizes of the terms `mag` sums: k len and k rest cancel at rest, as do the two
         // velocities in rel_v.
-        let mag_size =
-            bm.stiffness.abs() * (len + bm.rest.abs()) + bm.damping.abs() * (vn[bm.a].length() + vn[bm.b].length());
+        let mag_size = bm.stiffness.abs() * (len + bm.rest.abs())
+            + bm.damping.abs() * (vn[bm.a].length() + vn[bm.b].length());
         let s = abs(dir) * mag_size;
         size[bm.a] += s;
         size[bm.b] += s;

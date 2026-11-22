@@ -58,16 +58,29 @@ impl fmt::Display for SparseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SparseError::NotSquare => write!(f, "matrix is not square"),
-            SparseError::Shape { expected, got } => write!(f, "length mismatch: expected {expected}, got {got}"),
+            SparseError::Shape { expected, got } => {
+                write!(f, "length mismatch: expected {expected}, got {got}")
+            }
             SparseError::Empty => write!(f, "empty matrix"),
             SparseError::NonFinite { what } => write!(f, "non-finite value in {what}"),
             SparseError::BadIndex => write!(f, "triplet index out of range"),
             SparseError::BadParam { name } => write!(f, "bad parameter: {name}"),
-            SparseError::NonPositiveDiagonal { row } => write!(f, "non-positive diagonal entry in row {row}"),
-            SparseError::NotConverged { iterations, residual } => {
-                write!(f, "pcg not converged after {iterations} iterations (residual {residual:e})")
+            SparseError::NonPositiveDiagonal { row } => {
+                write!(f, "non-positive diagonal entry in row {row}")
             }
-            SparseError::Domain => write!(f, "pcg: p^T A p is not positive (matrix not positive definite)"),
+            SparseError::NotConverged {
+                iterations,
+                residual,
+            } => {
+                write!(
+                    f,
+                    "pcg not converged after {iterations} iterations (residual {residual:e})"
+                )
+            }
+            SparseError::Domain => write!(
+                f,
+                "pcg: p^T A p is not positive (matrix not positive definite)"
+            ),
         }
     }
 }
@@ -112,7 +125,11 @@ impl Csr {
     /// Errors: `Empty` (zero rows or columns), `BadIndex` (an index out of range), `BadParam`
     /// (a size too large to allocate), `NonFinite` (a NaN or infinite value, or a duplicate sum
     /// that overflows).
-    pub fn from_triplets(nrows: usize, ncols: usize, t: &[(usize, usize, f64)]) -> Result<Csr, SparseError> {
+    pub fn from_triplets(
+        nrows: usize,
+        ncols: usize,
+        t: &[(usize, usize, f64)],
+    ) -> Result<Csr, SparseError> {
         if nrows == 0 || ncols == 0 {
             return Err(SparseError::Empty);
         }
@@ -120,11 +137,17 @@ impl Csr {
             return Err(SparseError::BadIndex);
         }
         if t.iter().any(|&(_, _, v)| !v.is_finite()) {
-            return Err(SparseError::NonFinite { what: "triplet values" });
+            return Err(SparseError::NonFinite {
+                what: "triplet values",
+            });
         }
-        let ptr_len = nrows.checked_add(1).ok_or(SparseError::BadParam { name: "nrows" })?;
+        let ptr_len = nrows
+            .checked_add(1)
+            .ok_or(SparseError::BadParam { name: "nrows" })?;
         let mut indptr: Vec<usize> = Vec::new();
-        indptr.try_reserve_exact(ptr_len).map_err(|_| SparseError::BadParam { name: "nrows" })?;
+        indptr
+            .try_reserve_exact(ptr_len)
+            .map_err(|_| SparseError::BadParam { name: "nrows" })?;
         let mut order: Vec<usize> = (0..t.len()).collect();
         // Stable sort: equal (row, column) keep their input order, so the sums below have a fixed order.
         order.sort_by_key(|&k| (t[k].0, t[k].1));
@@ -139,7 +162,9 @@ impl Csr {
                 if let Some(acc) = data.last_mut() {
                     *acc += v;
                     if !acc.is_finite() {
-                        return Err(SparseError::NonFinite { what: "summed duplicate entry" });
+                        return Err(SparseError::NonFinite {
+                            what: "summed duplicate entry",
+                        });
                     }
                 }
             } else {
@@ -152,7 +177,13 @@ impl Csr {
         for i in 0..nrows {
             indptr[i + 1] += indptr[i];
         }
-        Ok(Csr { nrows, ncols, indptr, indices, data })
+        Ok(Csr {
+            nrows,
+            ncols,
+            indptr,
+            indices,
+            data,
+        })
     }
 
     pub fn nrows(&self) -> usize {
@@ -180,7 +211,10 @@ impl Csr {
     /// a product entry that overflows.
     pub fn mul_vec(&self, x: &[f64]) -> Result<Vec<f64>, SparseError> {
         if x.len() != self.ncols {
-            return Err(SparseError::Shape { expected: self.ncols, got: x.len() });
+            return Err(SparseError::Shape {
+                expected: self.ncols,
+                got: x.len(),
+            });
         }
         if !all_finite(x) {
             return Err(SparseError::NonFinite { what: "x" });
@@ -224,12 +258,17 @@ fn mul_pow2(mut x: f64, mut k: i32) -> f64 {
 
 /// Binary exponent of a finite `m > 0`: `2^e <= m < 2^(e+1)`.
 fn exp2_of(m: f64) -> i32 {
-    let (m, adj) = if m < f64::MIN_POSITIVE { (m * pow2(64), 64) } else { (m, 0) };
+    let (m, adj) = if m < f64::MIN_POSITIVE {
+        (m * pow2(64), 64)
+    } else {
+        (m, 0)
+    };
     ((m.to_bits() >> 52) & 0x7ff) as i32 - 1023 - adj
 }
 
 fn max_abs(x: &[f64]) -> f64 {
-    x.iter().fold(0.0, |m, v| if v.abs() > m { v.abs() } else { m })
+    x.iter()
+        .fold(0.0, |m, v| if v.abs() > m { v.abs() } else { m })
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -261,11 +300,17 @@ pub fn pcg(
     }
     let n = a.nrows;
     if b.len() != n {
-        return Err(SparseError::Shape { expected: n, got: b.len() });
+        return Err(SparseError::Shape {
+            expected: n,
+            got: b.len(),
+        });
     }
     if let Some(x0) = x0 {
         if x0.len() != n {
-            return Err(SparseError::Shape { expected: n, got: x0.len() });
+            return Err(SparseError::Shape {
+                expected: n,
+                got: x0.len(),
+            });
         }
         if !all_finite(x0) {
             return Err(SparseError::NonFinite { what: "x0" });
@@ -290,7 +335,10 @@ pub fn pcg(
     // Scaled problem A' y = b' with A' = A 2^-ea, b' = b 2^-eb; then x = y 2^(eb - ea).
     let ea = exp2_of(max_abs(&a.data));
     let eb = exp2_of(bmax);
-    let sa = Csr { data: a.data.iter().map(|&v| mul_pow2(v, -ea)).collect(), ..a.clone() };
+    let sa = Csr {
+        data: a.data.iter().map(|&v| mul_pow2(v, -ea)).collect(),
+        ..a.clone()
+    };
     let bs: Vec<f64> = b.iter().map(|&v| mul_pow2(v, -eb)).collect();
     let mut y: Vec<f64> = match x0 {
         Some(x0) => x0.iter().map(|&v| mul_pow2(v, ea - eb)).collect(),
@@ -301,7 +349,9 @@ pub fn pcg(
     }
     let dinv: Vec<f64> = sa.diag().iter().map(|&d| 1.0 / d).collect();
     if !all_finite(&dinv) {
-        return Err(SparseError::NonFinite { what: "inverse diagonal" });
+        return Err(SparseError::NonFinite {
+            what: "inverse diagonal",
+        });
     }
     let nb = norm2_vec(&bs);
     let (mut r, mut ap) = (vec![0.0; n], vec![0.0; n]);
@@ -317,7 +367,9 @@ pub fn pcg(
     let (mut iters, mut restart) = (0usize, true);
     loop {
         if !rel.is_finite() {
-            return Err(SparseError::NonFinite { what: "pcg iterate" });
+            return Err(SparseError::NonFinite {
+                what: "pcg iterate",
+            });
         }
         if rel <= rtol {
             let t = true_residual(&y, &mut r, &mut ap);
@@ -332,7 +384,10 @@ pub fn pcg(
             restart = true;
         }
         if iters >= max_iter {
-            return Err(SparseError::NotConverged { iterations: iters, residual: rel });
+            return Err(SparseError::NotConverged {
+                iterations: iters,
+                residual: rel,
+            });
         }
         if restart {
             for i in 0..n {
