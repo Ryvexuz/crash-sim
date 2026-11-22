@@ -1620,6 +1620,70 @@ fn group_len(sim: &crash_sim::Sim, a: &[usize], b: &[usize]) -> f64 {
     (centroid(b) - centroid(a)).length()
 }
 
+/// Number of points of the crush profile: NHTSA's C1 to C6 (docs/STAGE6-M4-M5.md V8).
+const PROFILE_POINTS: usize = 6;
+/// Two front nodes whose start z differs by at most this (m) are one column of the profile.
+const PROFILE_COLUMN_TOL_M: f64 = 1e-9;
+
+/// Weights of the six-point crush profile (docs/STAGE6-M4-M5.md, "Metrics", `static_crush_m`),
+/// one per node of the front group, from the nodes' start z (the lateral axis; x is the crash
+/// axis, y is up). The six points are equally spaced across the front, from its leftmost to its
+/// rightmost node column, both ends included, as C1 (left side) to C6 (right side) are across the
+/// damage width. Nodes whose z agree within `PROFILE_COLUMN_TOL_M` are one column, its value the
+/// plain mean of its nodes; a point between two columns takes the linear interpolation of their
+/// values. The profile is the mean of the six points, so it is a fixed weighted mean of the nodes:
+/// each column gets the sum of its interpolation shares over the six points, divided by six,
+/// shared equally by its nodes. The weights sum to 1. One column takes the plain mean.
+fn profile_weights(z: &[f64]) -> Vec<f64> {
+    let mut cols: Vec<f64> = Vec::new();
+    for &v in z {
+        if !cols.iter().any(|c| (c - v).abs() <= PROFILE_COLUMN_TOL_M) {
+            cols.push(v);
+        }
+    }
+    cols.sort_by(f64::total_cmp);
+    let col_of = |v: f64| {
+        cols.iter()
+            .position(|c| (c - v).abs() <= PROFILE_COLUMN_TOL_M)
+            .expect("every node is in a column")
+    };
+    let mut col_w = vec![0.0; cols.len()];
+    if cols.len() == 1 {
+        col_w[0] = 1.0;
+    } else {
+        let (lo, hi) = (cols[0], cols[cols.len() - 1]);
+        let share = 1.0 / PROFILE_POINTS as f64;
+        for i in 0..PROFILE_POINTS {
+            let zi = lo + (hi - lo) * i as f64 / (PROFILE_POINTS - 1) as f64;
+            // The bracketing columns j, j + 1 (the last pair for the right end).
+            let j = (0..cols.len() - 1)
+                .find(|&j| zi <= cols[j + 1])
+                .unwrap_or(cols.len() - 2);
+            let t = ((zi - cols[j]) / (cols[j + 1] - cols[j])).clamp(0.0, 1.0);
+            col_w[j] += share * (1.0 - t);
+            col_w[j + 1] += share * t;
+        }
+    }
+    let mut count = vec![0usize; cols.len()];
+    for &v in z {
+        count[col_of(v)] += 1;
+    }
+    z.iter()
+        .map(|&v| {
+            let c = col_of(v);
+            col_w[c] / count[c] as f64
+        })
+        .collect()
+}
+
+/// The six-point profile depth (m): the weighted mean (`profile_weights`) over the front group
+/// `b` of each node's x ahead of the plain mean x of the reference group `a`. Static crush is its
+/// start value minus its mean over the tail.
+fn profile_depth(sim: &crash_sim::Sim, a: &[usize], b: &[usize], w: &[f64]) -> f64 {
+    let xa = a.iter().map(|&i| sim.pos[i].x).sum::<f64>() / a.len() as f64;
+    b.iter().zip(w).map(|(&i, wi)| wi * (sim.pos[i].x - xa)).sum()
+}
+
 /// True if any node is on or behind one of `planes[range]`, or any wheel (a tyre) is within its
 /// radius of one: the sim's contact test (`any_at_or_behind`) extended to the tyres.
 fn touches(sim: &crash_sim::Sim, range: std::ops::Range<usize>) -> bool {
@@ -1694,7 +1758,8 @@ fn pulse_metrics(
 ///   the ground; the FAIL line's `t` is the first of them, in seconds from contact.
 /// - Every line that can be computed is printed even when an earlier rule fails; the last line
 ///   names the first rule that failed. A sim OLC or duration that does not exist counts as 0.
-/// - Static crush uses L at the start of the run for L(0), and the substeps with
+/// - Static crush (the six-point profile depth, `profile_weights`, and the old centroid distance
+///   L) uses the series' value at the start of the run, and the substeps with
 ///   t >= run end - tail (to 1e-6 of h).
 fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutcome, String> {
     // The reference: the pulse and its meta, both strict (reference.rs).
@@ -1759,9 +1824,13 @@ fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutco
     let n = n_sub as usize;
     let mut u = Vec::with_capacity(n + 1);
     let mut len = Vec::with_capacity(n + 1);
+    let mut depth = Vec::with_capacity(n + 1);
     let mut ground = Vec::with_capacity(n + 1);
+    let z0: Vec<f64> = crush_b.iter().map(|&i| sim.pos[i].z).collect();
+    let weights = profile_weights(&z0);
     u.push(group_u(&sim, &sensor));
     len.push(group_len(&sim, &crush_a, &crush_b));
+    depth.push(profile_depth(&sim, &crush_a, &crush_b, &weights));
     ground.push(false);
     let mut contact: Option<usize> = None;
     let started = std::time::Instant::now();
@@ -1777,6 +1846,7 @@ fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutco
         }
         u.push(group_u(&sim, &sensor));
         len.push(group_len(&sim, &crush_a, &crush_b));
+        depth.push(profile_depth(&sim, &crush_a, &crush_b, &weights));
         ground.push(touches(&sim, 0..1));
         if contact.is_none() && touches(&sim, 1..sim.planes.len()) {
             contact = Some(k);
@@ -1906,16 +1976,23 @@ fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutco
     // A missing sim duration or OLC counts as 0 (a norm of 1 / margin, a FAIL).
     let (sim_dur, sim_olc) = (sm.duration.unwrap_or(0.0), sm.olc.unwrap_or(0.0));
 
-    // Static crush: L(0) minus the mean of L over the last `tail` seconds of the run.
+    // Static crush: a series' start value minus its mean over the last `tail` seconds of the
+    // run. The gated value is the six-point profile depth (the reference's mean of C1 to C6,
+    // rule change of 2026-11-22); the old centroid distance L is printed as
+    // `info static_crush_centroid_m` for comparison and not gated.
     let t_end = n as f64 * h;
     let tol = h * 1e-6;
-    let tail_len: Vec<f64> = len
-        .iter()
-        .enumerate()
-        .filter(|(k, _)| *k as f64 * h >= t_end - p.tail - tol)
-        .map(|(_, l)| *l)
-        .collect();
-    let sim_static = len[0] - tail_len.iter().sum::<f64>() / tail_len.len() as f64;
+    let settled = |series: &[f64]| {
+        let tail: Vec<f64> = series
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| *k as f64 * h >= t_end - p.tail - tol)
+            .map(|(_, l)| *l)
+            .collect();
+        series[0] - tail.iter().sum::<f64>() / tail.len() as f64
+    };
+    let sim_static = settled(&depth);
+    let sim_static_centroid = settled(&len);
 
     // Gated metrics, in the printed order: (name, decimals, sim, ref, margin, absolute error?).
     struct Row {
@@ -2020,6 +2097,9 @@ fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutco
         ));
     }
     text.push_str(&format!(
+        "info static_crush_centroid_m sim={sim_static_centroid:.4}\n"
+    ));
+    text.push_str(&format!(
         "info dyn_crush_m sim={:.4} ref={:.4}\n",
         sm.dyn_crush, rm.dyn_crush
     ));
@@ -2112,6 +2192,46 @@ mod tests {
         let mut v: Vec<u8> = Vec::new();
         write_all_flush(&mut v, "a,b\n1,2\n").unwrap();
         assert_eq!(v, b"a,b\n1,2\n");
+    }
+
+    fn close(got: &[f64], want: &[f64]) {
+        assert_eq!(got.len(), want.len(), "{got:?} against {want:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert!((g - w).abs() < 1e-12, "{got:?} against {want:?}");
+        }
+    }
+
+    /// The validation car's front: columns at z = -0.844, -0.75425, 0.75425, 0.844, two nodes
+    /// each. Points 1 and 6 sit on the outer columns; points 2 to 5 fall between the inner two at
+    /// t = 0.1643, 0.3881, 0.6119, 0.8357, whose shares sum to 2 for each inner column. So the
+    /// column weights are 1/6, 2/6, 2/6, 1/6, halved for the two nodes of each column.
+    #[test]
+    fn profile_weights_of_the_validation_front() {
+        let z = [
+            -0.844, -0.844, -0.75425, -0.75425, 0.75425, 0.75425, 0.844, 0.844,
+        ];
+        let (a, b) = (1.0 / 12.0, 2.0 / 12.0);
+        close(&profile_weights(&z), &[a, a, b, b, b, b, a, a]);
+    }
+
+    /// Six evenly spaced columns: each point is one column, 1/6 each, in any node order.
+    #[test]
+    fn profile_weights_six_even_columns() {
+        let z = [0.5, 0.0, 0.3, 0.1, 0.4, 0.2];
+        close(&profile_weights(&z), &[1.0 / 6.0; 6]);
+    }
+
+    /// Two columns, one with two nodes: 1/2 per column (not 1/3 per node, as a centroid has).
+    #[test]
+    fn profile_weights_two_columns_uneven_counts() {
+        let z = [0.0, 1.0, 0.0];
+        close(&profile_weights(&z), &[0.25, 0.5, 0.25]);
+    }
+
+    /// One column: the plain mean.
+    #[test]
+    fn profile_weights_one_column() {
+        close(&profile_weights(&[2.0, 2.0, 2.0, 2.0]), &[0.25; 4]);
     }
 
     #[test]

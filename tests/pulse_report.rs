@@ -238,7 +238,7 @@ fn pulse_report_lines_and_format() {
     );
     assert_eq!(
         lines.len(),
-        15,
+        16,
         "one line per item of the docs' output list:\n{out}"
     );
     assert_eq!(lines[0], "pulse_ref=synthetic-1");
@@ -282,12 +282,17 @@ fn pulse_report_lines_and_format() {
         norms.push(norm);
         all_ok &= ok;
     }
+    // The old static crush rule (centroid distance), printed for comparison, not gated.
     let t: Vec<&str> = lines[12].split(' ').collect();
-    assert_eq!(&t[..2], &["info", "dyn_crush_m"], "{}", lines[12]);
+    assert_eq!(&t[..2], &["info", "static_crush_centroid_m"], "{}", lines[12]);
+    assert_eq!(t.len(), 3, "{}", lines[12]);
+    field(t[2], "sim", 4, false);
+    let t: Vec<&str> = lines[13].split(' ').collect();
+    assert_eq!(&t[..2], &["info", "dyn_crush_m"], "{}", lines[13]);
     assert_eq!(t.len(), 4);
     field(t[2], "sim", 4, false);
     field(t[3], "ref", 4, false);
-    let score: f64 = field(lines[13], "pulse_score", 4, false)[0..]
+    let score: f64 = field(lines[14], "pulse_score", 4, false)[0..]
         .parse()
         .unwrap();
     let mean = norms.iter().sum::<f64>() / norms.len() as f64;
@@ -296,7 +301,7 @@ fn pulse_report_lines_and_format() {
         "pulse_score {score} is the mean norm {mean}"
     );
     // the verdict line and the exit code agree
-    let last = lines[14];
+    let last = lines[15];
     if all_ok {
         assert_eq!(last, "pulse: ok");
         assert_eq!(o.status.code(), Some(0));
@@ -336,6 +341,83 @@ fn pulse_report_without_static_crush_prints_none() {
     );
     let score = out.lines().find(|l| l.starts_with("pulse_score=")).unwrap();
     field(score, "pulse_score", 4, false);
+    let old = out
+        .lines()
+        .find(|l| l.starts_with("info static_crush_centroid_m "))
+        .expect("the old static crush line is printed without a meta value too");
+    let t: Vec<&str> = old.split(' ').collect();
+    assert_eq!(t.len(), 3, "{old}");
+    field(t[2], "sim", 4, false);
+}
+
+/// The two static crush values of one run: (six-point `metric static_crush_m`, old
+/// `info static_crush_centroid_m`).
+fn static_pair(out: &str) -> (f64, f64) {
+    let old = out
+        .lines()
+        .find_map(|l| l.strip_prefix("info static_crush_centroid_m sim="))
+        .unwrap_or_else(|| panic!("no info static_crush_centroid_m line in:\n{out}"));
+    (
+        metric_field(out, "static_crush_m", "sim"),
+        old.parse().unwrap(),
+    )
+}
+
+/// docs/STAGE6-M4-M5.md, `static_crush_m` (rule change of 2026-11-22): the gated value is the
+/// mean of six points equally spaced across the front group's node columns (z), each column the
+/// plain mean of its nodes, not the distance between the group centroids. The box hits a wall
+/// tilted about y, so its z = 1 side crushes more than its z = 0 side. With front group
+/// {8 (z 0), 9 (z 1), 10 (z 0)} the six points weight the columns 1/2 and 1/2, so nodes
+/// 8, 9, 10 get 1/4, 1/2, 1/4, which is exactly the mean of the values of the groups {8, 9}
+/// and {10, 9} (one node per column, 1/2 each). A centroid weights 8, 9, 10 by 1/3 each and does
+/// not meet that identity when the sides crush differently.
+#[test]
+fn static_crush_is_the_six_point_profile_mean() {
+    let run = |name: &str, front: &str| {
+        // Normal (-1, 0, -0.3) normalised: the wall meets the z = 1 side first.
+        let body = box_bsn(10.0, 2.1, 1.0)
+            .replace("group front 8 9 10 11\n", &format!("group front {front}\n"))
+            .replace(
+                "plane 2.1 0.5 0.5 -1 0 0\n",
+                "plane 2.1 0.5 0.5 -0.9578262852211514 0 -0.28734788556634544\n",
+            );
+        assert!(body.contains(&format!("group front {front}\n")), "{body}");
+        let c = case(name, &body, &ref_csv(400.0), &meta_text(12.0, 36.0, Some(0.05)));
+        let o = run_flags(&report_flags(&c), &[]);
+        let out = stdout(&o);
+        assert!(
+            o.status.code() == Some(0) || o.status.code() == Some(1),
+            "{out}{}",
+            stderr(&o)
+        );
+        static_pair(&out)
+    };
+    let (six_3, old_3) = run("six_point_3", "8 9 10");
+    let (six_89, old_89) = run("six_point_89", "8 9");
+    let (six_109, old_109) = run("six_point_109", "10 9");
+    // The front crushes unevenly, so the identity below is not a trivial one.
+    assert!(
+        (six_89 - six_109).abs() < 0.01 && six_89 > 0.002,
+        "the two one-per-column groups crush alike and visibly: {six_89} {six_109}"
+    );
+    let want = 0.5 * (six_89 + six_109);
+    // Each value is printed to 4 decimals: 1.5e-4 covers their rounding.
+    assert!(
+        (six_3 - want).abs() <= 1.5e-4,
+        "six-point value {six_3} is not the mean of {six_89} and {six_109} ({want})"
+    );
+    // The old centroid rule weights the three nodes 1/3 each and so does not give that mean.
+    let old_want = 0.5 * (old_89 + old_109);
+    assert!(
+        (old_3 - old_want).abs() > 5e-4,
+        "the centroid value {old_3} also matches {old_want}: the test cannot tell the rules apart"
+    );
+    // With one node per column both rules weight the nodes alike (they differ only by the
+    // centroid's 3-D distance against the profile's x distance).
+    assert!(
+        (old_89 - six_89).abs() < 0.01,
+        "{old_89} against {six_89}"
+    );
 }
 
 #[test]
