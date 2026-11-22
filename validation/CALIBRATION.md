@@ -142,3 +142,5 @@ run A node-beam 140 area_m2=0.002 yield_strain=0.0057 damping_ratio=0.05 score=n
 grid_best node-beam 41 area_m2=0.0002139974961130158 yield_strain=0.001 damping_ratio=0 score=0.6456 edge verdict=FAIL
 deviation: chosen from step 8's 558 scratch-sweep points (270+288), more than the doc's 140-point grid; the formal 140-point grid found no passing point; decided by the orchestrator 2026-11-22 because doc wording is the orchestrator's; no threshold, margin or test B change
 calibrated node-beam deviation area_m2=0.00007000000000110004 yield_strain=0.0024 damping_ratio=0.01500000336789605 score=0.6832
+freeze = 6822ee71c25e72ce4e566a0de93ddb3cbaca8720
+run B node-beam substeps=10 freeze=6822ee71c25e72ce4e566a0de93ddb3cbaca8720 head=6822ee71c25e72ce4e566a0de93ddb3cbaca8720 score=0.4244 verdict=FAIL
