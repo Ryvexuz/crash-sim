@@ -149,7 +149,8 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
     let mut blew_up = false;
     for _ in 0..2_000 {
         step(&mut se, &mut se_body, 0.0, h);
-        if se.check().is_some() || !(energy(&se_body) < 1e6 * e0) {
+        let e = energy(&se_body);
+        if se.check().is_some() || e.is_nan() || e >= 1e6 * e0 {
             blew_up = true;
             break;
         }
