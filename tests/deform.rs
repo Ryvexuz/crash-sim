@@ -94,7 +94,11 @@ fn yield_returns_the_strain_to_the_limit_and_lowers_the_energy() {
         assert_eq!(sim.pos, pos);
         assert_eq!(sim.vel, vel);
         let rest = sim.beams[0].rest;
-        let strain = if x > 1.0 { (len(&sim) - rest) / rest } else { (len(&sim) - rest) / sim.rest0[0] };
+        let strain = if x > 1.0 {
+            (len(&sim) - rest) / rest
+        } else {
+            (len(&sim) - rest) / sim.rest0[0]
+        };
         assert!((strain - limit).abs() < 1e-12, "strain after yield {strain}, wanted {limit}");
         assert!(after < before, "energy went from {before} to {after} through the yield");
         // A second pass has nothing left to do.

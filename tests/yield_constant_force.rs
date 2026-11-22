@@ -5,8 +5,8 @@
 //! validation car go soft as it crushed (scratch/m4-dur/FINDINGS.md). Tensile yield is unchanged.
 
 use crash_sim::format::parse;
-use crash_sim::Sim;
 use crash_sim::Config;
+use crash_sim::Sim;
 
 const K: f64 = 20_000.0;
 const Y: f64 = 0.05;
@@ -38,7 +38,10 @@ fn crushed_beam_keeps_a_constant_yield_force() {
         sim.pos[1].x = 1.0 - step as f64 * 0.001;
         sim.apply_yield();
         let f = spring_force(&sim);
-        assert!(f <= 0.0, "a crushed beam pushes: force {f} N at step {step}");
+        assert!(
+            f <= 0.0,
+            "a crushed beam pushes: force {f} N at step {step}"
+        );
         if step > 60 {
             // Past the 5% yield (50 mm) with margin: the beam is flowing.
             let err = (f.abs() - yield_force).abs() / yield_force;
@@ -63,7 +66,11 @@ fn compressive_yield_rest_is_len_plus_y_rest0() {
     sim.pos[1].x = 0.5;
     assert_eq!(sim.apply_yield(), 1);
     let want = 0.5 + Y * 1.0;
-    assert!((sim.beams[0].rest - want).abs() < 1e-12, "rest {} wanted {want}", sim.beams[0].rest);
+    assert!(
+        (sim.beams[0].rest - want).abs() < 1e-12,
+        "rest {} wanted {want}",
+        sim.beams[0].rest
+    );
     assert_eq!(sim.apply_yield(), 0);
 }
 
@@ -74,5 +81,10 @@ fn tensile_yield_is_unchanged() {
     sim.pos[1].x = 1.5;
     assert_eq!(sim.apply_yield(), 1);
     let want = 1.5 / (1.0 + Y);
-    assert_eq!(sim.beams[0].rest.to_bits(), want.to_bits(), "rest {} wanted {want}", sim.beams[0].rest);
+    assert_eq!(
+        sim.beams[0].rest.to_bits(),
+        want.to_bits(),
+        "rest {} wanted {want}",
+        sim.beams[0].rest
+    );
 }

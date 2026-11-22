@@ -232,5 +232,8 @@ fn compressive_boundary_sweep_matches_reference() {
         skipped_total += sim.beams.len() - ref_yielded;
         assert_same(&format!("compressive case {case} y={y} f={f}"), &mut sim);
     }
-    assert!(yielded_total > 0 && skipped_total > 0, "the sweep must hit both sides: {yielded_total} yielded, {skipped_total} not");
+    assert!(
+        yielded_total > 0 && skipped_total > 0,
+        "the sweep must hit both sides: {yielded_total} yielded, {skipped_total} not"
+    );
 }
