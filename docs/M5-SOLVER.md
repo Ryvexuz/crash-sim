@@ -123,20 +123,34 @@ Other things that would make it wrong, each with how it would show:
 Every line starting with the word `frozen` and a colon, in the block below, is read by `validation/sweep.py` (`--solver m5`) and checked by `docs/STAGE6-M4-M5.md` 5.2 (at least 3 such lines before the first m5 calibration run, none changed after). **Nothing else in this file starts that way, and no sentence of this file contains the flag names the 5.2 check searches for**, so that an edit of prose after calibration is not mistaken for a changed number. The numbers below are proposals made before any run; n20-11's first measurements (R15) may force a correction of N5, the ranges or the tet cap, which is a commit to this file by the orchestrator **before the first calibration run**, never after.
 
 ```
-frozen: m5_method = explicit linear tetrahedra with compressible Neo-Hookean elasticity and compressive crushable plasticity with lock-up in the crush zone; beams elsewhere; one symplectic Euler update for all nodes; an inverted tet or an exceeded stiffness bound ends the run with a named error
-frozen: range crush_solid.plateau_stress_pa = 250000 2500000
-frozen: range crush_solid.yield_strain = 0.01 0.03
-frozen: range crush_solid.damping_ratio = 0 0.05
-frozen: grid crush_solid.plateau_stress_pa = 7 log
-frozen: grid crush_solid.yield_strain = 5 lin
-frozen: grid crush_solid.damping_ratio = 0 0.01 0.025 0.05
-frozen: m5_substeps = 50
+frozen: m5_method = implicit backward Euler on the node-beam model (the same beams, yield rule and contact as node-beam); per substep Newton on the backward-Euler equations with a sparse Jacobi-PCG solve of M + h C + h^2 K, a compressed beam's negative geometric term dropped; a Newton or CG cap ends the run with a named error
+frozen: m5_tolerances = newton_rtol 1e-10 newton_max_iter 50 cg_rtol 1e-12 cg_max_iter 2000
+frozen: range crush.area_m2 = 0.00007 0.002
+frozen: range crush.yield_strain = 0.0010 0.0057
+frozen: range crush.damping_ratio = 0 0.05
+frozen: grid crush.area_m2 = 7 log
+frozen: grid crush.yield_strain = 5 lin
+frozen: grid crush.damping_ratio = 0 0.01 0.025 0.05
+frozen: m5_substeps = 10
+frozen: m5_option2_method = explicit linear tetrahedra with compressible Neo-Hookean elasticity and compressive crushable plasticity with lock-up in the crush zone; beams elsewhere; one symplectic Euler update for all nodes; an inverted tet or an exceeded stiffness bound ends the run with a named error
 frozen: poisson_ratio = 0.3
 frozen: lockup = eps_D = min(0.7, 1 - 1.4 phi_zone); phi_zone = zone_mass / (zone_volume * 7850); zone_mass = sum of the masses of the nodes of at least one tet; zone_volume = sum of the rest volumes of the tets; flow stops at e_c = eps_D - sqrt(eps_D yield_strain)
 frozen: m5_max_tets = 300
 ```
 
-Grid size: 7 x 5 x 4 = 140, the cap of `docs/STAGE6-M4-M5.md:293`. Three calibrated quantities, each a physical quantity with a range and a source:
+**Option (1), the method Lazlo chose (section 12).** The block's first nine lines are option (1)'s. They were written before any m5 run on test A: part 2 measured only the real-time factor of the solver (section 12), and its m5 run at m4's point failing test A on duration is the expected starting state, not a score used to choose anything.
+
+- **Quantities.** Three, the same as m4's P1 to P3 of the front stage, with their sources: P1 `area_m2` (V9, thinnest body sheet over a 100 mm strip to thickest rail sheet over a full rail perimeter), P2 `yield_strain` (V9, yield strength over E = 210 GPa), P3 `damping_ratio` (V10). The sources are in `docs/STAGE6-M4-M5.md`, "What is calibrated, and its physical range". The rear stage and `cabin` are not calibrated here: they follow the fixed design lines of `docs/STAGE6-M4-M5.md`, read from that file, never copied into this one.
+- **Ranges and grid equal m4's, on purpose.** Same process, so the integrator is the only difference between the two solvers. Option (1)'s only possible gain is H2 (section 3), and it shows as m4's 20 step-limit refusals running, which a different range or grid would hide. The 60 grid points whose rear stage (the fixed design ratio times the front) leaves the per-stage range stay refused, as in m4.
+- **Tolerances.** `m5_tolerances` is the constant `M5_TOLERANCES` of `src/solver_implicit.rs`, field by field; `tests/solver_implicit.rs` (`m5_option1_frozen_lines`) compares them exactly.
+- **N5.** `m5_substeps = 10`, h = 100 microseconds, the same h as m4, so the integrator is the only difference. At substeps 10 part 2 measured an rtf median of 8.8101 (section 12), at or under the cap of 10; at substeps 2 the median was 2.9087. N5 >= 2 as `docs/STAGE6-M4-M5.md` asks. No calibration sweep was run first: the m5 grid is the calibration, and sweeping test A before the ranges were fixed would have chosen the ranges from test A's scores.
+- **Pinned.** The test `m5_option1_frozen_lines` pins the block to the code and to Lazlo's pre-approved test A ranges. A correction to a line of this block is a commit to this file before the first calibration run, never after.
+
+### Option (2): the record of the unwired option
+
+The lines `m5_option2_method`, `poisson_ratio`, `lockup` and `m5_max_tets` above keep option (2)'s code (`src/solver_m5.rs`) and its tests readable. The table and the N5 paragraph below are the record of option (2), which is not wired to anything: nothing selects it from the command line, and its ranges, its grid and its N5 of 50 are no longer lines of this file.
+
+Option (2)'s grid size was 7 x 5 x 4 = 140, the cap of `docs/STAGE6-M4-M5.md:293`. Three calibrated quantities, each a physical quantity with a range and a source:
 
 | Quantity | Range | Becomes | Source of the range |
 |---|---|---|---|
@@ -146,7 +160,7 @@ Grid size: 7 x 5 x 4 = 140, the cap of `docs/STAGE6-M4-M5.md:293`. Three calibra
 
 **Not calibrated, and why** (a rule copied from m4, `docs/STAGE6-M4-M5.md:179`): geometry and masses (set by n20-08); the Poisson ratio (0.3, fixed above); the lock-up strain (computed per file by the line above from the file's own masses and volumes); the steel density 7 850 kg/m^3 `[memory: M3]`; every beam outside the zone; and the contact constants (`RESTITUTION`, `REST_SPEED`, `FRICTION_RATE`), for the reason m4 gives.
 
-**N5.** `m5_substeps = 50`, h = 20 microseconds: the estimated limit is 33 to 47 microseconds at the worst grid corner with the stiffness allowed to double (section 3), so N5 = 50 is 1.65 to 2.35 times inside it; a smaller N5 would be refused for the stiff end of the grid. N5 >= 2 as `docs/STAGE6-M4-M5.md:298` asks. The step-size noise run of 5.4 uses 100.
+**N5 of option (2).** N5 = 50 (the old `m5_substeps` line), h = 20 microseconds: the estimated limit is 33 to 47 microseconds at the worst grid corner with the stiffness allowed to double (section 3), so N5 = 50 is 1.65 to 2.35 times inside it; a smaller N5 would be refused for the stiff end of the grid. N5 >= 2 as `docs/STAGE6-M4-M5.md:298` asks. The step-size noise run of 5.4 uses 100.
 
 ## 9. The n20-11 brief: requirements to paste
 
@@ -207,6 +221,7 @@ The m4 table read against section 7 matched **W3** (the calibrated point is at i
 - **Kept, not wired:** the option (2) code already on main (`src/solver_m5.rs`, the `bsn 3` `solid`/`tet` format, `Solver::handles_solids` and `Solver::check`) is unchanged; nothing selects it from the command line.
 - **Before the m5 calibration:** `--solver` for the implicit solver with its tolerances, `Sim`'s explicit step-limit refusal made solver-aware, option (1)'s frozen lines (ranges, grid, N5) written here, the 5.1 test names for option (1) settled in `docs/STAGE6-M4-M5.md`, and the gate record (`evidence/stage-6-m5-gate.md`, the orchestrator's). No frozen line of this note changes in this task.
 - **rtf measured** (part 2, task t-20261123-202940, 2026-11-23 UTC, loaded, cpu 32% before the m5 substeps 10 group; cpu 10% before m5 substeps 2; cpu 8% before node-beam): m5 substeps 10 rtf median 8.8101 (8.8101, 8.6968, 8.8717); m5 substeps 2 median 2.9087 (2.9202, 2.9087, 2.8453); node-beam substeps 10 0.0351; node-beam substeps 2 refused. Not gated here; the cap m5_rtf_max = 10 applies at 5.4 with N5 (part 3).
+- **Option (1) frozen lines written** (part 3a, task t-20261123-210157, 2026-11-23 UTC): method, tolerances, ranges and grid equal to m4's, N5 = 10; option (2)'s constants kept for its unwired code.
 
 ## Figures from memory
 

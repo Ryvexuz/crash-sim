@@ -434,7 +434,7 @@ fn m5_constants_are_the_frozen_lines() {
         "lock-up line `{lockup}` does not start `{want}`"
     );
     assert!(lockup.ends_with("flow stops at e_c = eps_D - sqrt(eps_D yield_strain)"));
-    assert!(line("m5_method").contains(
+    assert!(line("m5_option2_method").contains(
         "an inverted tet or an exceeded stiffness bound ends the run with a named error"
     ));
     // R4e: the failure constant of decision 6 of the note.

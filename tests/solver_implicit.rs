@@ -739,3 +739,156 @@ fn implicit_car_keeps_wheel_limit() {
     let ie = Box::new(implicit(M5_TOLERANCES));
     assert_eq!(err_of(Sim::from_car_with_solver(cfg, &car, ie)), expected);
 }
+
+// ---------------------------------------------------------------------------------------
+// Part 3a: option (1)'s frozen lines in docs/M5-SOLVER.md (section 8)
+
+/// Lazlo's pre-approved test A ranges, 2026-11-22 04:44Z: front crush area (m^2), front yield
+/// strain, crush damping ratio. A frozen range may be narrower, never wider.
+const APPROVED_AREA_M2: (f64, f64) = (7e-5, 0.004);
+const APPROVED_YIELD_STRAIN: (f64, f64) = (0.0010, 0.0114);
+const APPROVED_DAMPING_RATIO: (f64, f64) = (0.0, 0.15);
+/// The grid cap of docs/STAGE6-M4-M5.md (n20-06 bullet): at most 140 points.
+const GRID_MAX_POINTS: usize = 140;
+
+/// The one line of `text` that starts `frozen: <key> = `, whole, with exactly one such line.
+fn frozen_line(text: &str, doc: &str, key: &str) -> String {
+    let want = format!("frozen: {key} = ");
+    let lines: Vec<&str> = text.lines().filter(|l| l.starts_with(&want)).collect();
+    assert_eq!(lines.len(), 1, "{doc}: exactly one `{want}` line");
+    lines[0].to_string()
+}
+
+/// The two numbers of a `range` line value, checked against `approved` and `lo < hi`.
+fn checked_range(value: &str, key: &str, approved: (f64, f64)) -> (f64, f64) {
+    let nums: Vec<f64> = value
+        .split_whitespace()
+        .map(|w| {
+            w.parse::<f64>()
+                .unwrap_or_else(|_| panic!("{key}: `{w}` is not a number"))
+        })
+        .collect();
+    assert_eq!(
+        nums.len(),
+        2,
+        "{key}: a range is two numbers, got `{value}`"
+    );
+    let (lo, hi) = (nums[0], nums[1]);
+    assert!(
+        lo.is_finite() && hi.is_finite() && lo < hi,
+        "{key}: `{value}`"
+    );
+    assert!(
+        lo >= approved.0 && hi <= approved.1,
+        "{key}: range [{lo}, {hi}] is outside the approved [{}, {}]",
+        approved.0,
+        approved.1
+    );
+    (lo, hi)
+}
+
+/// The point count of a `grid` line value: `<n> log|lin`, or a list of explicit values that
+/// all lie inside `range`.
+fn grid_points(value: &str, key: &str, range: (f64, f64)) -> usize {
+    let words: Vec<&str> = value.split_whitespace().collect();
+    if words.len() == 2 && (words[1] == "log" || words[1] == "lin") {
+        let n = words[0]
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("{key}: `{value}`"));
+        assert!(
+            n >= 2,
+            "{key}: a spaced grid needs at least 2 points, got {n}"
+        );
+        return n;
+    }
+    assert!(!words.is_empty(), "{key}: empty grid");
+    for w in &words {
+        let v = w
+            .parse::<f64>()
+            .unwrap_or_else(|_| panic!("{key}: `{w}` is not a number"));
+        assert!(
+            v >= range.0 && v <= range.1,
+            "{key}: grid value {v} is outside {range:?}"
+        );
+    }
+    words.len()
+}
+
+/// Part 3a: option (1)'s block of docs/M5-SOLVER.md is pinned to the code (`M5_TOLERANCES`),
+/// to the same-key lines of docs/STAGE6-M4-M5.md, and to Lazlo's pre-approved test A ranges.
+#[test]
+fn m5_option1_frozen_lines() {
+    let m5 = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/M5-SOLVER.md"))
+        .expect("docs/M5-SOLVER.md");
+    let st6 = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/STAGE6-M4-M5.md"))
+        .expect("docs/STAGE6-M4-M5.md");
+    let value = |key: &str| -> String {
+        let line = frozen_line(&m5, "docs/M5-SOLVER.md", key);
+        line[format!("frozen: {key} = ").len()..].to_string()
+    };
+
+    // m5_method names the implicit method.
+    assert!(
+        value("m5_method").contains("implicit backward Euler"),
+        "m5_method: `{}`",
+        value("m5_method")
+    );
+
+    // m5_tolerances equals M5_TOLERANCES field by field, exact ==.
+    let tol = value("m5_tolerances");
+    let words: Vec<&str> = tol.split_whitespace().collect();
+    assert_eq!(
+        words.len(),
+        8,
+        "m5_tolerances: four `name value` pairs, got `{tol}`"
+    );
+    let names = ["newton_rtol", "newton_max_iter", "cg_rtol", "cg_max_iter"];
+    for (i, name) in names.iter().enumerate() {
+        assert_eq!(words[2 * i], *name, "m5_tolerances: pair {i} of `{tol}`");
+    }
+    let f = |w: &str| {
+        w.parse::<f64>()
+            .unwrap_or_else(|_| panic!("m5_tolerances: `{w}`"))
+    };
+    let u = |w: &str| {
+        w.parse::<usize>()
+            .unwrap_or_else(|_| panic!("m5_tolerances: `{w}`"))
+    };
+    assert_eq!(f(words[1]), M5_TOLERANCES.newton_rtol);
+    assert_eq!(u(words[3]), M5_TOLERANCES.newton_max_iter);
+    assert_eq!(f(words[5]), M5_TOLERANCES.cg_rtol);
+    assert_eq!(u(words[7]), M5_TOLERANCES.cg_max_iter);
+
+    // Each range and grid line equals the same-key line of STAGE6, character for character,
+    // and each range lies inside the pre-approved test A range.
+    let quantities = [
+        ("crush.area_m2", APPROVED_AREA_M2),
+        ("crush.yield_strain", APPROVED_YIELD_STRAIN),
+        ("crush.damping_ratio", APPROVED_DAMPING_RATIO),
+    ];
+    let mut points = 1usize;
+    for (q, approved) in quantities {
+        let range_key = format!("range {q}");
+        let grid_key = format!("grid {q}");
+        for key in [&range_key, &grid_key] {
+            assert_eq!(
+                frozen_line(&m5, "docs/M5-SOLVER.md", key),
+                frozen_line(&st6, "docs/STAGE6-M4-M5.md", key),
+                "{key}: M5-SOLVER differs from STAGE6"
+            );
+        }
+        let range = checked_range(&value(&range_key), &range_key, approved);
+        points *= grid_points(&value(&grid_key), &grid_key, range);
+    }
+    assert!(
+        points <= GRID_MAX_POINTS,
+        "grid has {points} points, the cap is {GRID_MAX_POINTS}"
+    );
+
+    // m5_substeps is an integer of at least 2 (the m5-step paragraph, N5 >= 2).
+    let n5 = value("m5_substeps");
+    let n5 = n5
+        .parse::<usize>()
+        .unwrap_or_else(|_| panic!("m5_substeps: `{n5}` not an integer"));
+    assert!(n5 >= 2, "m5_substeps = {n5}, N5 must be at least 2");
+}
