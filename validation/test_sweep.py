@@ -590,7 +590,9 @@ class M5Flags(unittest.TestCase):
         for bad in (text + " --substeps 10", text.replace("--substeps 10", "--substeps  10"),
                     text.replace("--substeps 10", "--substeps 10 --substeps 10"),
                     text.replace(" --substeps 10", ""), text.replace("--substeps 10", "--substeps 11"),
-                    text.replace("--substeps 10", "--substeps 100"), flags):
+                    text.replace("--substeps 10", "--substeps 100"),
+                    text.replace(" --substeps 10", "") + " --substeps 10",  # no trailing space: not the literal
+                    "--substeps 10 " + text.replace(" --substeps 10", ""), flags):
             with self.assertRaises(sweep.SweepError):
                 sweep.m5_flags(bad, 7)
 
@@ -760,6 +762,50 @@ class M5Sandbox(unittest.TestCase):
             with open(self.log, "a", encoding="utf-8", newline="") as f:  # a hand-written calibrated line
                 f.write(sweep.calibrated_line(sweep.choose(runs), self.rng, sweep.M5) + "\nfreeze_m5 = " + "a" * 40 + "\n")
             self.assertTrue(sweep.verify(self.repo, self.log, sweep.M5).startswith("calibration: FAIL run "))
+
+    def log_with(self, old, new):
+        text = sweep.read_text(self.log)
+        self.assertEqual(text.count(old), 1, old)
+        with open(self.log, "w", encoding="utf-8", newline="") as f:
+            f.write(text.replace(old, new))
+
+    def test_choose_never_picks_a_row_whose_rear_is_out_of_range(self):
+        self.full_m5_block({70: "0.5000"})
+        line = [l for l in sweep.read_text(self.log).splitlines() if l.startswith("run A m5 81 ")][0]
+        self.log_with(line, line.replace("score=none verdict=refused", "score=0.0001 verdict=FAIL"))
+        before = sweep.read_text(self.log)
+        with self.assertRaises(sweep.SweepError):
+            sweep.do_choose(self.repo, self.log, sweep.M5)
+        self.assertEqual(sweep.read_text(self.log), before)
+
+    def test_apply_refuses_a_calibrated_line_that_is_not_the_winner(self):
+        self.full_m5_block({70: "0.5000", 72: "0.6000"})
+        sweep.do_choose(self.repo, self.log, sweep.M5)
+        self.log_with("calibrated m5 70 ", "calibrated m5 72 ")
+        runs = {r[0]: r for r in sweep.log_runs(sweep.read_text(self.log), sweep.M5)}
+        # the runner-up's own values on its own line, so only the choice is wrong
+        self.log_with([l for l in sweep.read_text(self.log).splitlines() if l.startswith("calibrated m5 72 ")][0],
+                      sweep.calibrated_line(runs["72"], self.rng, sweep.M5))
+        path = os.path.join(self.repo, "scenarios", "validation_wall_m5.bsn")
+        before = sweep.read_text(path)
+        with self.assertRaises(sweep.SweepError):
+            sweep.do_apply(self.repo, self.log, sweep.M5)
+        self.assertEqual(sweep.read_text(path), before)
+
+    def test_verify_wants_exactly_one_freeze_line_right_after_the_calibrated_line(self):
+        self.full_m5_block({70: "0.5000"})
+        sweep.do_choose(self.repo, self.log, sweep.M5)
+        cal = [l for l in sweep.read_text(self.log).splitlines() if l.startswith("calibrated m5 ")][0]
+        f1, f2 = "freeze_m5 = " + "a" * 40, "freeze_m5 = " + "b" * 40
+        good = sweep.read_text(self.log)
+        for name, new in (("two after", cal + "\n" + f1 + "\n" + f2), ("one before, one after", f2 + "\n" + cal + "\n" + f1)):
+            with open(self.log, "w", encoding="utf-8", newline="") as f:
+                f.write(good.replace(cal, new))
+            self.assertNotEqual(sweep.verify(self.repo, self.log, sweep.M5), "calibration: ok", name)
+            self.assertIn("freeze_m5", sweep.verify(self.repo, self.log, sweep.M5), name)
+        with open(self.log, "w", encoding="utf-8", newline="") as f:
+            f.write(good.replace(cal, cal + "\n" + f1))
+        self.assertEqual(sweep.verify(self.repo, self.log, sweep.M5), "calibration: ok")
 
     def test_rear_outside_is_refused_without_a_run(self):
         self.full_m5_block({}, upto=80)

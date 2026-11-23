@@ -349,10 +349,11 @@ def m5_flags(text, n5):
     is not there exactly once, or if `--substeps` appears anywhere else."""
     if not isinstance(text, str):
         raise SweepError("m5_flags needs the exact text of the frozen run_flags line")
-    padded = " " + text + " "
-    if padded.count(M4_SUBSTEPS_TEXT) != 1 or text.count("--substeps") != 1:
+    # The literal ` --substeps 10 ` (both spaces) in the source text itself, no padding added: a
+    # step at the very end of the string, or with other spacing, is not there.
+    if text.count(M4_SUBSTEPS_TEXT) != 1 or text.count("--substeps") != 1:
         raise SweepError(f"frozen: run_flags does not hold `{M4_SUBSTEPS_TEXT.strip()}` exactly once")
-    return padded.replace(M4_SUBSTEPS_TEXT, f" --substeps {n5} ").split()
+    return text.replace(M4_SUBSTEPS_TEXT, f" --substeps {n5} ").split()
 
 
 def m5_substeps(m5_doc):
@@ -451,6 +452,25 @@ def check_scores_match_verdicts(runs):
             raise SweepError(f"run {r[0]}: score={r[4]} with verdict=refused")
         if r[5] == "ok" and r[4] == "none":
             raise SweepError(f"run {r[0]}: verdict=ok without a score")
+
+
+def m5_winner(text, gdoc, st6):
+    """The one place that says which m5 point wins: the log's run lines must be the grid in order,
+    each score agree with its verdict, every row's front values lie inside the ranges, and every
+    row whose front or rear stage is outside them be `score=none verdict=refused`. Returns the
+    calibrated m5 line of the lowest score among the rest (ties to the lowest index). --choose
+    writes it, --apply and --verify compare the log's calibrated line with it."""
+    rng, ratio = ranges(gdoc), strength_ratio(st6)
+    runs = log_runs(text, M5)
+    check_runs_are_grid(runs, grid(gdoc))
+    check_scores_match_verdicts(runs)
+    for r in runs:
+        for p, v in zip(PARAMS, r[1:4]):
+            if not rng[p][0] <= float(v) <= rng[p][1]:
+                raise SweepError(f"run {r[0]}: {p}={v} is outside its range")
+        if not stages_inside(tuple(float(v) for v in r[1:4]), ratio, rng) and (r[4], r[5]) != ("none", "refused"):
+            raise SweepError(f"run {r[0]}: its rear stage is outside the ranges but it is not refused")
+    return calibrated_line(choose(runs), rng, M5)
 
 
 def check_runs_are_grid(runs, pts):
@@ -612,11 +632,12 @@ def do_choose(repo=REPO, log=LOG, solver=None):
         raise SweepError("the log already has its calibrated line")
     if solver == M5 and M5_HEADER not in text.splitlines():
         raise SweepError("the log has no m5 block")
-    runs = log_runs(text, solver)
-    check_runs_are_grid(runs, grid(gdoc))
     if solver == M5:
-        check_scores_match_verdicts(runs)
-    line = calibrated_line(choose(runs), ranges(gdoc), solver)
+        line = m5_winner(text, gdoc, read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md")))
+    else:
+        runs = log_runs(text, solver)
+        check_runs_are_grid(runs, grid(gdoc))
+        line = calibrated_line(choose(runs), ranges(gdoc), solver)
     append(log, line + "\n")
     print(line)
 
@@ -724,6 +745,10 @@ def do_apply_m5(repo=REPO, log=LOG):
     if text is None:
         raise SweepError("no validation/CALIBRATION.md")
     point = calibrated_point_m5(text)
+    want = m5_winner(text, read_text(os.path.join(repo, "docs", "M5-SOLVER.md")),
+                     read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md")))
+    if [l for l in text.splitlines() if l.startswith("calibrated m5 ")] != [want]:
+        raise SweepError(f"the calibrated m5 line is not `{want}`: nothing written")
     if not stages_inside(point, s.ratio, s.rng):
         raise SweepError("the calibrated point's stages are not inside the frozen ranges")
     path = os.path.join(repo, WALL_A_M5)
@@ -784,30 +809,20 @@ def verify_m5(repo=REPO, log=LOG):
             raise SweepError("the m5 block does not follow m4's `run B node-beam` line")
         if any(l.startswith(("run A m5 ", "calibrated m5 ", "freeze_m5")) for l in lines[:hdr[0]]):
             raise SweepError("an m5 line comes before the m5 header")
-        pts, rng = grid(gdoc), ranges(gdoc)
-        runs = log_runs(text, M5)
-        check_runs_are_grid(runs, pts)
-        ratio = strength_ratio(st6)
-        check_scores_match_verdicts(runs)
-        for r in runs:
-            for p, v in zip(PARAMS, r[1:4]):
-                if not rng[p][0] <= float(v) <= rng[p][1]:
-                    raise SweepError(f"run {r[0]}: {p}={v} is outside its range")
-            if (not stages_inside(tuple(float(v) for v in r[1:4]), ratio, rng)
-                    and (r[4], r[5]) != ("none", "refused")):
-                raise SweepError(f"run {r[0]}: its rear stage is outside the ranges but it is not refused")
+        want = m5_winner(text, gdoc, st6)
         cal_at = [i for i, l in enumerate(lines) if l.startswith("calibrated m5 ")]
         if len(cal_at) != 1:
             raise SweepError(f"{len(cal_at)} calibrated m5 lines, not 1")
         last_run = max(i for i, l in enumerate(lines) if l.startswith("run A m5 "))
         if cal_at[0] < last_run:
             raise SweepError("the calibrated m5 line comes before a run line")
-        want = calibrated_line(choose(runs), rng, M5)
         if lines[cal_at[0]] != want:
             raise SweepError(f"the calibrated m5 line is not `{want}`")
         after = lines[cal_at[0] + 1:]
         if not after or not re.fullmatch(r"freeze_m5 = [0-9a-f]{40}", after[0]):
             raise SweepError("no `freeze_m5 = <40 hex>` line follows the calibrated m5 line")
+        if sum(1 for l in lines if l.startswith("freeze_m5")) != 1:
+            raise SweepError("the log must hold exactly one `freeze_m5` line, right after the calibrated m5 line")
         return "calibration: ok"
     except (SweepError, OSError, ValueError) as e:
         return f"calibration: FAIL {e}"
