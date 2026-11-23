@@ -750,6 +750,10 @@ const APPROVED_YIELD_STRAIN: (f64, f64) = (0.0010, 0.0114);
 const APPROVED_DAMPING_RATIO: (f64, f64) = (0.0, 0.15);
 /// The grid cap of docs/STAGE6-M4-M5.md (n20-06 bullet): at most 140 points.
 const GRID_MAX_POINTS: usize = 140;
+/// The approved `m5_method` value (brief t-20261123-210157, R1), whole.
+const M5_METHOD: &str = "implicit backward Euler on the node-beam model (the same beams, yield rule and contact as node-beam); per substep Newton on the backward-Euler equations with a sparse Jacobi-PCG solve of M + h C + h^2 K, a compressed beam's negative geometric term dropped; a Newton or CG cap ends the run with a named error";
+/// The approved N5: the same h as m4, so the integrator is the only difference.
+const M5_SUBSTEPS: usize = 10;
 
 /// The one line of `text` that starts `frozen: <key> = `, whole, with exactly one such line.
 fn frozen_line(text: &str, doc: &str, key: &str) -> String {
@@ -827,12 +831,8 @@ fn m5_option1_frozen_lines() {
         line[format!("frozen: {key} = ").len()..].to_string()
     };
 
-    // m5_method names the implicit method.
-    assert!(
-        value("m5_method").contains("implicit backward Euler"),
-        "m5_method: `{}`",
-        value("m5_method")
-    );
+    // m5_method is the approved text of the brief, whole.
+    assert_eq!(value("m5_method"), M5_METHOD);
 
     // m5_tolerances equals M5_TOLERANCES field by field, exact ==.
     let tol = value("m5_tolerances");
@@ -891,4 +891,8 @@ fn m5_option1_frozen_lines() {
         .parse::<usize>()
         .unwrap_or_else(|_| panic!("m5_substeps: `{n5}` not an integer"));
     assert!(n5 >= 2, "m5_substeps = {n5}, N5 must be at least 2");
+    assert_eq!(
+        n5, M5_SUBSTEPS,
+        "m5_substeps must be exactly the approved N5"
+    );
 }

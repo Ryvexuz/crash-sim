@@ -120,7 +120,7 @@ Other things that would make it wrong, each with how it would show:
 
 ## 8. The frozen numbers of m5
 
-Every line starting with the word `frozen` and a colon, in the block below, is read by `validation/sweep.py` (`--solver m5`) and checked by `docs/STAGE6-M4-M5.md` 5.2 (at least 3 such lines before the first m5 calibration run, none changed after). **Nothing else in this file starts that way, and no sentence of this file contains the flag names the 5.2 check searches for**, so that an edit of prose after calibration is not mistaken for a changed number. The numbers below are proposals made before any run; n20-11's first measurements (R15) may force a correction of N5, the ranges or the tet cap, which is a commit to this file by the orchestrator **before the first calibration run**, never after.
+Every line starting with the word `frozen` and a colon, in the block below, is to be read by `validation/sweep.py` (`--solver m5`, planned: today's sweep reads `docs/STAGE6-M4-M5.md` only) and checked by `docs/STAGE6-M4-M5.md` 5.2 (at least 3 such lines before the first m5 calibration run, none changed after). **Nothing else in this file starts that way, and no sentence of this file contains the flag names the 5.2 check searches for**, so that an edit of prose after calibration is not mistaken for a changed number. The numbers below are proposals made before any run; n20-11's first measurements (R15) may force a correction of N5, the ranges or the tet cap, which is a commit to this file by the orchestrator **before the first calibration run**, never after.
 
 ```
 frozen: m5_method = implicit backward Euler on the node-beam model (the same beams, yield rule and contact as node-beam); per substep Newton on the backward-Euler equations with a sparse Jacobi-PCG solve of M + h C + h^2 K, a compressed beam's negative geometric term dropped; a Newton or CG cap ends the run with a named error
@@ -138,7 +138,7 @@ frozen: lockup = eps_D = min(0.7, 1 - 1.4 phi_zone); phi_zone = zone_mass / (zon
 frozen: m5_max_tets = 300
 ```
 
-**Option (1), the method Lazlo chose (section 12).** The block's first nine lines are option (1)'s. They were written before any m5 run on test A: part 2 measured only the real-time factor of the solver (section 12), and its m5 run at m4's point failing test A on duration is the expected starting state, not a score used to choose anything.
+**Option (1), the method Lazlo chose (section 12).** The block's first nine lines are option (1)'s. The order was: part 2's timing runs on test A (section 12) came before this freeze, and they measured the real-time factor; the calibration grid follows the freeze. The ranges and grid are m4's lines, not chosen from any score, and the m5 run at m4's point failing test A on duration (part 2) is the expected starting state.
 
 - **Quantities.** Three, the same as m4's P1 to P3 of the front stage, with their sources: P1 `area_m2` (V9, thinnest body sheet over a 100 mm strip to thickest rail sheet over a full rail perimeter), P2 `yield_strain` (V9, yield strength over E = 210 GPa), P3 `damping_ratio` (V10). The sources are in `docs/STAGE6-M4-M5.md`, "What is calibrated, and its physical range". The rear stage and `cabin` are not calibrated here: they follow the fixed design lines of `docs/STAGE6-M4-M5.md`, read from that file, never copied into this one.
 - **Ranges and grid equal m4's, on purpose.** Same process, so the integrator is the only difference between the two solvers. Option (1)'s only possible gain is H2 (section 3), and it shows as m4's 20 step-limit refusals running, which a different range or grid would hide. The 60 grid points whose rear stage (the fixed design ratio times the front) leaves the per-stage range stay refused, as in m4.
@@ -221,7 +221,7 @@ The m4 table read against section 7 matched **W3** (the calibrated point is at i
 - **Kept, not wired:** the option (2) code already on main (`src/solver_m5.rs`, the `bsn 3` `solid`/`tet` format, `Solver::handles_solids` and `Solver::check`) is unchanged; nothing selects it from the command line.
 - **Before the m5 calibration:** `--solver` for the implicit solver with its tolerances, `Sim`'s explicit step-limit refusal made solver-aware, option (1)'s frozen lines (ranges, grid, N5) written here, the 5.1 test names for option (1) settled in `docs/STAGE6-M4-M5.md`, and the gate record (`evidence/stage-6-m5-gate.md`, the orchestrator's). No frozen line of this note changes in this task.
 - **rtf measured** (part 2, task t-20261123-202940, 2026-11-23 UTC, loaded, cpu 32% before the m5 substeps 10 group; cpu 10% before m5 substeps 2; cpu 8% before node-beam): m5 substeps 10 rtf median 8.8101 (8.8101, 8.6968, 8.8717); m5 substeps 2 median 2.9087 (2.9202, 2.9087, 2.8453); node-beam substeps 10 0.0351; node-beam substeps 2 refused. Not gated here; the cap m5_rtf_max = 10 applies at 5.4 with N5 (part 3).
-- **Option (1) frozen lines written** (part 3a, task t-20261123-210157, 2026-11-23 UTC): method, tolerances, ranges and grid equal to m4's, N5 = 10; option (2)'s constants kept for its unwired code.
+- **Option (1) frozen lines written** (part 3a, task t-20261123-210157, 2026-11-23 UTC): method implicit backward Euler with tolerances `M5_TOLERANCES`, ranges and grid equal to m4's, N5 = 10; option (2)'s constants kept for its unwired code.
 
 ## Figures from memory
 
