@@ -550,6 +550,274 @@ class Sandbox(unittest.TestCase):
         self.assertTrue(sweep.verify(self.repo, self.log).startswith("calibration: FAIL run line 1 has index 2"))
 
 
+M5_DOC_TEXT = sweep.read_text(os.path.join(REPO, "docs", "M5-SOLVER.md"))
+TIMING_OUT = "timing: sim_s=0.2000 wall_s=1.2000 rtf=6.0000\n"
+M4_B_LINE = ("run B node-beam substeps=10 freeze=" + "b" * 40 + " head=" + "c" * 40
+             + " score=0.4244 verdict=FAIL")
+
+
+class M5Flags(unittest.TestCase):
+    def test_command_is_5_4_with_only_body_changed(self):
+        # 5.4's command as the doc writes it, from `cargo run` to the redirection, with its two
+        # placeholders filled in: N5 and the run number.
+        five4 = [l for l in DOC_TEXT.splitlines()
+                 if l.startswith("`broadsword run crash-sim -- cargo run") and "validation_wall_m5.bsn" in l
+                 and "s6-5-4-<1,2,3>" in l]
+        self.assertEqual(len(five4), 1)
+        n5 = sweep.m5_substeps(M5_DOC_TEXT)
+        want = five4[0].split(" -- ", 1)[1].split(" > ")[0].replace("<N5>", str(n5)).split()
+        got = sweep.command("bs.exe", "t-1", "../x/point-001.bsn", sweep.m5_flags(sweep.run_flags(DOC_TEXT), n5),
+                            sweep.M5)
+        self.assertEqual(got[:6], ["bs.exe", "run", "crash-sim", "--task", "t-1", "--"])
+        got_rest = got[6:]
+        self.assertEqual(got_rest[got_rest.index("--body") + 1], "../x/point-001.bsn")
+        got_rest[got_rest.index("--body") + 1] = "scenarios/validation_wall_m5.bsn"
+        self.assertEqual(got_rest, want)
+        # The m4 command is not changed by the m5 option.
+        self.assertNotIn("--solver", sweep.command("bs.exe", "t-1", "x", ["--a"]))
+        self.assertNotIn("--timing", sweep.command("bs.exe", "t-1", "x", ["--a"], None))
+
+    def test_only_the_step_is_replaced_by_n5(self):
+        flags = sweep.run_flags(DOC_TEXT)
+        got = sweep.m5_flags(flags, 7)
+        i = flags.index("--substeps")
+        self.assertEqual(got[i:i + 2], ["--substeps", "7"])
+        self.assertEqual(got[:i] + got[i + 2:], flags[:i] + flags[i + 2:])
+        self.assertNotEqual(sweep.m5_flags(flags, 7), sweep.m5_flags(flags, 8))
+        for bad in (flags + ["--substeps", "10"], [f for f in flags if f != "--substeps"],
+                    " ".join(flags).replace("--substeps 10", "--substeps 11").split()):
+            with self.assertRaises(sweep.SweepError):
+                sweep.m5_flags(bad, 7)
+
+    def test_n5_is_the_frozen_line(self):
+        line = [l for l in M5_DOC_TEXT.splitlines() if l.startswith("frozen: m5_substeps = ")]
+        self.assertEqual(len(line), 1)
+        self.assertEqual(sweep.m5_substeps(M5_DOC_TEXT), int(line[0].split(" = ")[1]))
+        self.assertEqual(sweep.m5_substeps(M5_DOC_TEXT.replace("frozen: m5_substeps = 10", "frozen: m5_substeps = 7")), 7)
+        for bad in ("1", "2.5", "x"):
+            with self.assertRaises(sweep.SweepError):
+                sweep.m5_substeps(M5_DOC_TEXT.replace("frozen: m5_substeps = 10", f"frozen: m5_substeps = {bad}"))
+
+
+class M5Sandbox(unittest.TestCase):
+    """A fake Broadsword root with a fake crash-sim repo (both docs, test A's files and its _m5 wall
+    file) and a fake runner."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        with open(os.path.join(self.root, "broadsword.toml"), "w") as f:
+            f.write('install_dir = "build/bin"\nscratch_dir = "scratch"\n')
+        self.repo = os.path.join(self.root, "worktrees", "crash-sim", "t-1")
+        for d in ("docs", "scenarios", "validation"):
+            os.makedirs(os.path.join(self.repo, d))
+        for doc in ("STAGE6-M4-M5.md", "M5-SOLVER.md"):
+            shutil.copy(os.path.join(REPO, "docs", doc), os.path.join(self.repo, "docs"))
+        for rel in ("scenarios/validation_car.bsn", "scenarios/validation_wall.bsn",
+                    "scenarios/validation_wall_m5.bsn"):
+            shutil.copy(os.path.join(REPO, rel), os.path.join(self.repo, "scenarios"))
+        self.log = os.path.join(self.repo, "validation", "CALIBRATION.md")
+        self.calls = []
+        self.outputs = {}
+        self.rng, self.ratio = sweep.ranges(DOC_TEXT), sweep.strength_ratio(DOC_TEXT)
+
+    def tearDown(self):
+        shutil.rmtree(self.root)
+
+    def runner(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        name = cmd[cmd.index("--body") + 1].rsplit("/", 1)[1]  # point-007.bsn or probe-80.bsn
+        i = int(name.split("-")[1].split(".")[0])
+        return self.outputs.get(i, result(1, TIMING_OUT + FAIL_OUT.replace("2.3070", f"{2 + i / 1000:.4f}")))
+
+    def run_chunk(self, first, last, env=None):
+        sweep.do_run("t-1", first, last, env or {}, runner=self.runner, repo=self.repo, log=self.log,
+                     root_from=os.path.join(self.repo, "validation"), solver=sweep.M5)
+
+    def write_m4_block(self):
+        lines = ["calibration 1"]
+        for i, p in enumerate(sweep.grid(DOC_TEXT), start=1):
+            ok = sweep.stages_inside(p, self.ratio, self.rng)
+            lines.append(sweep.run_line(i, p, "9.0000" if ok else "none", "FAIL" if ok else "refused"))
+        runs = sweep.log_runs("\n".join(lines) + "\n")
+        lines.append(sweep.calibrated_line(sweep.choose(runs), self.rng))
+        lines.append("freeze = " + "b" * 40)
+        lines.append(M4_B_LINE)
+        with open(self.log, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def full_m5_block(self, scores, upto=140):
+        self.write_m4_block()
+        lines = [sweep.M5_HEADER]
+        for i, p in enumerate(sweep.grid(M5_DOC_TEXT)[:upto], start=1):
+            if sweep.stages_inside(p, self.ratio, self.rng):
+                lines.append(sweep.run_line(i, p, scores.get(i, "9.0000"), "FAIL", sweep.M5))
+            else:
+                lines.append(sweep.run_line(i, p, "none", "refused", sweep.M5))
+        with open(self.log, "a", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def edit_doc(self, doc, old, new):
+        path = os.path.join(self.repo, "docs", doc)
+        text = sweep.read_text(path)
+        self.assertIn(old, text)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text.replace(old, new, 1))
+
+    def header_count(self):
+        return sum(1 for l in sweep.read_text(self.log).splitlines() if l == sweep.M5_HEADER)
+
+    def test_the_block_needs_m4s_b_line_and_starts_once(self):
+        with self.assertRaises(sweep.SweepError):  # no log at all
+            self.run_chunk(1, 1)
+        self.write_m4_block()
+        self.run_chunk(1, 2)
+        self.assertEqual(self.header_count(), 1)
+        self.run_chunk(3, 3)
+        self.assertEqual(self.header_count(), 1)
+        lines = sweep.read_text(self.log).splitlines()
+        self.assertEqual(lines[lines.index(M4_B_LINE) + 1], sweep.M5_HEADER)
+        # The m4 block was not touched: it still verifies.
+        self.assertEqual(sweep.verify(self.repo, self.log), "calibration: ok")
+
+    def test_chunks_log_variants_and_command(self):
+        self.edit_doc("M5-SOLVER.md", "frozen: m5_substeps = 10", "frozen: m5_substeps = 7")
+        self.write_m4_block()
+        self.outputs[2] = result(2, REFUSED_OUT)
+        self.outputs[3] = result(0, TIMING_OUT + OK_OUT)
+        self.outputs[4] = result(1, UNSTABLE_OUT)
+        self.run_chunk(1, 4)
+        with self.assertRaises(sweep.SweepError):  # already logged
+            self.run_chunk(3, 4)
+        with self.assertRaises(sweep.SweepError):  # not the next index
+            self.run_chunk(6, 6)
+        lines = sweep.read_text(self.log).splitlines()
+        i0 = lines.index(sweep.M5_HEADER)
+        self.assertEqual(lines[i0 + 1], "run A m5 1 area_m2=0.00007 yield_strain=0.001 damping_ratio=0 "
+                                        "score=2.0010 verdict=FAIL")
+        self.assertTrue(lines[i0 + 2].endswith("score=none verdict=refused"))
+        self.assertTrue(lines[i0 + 3].endswith("score=0.8123 verdict=ok"))
+        self.assertTrue(lines[i0 + 4].endswith("damping_ratio=0.05 score=none verdict=FAIL"))
+        self.assertEqual(len(lines) - i0, 5)
+        # The variants are the _m5 wall file with only the two crush lines changed, under m5-sweep.
+        wall = sweep.read_text(os.path.join(self.repo, "scenarios", "validation_wall_m5.bsn"))
+        sweep_dir = os.path.join(self.root, "scratch", "m5-sweep", "t-1")
+        for i in range(1, 5):
+            v = sweep.read_text(os.path.join(sweep_dir, f"point-{i:03d}.bsn"))
+            d = [(a, b) for a, b in zip(wall.split("\n"), v.split("\n")) if a != b]
+            self.assertEqual(len(d), 2)
+            self.assertTrue(d[0][1].startswith("material crush_front "))
+            self.assertTrue(d[1][1].startswith("material crush_rear "))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "scratch", "m4-sweep")))
+        cmd, kw = self.calls[0]
+        self.assertEqual(cmd[cmd.index("--body") + 1], "../../../scratch/m5-sweep/t-1/point-001.bsn")
+        self.assertEqual(cmd[cmd.index("--body") + 2:cmd.index("--body") + 4], ["--solver", "m5"])
+        self.assertIn("--timing", cmd)
+        self.assertEqual(cmd[cmd.index("--substeps") + 1], "7")  # N5 comes from the doc
+        self.assertEqual(cmd[cmd.index("--pulse-report") + 1], "validation/test-a.pulse.csv")
+        self.assertEqual(kw["cwd"], self.root)
+
+    def test_grid_and_ranges_come_from_the_m5_doc_not_the_m4_one(self):
+        # Changing the m5 doc's grid changes what the m5 sweep runs; changing STAGE6's does not.
+        self.write_m4_block()
+        self.edit_doc("M5-SOLVER.md", "frozen: grid crush.damping_ratio = 0 0.01 0.025 0.05",
+                      "frozen: grid crush.damping_ratio = 0 0.05")
+        self.assertEqual(len(sweep.setup_for(self.repo, sweep.M5).pts), 70)
+        self.assertEqual(len(sweep.setup_for(self.repo, None).pts), 140)
+        self.run_chunk(1, 1)
+        with self.assertRaises(sweep.SweepError):  # the grid has 70 points
+            self.run_chunk(71, 71)
+
+    def test_rear_outside_is_refused_without_a_run(self):
+        self.full_m5_block({}, upto=80)
+        self.run_chunk(81, 82)
+        self.assertEqual(self.calls, [])
+        lines = sweep.read_text(self.log).splitlines()
+        self.assertTrue(lines[-1].startswith("run A m5 82 ") and lines[-1].endswith(" score=none verdict=refused"))
+
+    def test_refused_inside_a_job_and_without_the_m4_line(self):
+        self.write_m4_block()
+        with self.assertRaises(sweep.SweepError):
+            self.run_chunk(1, 1, {"CARGO_TARGET_DIR": "x"})
+        self.assertEqual(self.calls, [])
+        lines = [l for l in sweep.read_text(self.log).splitlines() if not l.startswith("run B node-beam ")]
+        with open(self.log, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+        with self.assertRaises(sweep.SweepError):
+            self.run_chunk(1, 1)
+
+    def test_choose_apply_verify_m5(self):
+        self.full_m5_block({70: "0.5000", 72: "0.5000"})
+        self.assertTrue(sweep.verify(self.repo, self.log, sweep.M5).startswith("calibration: FAIL 0 calibrated m5 lines"))
+        sweep.do_choose(self.repo, self.log, sweep.M5)
+        lines = sweep.read_text(self.log).splitlines()
+        p70 = sweep.grid(M5_DOC_TEXT)[69]
+        self.assertEqual(lines[-1], "calibrated m5 70 area_m2={} yield_strain={} damping_ratio={} score=0.5000"
+                         .format(*(sweep.fmt(v) for v in p70)) + (" edge" if sweep.is_edge(p70, self.rng) else ""))
+        with self.assertRaises(sweep.SweepError):
+            sweep.do_choose(self.repo, self.log, sweep.M5)
+        with self.assertRaises(sweep.SweepError):
+            self.run_chunk(141, 141)
+        self.assertEqual(sweep.verify(self.repo, self.log, sweep.M5),
+                         "calibration: FAIL no `freeze_m5 = <40 hex>` line follows the calibrated m5 line")
+        before = {r: sweep.read_text(os.path.join(self.repo, r)) for r in
+                  ("scenarios/validation_car.bsn", "scenarios/validation_wall.bsn")}
+        m5_before = sweep.read_text(os.path.join(self.repo, "scenarios", "validation_wall_m5.bsn"))
+        sweep.do_apply(self.repo, self.log, sweep.M5)
+        for r, text in before.items():  # test A's node-beam files are not touched
+            self.assertEqual(sweep.read_text(os.path.join(self.repo, r)), text)
+        applied = sweep.read_text(os.path.join(self.repo, "scenarios", "validation_wall_m5.bsn"))
+        self.assertEqual(applied, sweep.with_crush(m5_before, p70, 210e9, 4.0, self.rng))
+        self.assertNotEqual(applied, m5_before)
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write("freeze_m5 = " + "a" * 40 + "\n")
+        self.assertEqual(sweep.verify(self.repo, self.log, sweep.M5), "calibration: ok")
+        self.assertEqual(sweep.verify(self.repo, self.log), "calibration: ok")  # m4's block still verifies
+
+    def test_verify_m5_catches_a_wrong_choice_and_a_reordered_grid(self):
+        self.full_m5_block({70: "0.5000", 72: "0.6000"})
+        sweep.do_choose(self.repo, self.log, sweep.M5)
+        text = sweep.read_text(self.log)
+        wrong = text.replace("calibrated m5 70 ", "calibrated m5 72 ")
+        with open(self.log, "w", encoding="utf-8", newline="") as f:
+            f.write(wrong + "freeze_m5 = " + "a" * 40 + "\n")
+        self.assertIn("the calibrated m5 line is not", sweep.verify(self.repo, self.log, sweep.M5))
+        lines = text.splitlines()
+        i = lines.index(sweep.M5_HEADER)
+        lines[i + 1], lines[i + 2] = lines[i + 2], lines[i + 1]
+        with open(self.log, "w", encoding="utf-8", newline="") as f:
+            f.write("\n".join(lines) + "\nfreeze_m5 = " + "a" * 40 + "\n")
+        self.assertIn("run line 1 has index 2", sweep.verify(self.repo, self.log, sweep.M5))
+
+    def test_probe_runs_once_and_logs_nothing(self):
+        self.write_m4_block()
+        before = sweep.read_text(self.log)
+        self.outputs[80] = result(0, TIMING_OUT + OK_OUT)
+        here = os.path.join(self.repo, "validation")
+        rtf = sweep.do_probe("t-1", 80, {}, runner=self.runner, repo=self.repo, root_from=here)
+        self.assertEqual(rtf, 6.0)
+        self.assertEqual(sweep.read_text(self.log), before)
+        self.assertEqual(len(self.calls), 1)
+        cmd = self.calls[0][0]
+        self.assertEqual(cmd[cmd.index("--body") + 1], "../../../scratch/m5-sweep/t-1/probe-80.bsn")
+        self.assertIn("--timing", cmd)
+        d = os.path.join(self.root, "scratch", "m5-sweep", "t-1")
+        self.assertTrue(os.path.exists(os.path.join(d, "probe-80.bsn")))
+        self.assertIn("rtf=6.0000", sweep.read_text(os.path.join(d, "probe-80.txt")))
+        with self.assertRaises(sweep.SweepError):  # a refused point has no run to probe
+            sweep.do_probe("t-1", 81, {}, runner=self.runner, repo=self.repo, root_from=here)
+        with self.assertRaises(sweep.SweepError):
+            sweep.do_probe("t-1", 80, {"CARGO_TARGET_DIR": "x"}, runner=self.runner, repo=self.repo, root_from=here)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_solver_option_is_m5_only(self):
+        for argv in (["sweep.py", "--solver", "m4", "--verify"], ["sweep.py", "--solver"],
+                     ["sweep.py", "--solver", "m5", "--solver", "m5", "--verify"]):
+            self.assertEqual(sweep.main(argv, {}), 2)
+        # A deviation is m4's: m5 has none (orchestrator decision of 2026-11-23).
+        self.assertEqual(sweep.main(["sweep.py", "--solver", "m5", "--record-deviation", "--score-from", "x",
+                                     "--note", "y"], {}), 2)
+
+
 class NoOtherTest(unittest.TestCase):
     def test_the_other_test_is_never_named(self):
         for name in ("sweep.py", "test_sweep.py"):

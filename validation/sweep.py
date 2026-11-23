@@ -27,7 +27,18 @@ rear would leave the frozen ranges is logged `refused` without a run.
         Check 4.3: the log is the grid in order, inside the ranges, the calibrated line follows the
         rule, and a `freeze =` line follows it. Last line `calibration: ok` or `calibration: FAIL ...`.
 
-Ranges, grid, E and the run flags are read from docs/STAGE6-M4-M5.md's `frozen:` lines, never
+    --solver m5 (n20-11c, option (1)) with --run, --choose, --apply and --verify does the same for the
+        implicit solver: variants of scenarios/validation_wall_m5.bsn under <scratch_dir>/m5-sweep/<task id>/,
+        the command `--body <variant> --solver m5 --timing --pulse-report ...` with the run flags'
+        ` --substeps 10 ` replaced by N5; its block (`calibration m5 1`, `run A m5 <i> ...`,
+        `calibrated m5 <i> ...`, then `freeze_m5 = <40 hex>`) follows m4's `run B node-beam` line.
+        --apply writes the calibrated point into validation_wall_m5.bsn only. There is no m5 deviation.
+    python -I -B validation/sweep.py --solver m5 --probe <i> --task <task id>
+        Runs grid point i's m5 variant once with --timing (output in <scratch_dir>/m5-sweep/<task id>/
+        probe-<i>.txt, rtf printed); logs nothing.
+
+Ranges and grid (m5: the `frozen:` lines of docs/M5-SOLVER.md, N5 = `frozen: m5_substeps` too), E,
+the strength ratio and the run flags are read from the docs' `frozen:` lines, never
 copied here. The script refuses to start inside a Broadsword job (nested runs deadlock the build
 lock), and finds the Broadsword root by walking up from its own path to the folder holding
 broadsword.toml. It runs test A only; it opens no other test's files.
@@ -39,6 +50,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import types
 from decimal import Decimal
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,12 +67,32 @@ PROJECT = "crash-sim"
 SWEEP_DIR = "m4-sweep"
 PARAMS = ("area_m2", "yield_strain", "damping_ratio")
 
-RUN_RE = re.compile(
-    r"^run A node-beam (\d+) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
-    r"score=(\d+\.\d{4}|none) verdict=(ok|FAIL|refused)$"
-)
+# The m5 option (1) calibration (docs/STAGE6-M4-M5.md n20-11c): the same grid on test A with the
+# implicit solver. Its ranges, grid and N5 are the `frozen:` lines of docs/M5-SOLVER.md; its wall
+# file is the `_m5` copy; its block follows m4's `run B node-beam` line in the log.
+M5 = "m5"
+M5_DOC = os.path.join(REPO, "docs", "M5-SOLVER.md")
+WALL_A_M5 = "scenarios/validation_wall_m5.bsn"
+SWEEP_DIR_M5 = "m5-sweep"
+M5_HEADER = "calibration m5 1"
+M4_SUBSTEPS_TEXT = " --substeps 10 "  # the frozen run_flags' step, the one thing m5 replaces (by N5)
+LABEL = {None: "node-beam", M5: "m5"}
+
+
+def _run_re(label):
+    return re.compile(
+        rf"^run A {re.escape(label)} (\d+) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
+        r"score=(\d+\.\d{4}|none) verdict=(ok|FAIL|refused)$"
+    )
+
+
+RUN_RE = _run_re("node-beam")
 CAL_RE = re.compile(
     r"^calibrated node-beam (\d+|deviation) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
+    r"score=(\d+\.\d{4})( edge)?$"
+)
+CAL_RE_M5 = re.compile(
+    r"^calibrated m5 (\d+) area_m2=(\S+) yield_strain=(\S+) damping_ratio=(\S+) "
     r"score=(\d+\.\d{4})( edge)?$"
 )
 # A recorded deviation (orchestrator decision of 2026-11-22, docs/STAGE6-M4-M5.md, "Calibration
@@ -285,7 +317,7 @@ def broadsword_root(start):
         d = parent
 
 
-def broadsword_paths(root):
+def broadsword_paths(root, sweep_dir_name=SWEEP_DIR):
     """(broadsword binary, sweep folder) from broadsword.toml's install_dir and scratch_dir."""
     with open(os.path.join(root, "broadsword.toml"), "rb") as f:
         cfg = tomllib.load(f)
@@ -294,13 +326,33 @@ def broadsword_paths(root):
             raise SweepError(f"broadsword.toml has no `{key}`")
     exe = "broadsword.exe" if os.name == "nt" else "broadsword"
     return (os.path.join(root, cfg["install_dir"], exe),
-            os.path.join(root, cfg["scratch_dir"], SWEEP_DIR))
+            os.path.join(root, cfg["scratch_dir"], sweep_dir_name))
 
 
-def command(exe, task, body_rel, flags):
-    """The 4.4 command, run in the task's worktree, with only `--body` changed."""
+def command(exe, task, body_rel, flags, solver=None):
+    """The 4.4 command, run in the task's worktree, with only `--body` changed. With the m5 solver
+    the flags are the frozen string with N5 for the step (`m5_flags`) and `--solver m5 --timing`
+    come right after `--body <file>`, as 5.4 writes them."""
+    extra = ["--solver", M5, "--timing"] if solver == M5 else []
     return [exe, "run", PROJECT, "--task", task, "--", "cargo", "run", "--offline", "--release",
-            "--", "--body", body_rel, "--pulse-report", PULSE_A] + flags
+            "--", "--body", body_rel] + extra + ["--pulse-report", PULSE_A] + flags
+
+
+def m5_flags(flags, n5):
+    """The frozen run flags with ` --substeps 10 ` replaced by ` --substeps <N5> `, nothing else
+    changed; refused if that text is not there exactly once."""
+    text = " " + " ".join(flags) + " "
+    if text.count(M4_SUBSTEPS_TEXT) != 1:
+        raise SweepError(f"frozen: run_flags does not hold `{M4_SUBSTEPS_TEXT.strip()}` exactly once")
+    return text.replace(M4_SUBSTEPS_TEXT, f" --substeps {n5} ").split()
+
+
+def m5_substeps(m5_doc):
+    """N5, the `frozen: m5_substeps` line of docs/M5-SOLVER.md: one integer of at least 2."""
+    v = frozen_numbers(m5_doc, "m5_substeps")
+    if len(v) != 1 or v[0] != int(v[0]) or v[0] < 2:
+        raise SweepError(f"frozen: m5_substeps is not one integer >= 2: {v}")
+    return int(v[0])
 
 
 def outcome(code, out):
@@ -335,9 +387,9 @@ def outcome(code, out):
     raise SweepError(f"not a sim result (exit {code}, {verdict or 'no run: line'}); see the output file")
 
 
-def run_line(index, point, score, verdict):
+def run_line(index, point, score, verdict, solver=None):
     a, y, z = (fmt(v) for v in point)
-    return (f"run A node-beam {index} area_m2={a} yield_strain={y} damping_ratio={z} "
+    return (f"run A {LABEL[solver]} {index} area_m2={a} yield_strain={y} damping_ratio={z} "
             f"score={score} verdict={verdict}")
 
 
@@ -355,12 +407,14 @@ def read_log(path):
         return f.read()
 
 
-def log_runs(text):
-    """The parsed `run A node-beam` lines of the log, in order."""
+def log_runs(text, solver=None):
+    """The parsed `run A node-beam` (or, for m5, `run A m5`) lines of the log, in order."""
     out = []
+    label = LABEL[solver]
+    run_re = _run_re(label)
     for l in text.splitlines():
-        if l.startswith("run A node-beam "):
-            m = RUN_RE.match(l)
+        if l.startswith(f"run A {label} "):
+            m = run_re.match(l)
             if not m:
                 raise SweepError(f"a malformed run line: {l}")
             out.append(m.groups())
@@ -392,10 +446,10 @@ def check_runs_are_grid(runs, pts):
             raise SweepError(f"run line {i} is not grid point {i}")
 
 
-def calibrated_line(run, rng):
+def calibrated_line(run, rng, solver=None):
     point = tuple(float(v) for v in run[1:4])
     edge = " edge" if is_edge(point, rng) else ""
-    return (f"calibrated node-beam {run[0]} area_m2={run[1]} yield_strain={run[2]} "
+    return (f"calibrated {LABEL[solver]} {run[0]} area_m2={run[1]} yield_strain={run[2]} "
             f"damping_ratio={run[3]} score={run[4]}{edge}")
 
 
@@ -406,78 +460,150 @@ def append(path, text):
 
 # ---------------------------------------------------------------- the four commands
 
-def do_run(task, first, last, env, runner=subprocess.run, repo=REPO, log=LOG, root_from=HERE):
+def setup_for(repo, solver):
+    """Everything a run needs, read from the docs' `frozen:` lines: the grid's ranges and points
+    (m4: docs/STAGE6-M4-M5.md; m5: docs/M5-SOLVER.md), the run flags (m5: with N5 for the step),
+    E, the strength ratio, and the test A wall file the variants are made from."""
+    st6 = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
+    steel_e = frozen_numbers(st6, "steel_E_pa")
+    if len(steel_e) != 1:
+        raise SweepError("frozen: steel_E_pa is not one number")
+    flags = run_flags(st6)
+    if solver == M5:
+        gdoc = read_text(os.path.join(repo, "docs", "M5-SOLVER.md"))
+        flags = m5_flags(flags, m5_substeps(gdoc))
+        wall_rel, dir_name = WALL_A_M5, SWEEP_DIR_M5
+    else:
+        gdoc, wall_rel, dir_name = st6, WALL_A, SWEEP_DIR
+    return types.SimpleNamespace(pts=grid(gdoc), rng=ranges(gdoc), flags=flags, steel_e=steel_e[0],
+                                 ratio=strength_ratio(st6), wall_rel=wall_rel, dir_name=dir_name)
+
+
+def write_variant(s, repo, sweep_dir, name, point):
+    """Writes the wall file's variant for a grid point under the sweep folder; returns its path
+    relative to the repo, as `--body` takes it."""
+    with open(os.path.join(repo, s.wall_rel), encoding="utf-8", newline="") as f:
+        wall = f.read()
+    os.makedirs(sweep_dir, exist_ok=True)
+    body = os.path.join(sweep_dir, name)
+    with open(body, "w", encoding="utf-8", newline="") as f:
+        f.write(with_crush(wall, point, s.steel_e, s.ratio, s.rng))
+    return os.path.relpath(body, repo).replace(os.sep, "/")
+
+
+def start_m5_block(text):
+    """Appends nothing: says whether the m5 block may start, i.e. m4's `run B node-beam` line is
+    in the log and the m5 header is not yet."""
+    lines = text.splitlines() if text is not None else []
+    if M5_HEADER in lines:
+        return False
+    if sum(1 for l in lines if l.startswith("run B node-beam ")) != 1:
+        raise SweepError("the m5 block follows m4's `run B node-beam` line, and the log has none (or two)")
+    return True
+
+
+def do_run(task, first, last, env, runner=subprocess.run, repo=REPO, log=LOG, root_from=HERE, solver=None):
     if in_job(env):
         raise SweepError("refusing to start inside a Broadsword job (CARGO_TARGET_DIR or BROADSWORD_JOB "
                          "is set): run the sweep from a plain shell; it starts its own jobs")
     root = broadsword_root(root_from)
-    exe, sweep_base = broadsword_paths(root)
+    s = setup_for(repo, solver)
+    exe, sweep_base = broadsword_paths(root, s.dir_name)
     sweep_dir = os.path.join(sweep_base, task)  # one folder per task: an earlier try's files are never mixed in
-    doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
-    pts = grid(doc)
-    flags = run_flags(doc)
-    steel_e = frozen_numbers(doc, "steel_E_pa")
-    if len(steel_e) != 1:
-        raise SweepError("frozen: steel_E_pa is not one number")
-    ratio = strength_ratio(doc)
-    rng = ranges(doc)
+    pts, rng, ratio, label = s.pts, s.rng, s.ratio, LABEL[solver]
     if not 1 <= first <= last <= len(pts):
         raise SweepError(f"--from {first} --to {last} is not inside 1..{len(pts)}")
     text = read_log(log)
     done = 0
+    new_block = text is None
+    if solver == M5:
+        new_block = start_m5_block(text)
     if text is not None:
-        if any(l.startswith("calibrated ") for l in text.splitlines()):
+        if any(l.startswith(f"calibrated {label} ") for l in text.splitlines()):
             raise SweepError("the log already has its calibrated line")
-        runs = log_runs(text)
+        runs = log_runs(text, solver)
         check_runs_are_grid(runs, pts[:len(runs)])
         done = len(runs)
     if first != done + 1:
         raise SweepError(f"the log has {done} points, so the next chunk starts at {done + 1}, not {first}")
-    with open(os.path.join(repo, WALL_A), encoding="utf-8", newline="") as f:
-        wall = f.read()
-    os.makedirs(sweep_dir, exist_ok=True)
-    if text is None:
-        append(log, "calibration 1\n")
+    if new_block:
+        append(log, (M5_HEADER if solver == M5 else "calibration 1") + "\n")
     for i in range(first, last + 1):
         p = pts[i - 1]
         if not stages_inside(p, ratio, rng):
             # The rear stage (ratio x the front's P1) would leave its range: refused, not run.
-            line = run_line(i, p, "none", "refused")
+            line = run_line(i, p, "none", "refused", solver)
             append(log, line + "\n")
             print(line, flush=True)
             continue
-        body = os.path.join(sweep_dir, f"point-{i:03d}.bsn")
-        with open(body, "w", encoding="utf-8", newline="") as f:
-            f.write(with_crush(wall, p, steel_e[0], ratio, rng))
-        rel = os.path.relpath(body, repo).replace(os.sep, "/")
-        cmd = command(exe, task, rel, flags)
+        rel = write_variant(s, repo, sweep_dir, f"point-{i:03d}.bsn", p)
+        cmd = command(exe, task, rel, s.flags, solver)
         res = runner(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                      stdin=subprocess.DEVNULL)
         out = res.stdout.decode("utf-8", "replace")
         with open(os.path.join(sweep_dir, f"point-{i:03d}.txt"), "w", encoding="utf-8") as f:
             f.write(out)
         score, verdict = outcome(res.returncode, out)
-        line = run_line(i, p, score, verdict)
+        line = run_line(i, p, score, verdict, solver)
         append(log, line + "\n")
         print(line, flush=True)
 
 
-def do_choose(repo=REPO, log=LOG):
-    doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
+def rtf_of(out):
+    """The `rtf=` of the `timing:` line of a run's output, or None."""
+    found = [l for l in out.splitlines() if l.startswith("timing: ")]
+    if len(found) != 1:
+        return None
+    m = re.search(r" rtf=([0-9.]+)$", found[0])
+    return float(m.group(1)) if m else None
+
+
+def do_probe(task, index, env, runner=subprocess.run, repo=REPO, root_from=HERE):
+    """R15: one grid point's m5 variant, run once with `--timing`, its whole output kept at
+    <scratch>/m5-sweep/<task>/probe-<index>.txt. Nothing is logged and the score is not used."""
+    if in_job(env):
+        raise SweepError("refusing to start inside a Broadsword job (CARGO_TARGET_DIR or BROADSWORD_JOB "
+                         "is set): run the sweep from a plain shell; it starts its own jobs")
+    root = broadsword_root(root_from)
+    s = setup_for(repo, M5)
+    exe, sweep_base = broadsword_paths(root, s.dir_name)
+    sweep_dir = os.path.join(sweep_base, task)
+    if not 1 <= index <= len(s.pts):
+        raise SweepError(f"--probe {index} is not inside 1..{len(s.pts)}")
+    p = s.pts[index - 1]
+    if not stages_inside(p, s.ratio, s.rng):
+        raise SweepError(f"grid point {index}: its rear stage is outside the ranges (a refused point)")
+    rel = write_variant(s, repo, sweep_dir, f"probe-{index}.bsn", p)
+    res = runner(command(exe, task, rel, s.flags, M5), cwd=root, stdout=subprocess.PIPE,
+                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    out = res.stdout.decode("utf-8", "replace")
+    with open(os.path.join(sweep_dir, f"probe-{index}.txt"), "w", encoding="utf-8") as f:
+        f.write(out)
+    rtf = rtf_of(out)
+    line = f"probe {index} exit={res.returncode} rtf={'none' if rtf is None else rtf}"
+    print(line, flush=True)
+    return rtf
+
+
+def do_choose(repo=REPO, log=LOG, solver=None):
+    gdoc = read_text(os.path.join(repo, "docs", "M5-SOLVER.md" if solver == M5 else "STAGE6-M4-M5.md"))
     text = read_log(log)
     if text is None:
         raise SweepError("no validation/CALIBRATION.md")
-    if any(l.startswith("calibrated ") for l in text.splitlines()):
+    label = LABEL[solver]
+    if any(l.startswith(f"calibrated {label} ") for l in text.splitlines()):
         raise SweepError("the log already has its calibrated line")
-    runs = log_runs(text)
-    check_runs_are_grid(runs, grid(doc))
-    line = calibrated_line(choose(runs), ranges(doc))
+    if solver == M5 and M5_HEADER not in text.splitlines():
+        raise SweepError("the log has no m5 block")
+    runs = log_runs(text, solver)
+    check_runs_are_grid(runs, grid(gdoc))
+    line = calibrated_line(choose(runs), ranges(gdoc), solver)
     append(log, line + "\n")
     print(line)
 
 
 def calibrated_point(text):
-    cal = [CAL_RE.match(l) for l in text.splitlines() if l.startswith("calibrated ")]
+    cal = [CAL_RE.match(l) for l in text.splitlines() if l.startswith("calibrated node-beam ")]
     if len(cal) != 1 or cal[0] is None:
         raise SweepError("the log needs exactly one well-formed calibrated line")
     if cal[0].group(1) == "deviation":
@@ -554,7 +680,7 @@ def do_record_deviation(score_file, note, repo=REPO, log=LOG):
     text = read_log(log)
     if text is None:
         raise SweepError("no validation/CALIBRATION.md")
-    if any(l.startswith(("calibrated ", "grid_best ", DEVIATION_PREFIX)) for l in text.splitlines()):
+    if any(l.startswith(("calibrated node-beam ", "grid_best ", DEVIATION_PREFIX)) for l in text.splitlines()):
         raise SweepError("the log already has a calibrated, grid_best or deviation line")
     runs = log_runs(text)
     check_runs_are_grid(runs, grid(doc))
@@ -564,7 +690,34 @@ def do_record_deviation(score_file, note, repo=REPO, log=LOG):
     print("\n".join(out))
 
 
-def do_apply(repo=REPO, log=LOG):
+def calibrated_point_m5(text):
+    cal = [CAL_RE_M5.match(l) for l in text.splitlines() if l.startswith("calibrated m5 ")]
+    if len(cal) != 1 or cal[0] is None:
+        raise SweepError("the log needs exactly one well-formed calibrated m5 line")
+    return tuple(float(v) for v in cal[0].groups()[1:4])
+
+
+def do_apply_m5(repo=REPO, log=LOG):
+    """Writes the calibrated m5 point into the two crush lines of `validation_wall_m5.bsn` only,
+    each stage computed from that file's own L_c and m_c, the rear by the frozen ratio."""
+    s = setup_for(repo, M5)
+    text = read_log(log)
+    if text is None:
+        raise SweepError("no validation/CALIBRATION.md")
+    point = calibrated_point_m5(text)
+    if not stages_inside(point, s.ratio, s.rng):
+        raise SweepError("the calibrated point's stages are not inside the frozen ranges")
+    path = os.path.join(repo, WALL_A_M5)
+    new = with_crush(read_text(path), point, s.steel_e, s.ratio, s.rng)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(new)
+    for stage in STAGES:
+        print(f"{WALL_A_M5}: {[l for l in new.splitlines() if l.startswith(f'material {stage} ')][0]}")
+
+
+def do_apply(repo=REPO, log=LOG, solver=None):
+    if solver == M5:
+        return do_apply_m5(repo, log)
     doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
     steel_e = frozen_numbers(doc, "steel_E_pa")[0]
     ratio = strength_ratio(doc)
@@ -594,8 +747,56 @@ def do_apply(repo=REPO, log=LOG):
             print(f"{car}: {[l for l in c.splitlines() if l.startswith(f'material {stage} ')][0]}")
 
 
-def verify(repo=REPO, log=LOG):
+def verify_m5(repo=REPO, log=LOG):
+    """Check 5.3: the m5 block follows m4's `run B node-beam` line and is the grid in order, inside
+    the ranges, with the calibrated m5 line the lowest score, then a `freeze_m5 = <40 hex>` line.
+    Returns the last line to print."""
+    try:
+        gdoc = read_text(os.path.join(repo, "docs", "M5-SOLVER.md"))
+        st6 = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
+        text = read_log(log)
+        if text is None:
+            raise SweepError("no validation/CALIBRATION.md")
+        lines = text.splitlines()
+        hdr = [i for i, l in enumerate(lines) if l == M5_HEADER]
+        if len(hdr) != 1:
+            raise SweepError(f"{len(hdr)} `{M5_HEADER}` lines, not 1")
+        if not any(l.startswith("run B node-beam ") for l in lines[:hdr[0]]):
+            raise SweepError("the m5 block does not follow m4's `run B node-beam` line")
+        if any(l.startswith(("run A m5 ", "calibrated m5 ", "freeze_m5")) for l in lines[:hdr[0]]):
+            raise SweepError("an m5 line comes before the m5 header")
+        pts, rng = grid(gdoc), ranges(gdoc)
+        runs = log_runs(text, M5)
+        check_runs_are_grid(runs, pts)
+        ratio = strength_ratio(st6)
+        for r in runs:
+            for p, v in zip(PARAMS, r[1:4]):
+                if not rng[p][0] <= float(v) <= rng[p][1]:
+                    raise SweepError(f"run {r[0]}: {p}={v} is outside its range")
+            if (not stages_inside(tuple(float(v) for v in r[1:4]), ratio, rng)
+                    and (r[4], r[5]) != ("none", "refused")):
+                raise SweepError(f"run {r[0]}: its rear stage is outside the ranges but it is not refused")
+        cal_at = [i for i, l in enumerate(lines) if l.startswith("calibrated m5 ")]
+        if len(cal_at) != 1:
+            raise SweepError(f"{len(cal_at)} calibrated m5 lines, not 1")
+        last_run = max(i for i, l in enumerate(lines) if l.startswith("run A m5 "))
+        if cal_at[0] < last_run:
+            raise SweepError("the calibrated m5 line comes before a run line")
+        want = calibrated_line(choose(runs), rng, M5)
+        if lines[cal_at[0]] != want:
+            raise SweepError(f"the calibrated m5 line is not `{want}`")
+        after = lines[cal_at[0] + 1:]
+        if not after or not re.fullmatch(r"freeze_m5 = [0-9a-f]{40}", after[0]):
+            raise SweepError("no `freeze_m5 = <40 hex>` line follows the calibrated m5 line")
+        return "calibration: ok"
+    except (SweepError, OSError, ValueError) as e:
+        return f"calibration: FAIL {e}"
+
+
+def verify(repo=REPO, log=LOG, solver=None):
     """Check 4.3. Returns the last line to print."""
+    if solver == M5:
+        return verify_m5(repo, log)
     try:
         doc = read_text(os.path.join(repo, "docs", "STAGE6-M4-M5.md"))
         text = read_log(log)
@@ -615,7 +816,7 @@ def verify(repo=REPO, log=LOG):
             if (not stages_inside(tuple(float(v) for v in r[1:4]), ratio, rng)
                     and (r[4], r[5]) != ("none", "refused")):
                 raise SweepError(f"run {r[0]}: its rear stage is outside the ranges but it is not refused")
-        cal_at = [i for i, l in enumerate(lines) if l.startswith("calibrated ")]
+        cal_at = [i for i, l in enumerate(lines) if l.startswith("calibrated node-beam ")]
         if len(cal_at) != 1:
             raise SweepError(f"{len(cal_at)} calibrated lines, not 1")
         last_run = max(i for i, l in enumerate(lines) if l.startswith("run A node-beam "))
@@ -653,22 +854,32 @@ def verify(repo=REPO, log=LOG):
 
 def main(argv, env):
     args = argv[1:]
+    solver = None
+    if "--solver" in args:
+        i = args.index("--solver")
+        if args[i + 1:i + 2] != [M5] or "--solver" in args[i + 2:]:
+            print("sweep: --solver takes `m5` (once); without it the m4 sweep runs", file=sys.stderr)
+            return 2
+        solver, args = M5, args[:i] + args[i + 2:]
     try:
         if args == ["--verify"]:
-            line = verify()
+            line = verify(solver=solver)
             print(line)
             return 0 if line == "calibration: ok" else 1
         if args == ["--choose"]:
-            do_choose()
+            do_choose(solver=solver)
             return 0
         if args == ["--apply"]:
-            do_apply()
+            do_apply(solver=solver)
             return 0
-        if len(args) == 5 and args[0] == "--record-deviation" and args[1] == "--score-from" and args[3] == "--note":
+        if solver == M5 and len(args) == 4 and args[0] == "--probe" and args[2] == "--task":
+            do_probe(args[3], int(args[1]), env)
+            return 0
+        if solver is None and len(args) == 5 and args[0] == "--record-deviation" and args[1] == "--score-from" and args[3] == "--note":
             do_record_deviation(args[2], args[4])
             return 0
         if len(args) == 7 and args[0] == "--run" and args[1] == "--task" and args[3] == "--from" and args[5] == "--to":
-            do_run(args[2], int(args[4]), int(args[6]), env)
+            do_run(args[2], int(args[4]), int(args[6]), env, solver=solver)
             return 0
     except SweepError as e:
         print(f"sweep: {e}", file=sys.stderr)
@@ -676,8 +887,9 @@ def main(argv, env):
     except ValueError as e:
         print(f"sweep: {e}", file=sys.stderr)
         return 2
-    print("usage: sweep.py --run --task <id> --from <i> --to <j> | --choose | --apply | --verify"
-          " | --record-deviation --score-from <4.4 output> --note <reason>", file=sys.stderr)
+    print("usage: sweep.py [--solver m5] --run --task <id> --from <i> --to <j> | --choose | --apply | --verify"
+          " | --solver m5 --probe <i> --task <id>"
+          " | --record-deviation --score-from <4.4 output> --note <reason> (m4 only)", file=sys.stderr)
     return 2
 
 
