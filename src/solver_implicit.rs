@@ -56,6 +56,16 @@ pub struct Tolerances {
     pub cg_max_iter: usize,
 }
 
+/// The tolerances of `--pulse-report --solver m5`: the values part 1's reviewed tests use
+/// (tests/solver_implicit.rs, task t-20261122-195241). Fixed by the part 2 brief
+/// (t-20261123-202940): a run that fails on a Newton or CG cap is reported, not retuned.
+pub const M5_TOLERANCES: Tolerances = Tolerances {
+    newton_rtol: 1e-10,
+    newton_max_iter: 50,
+    cg_rtol: 1e-12,
+    cg_max_iter: 2_000,
+};
+
 /// Counts of the work done, for timing and for the tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -340,6 +350,11 @@ impl Solver for ImplicitEuler {
 
     fn step_with_forces(&mut self, s: State<'_>, extra: &[Vec3], h: f64) {
         self.step_inner(s, Some(extra), h);
+    }
+
+    /// Backward Euler integrates the beams implicitly: `Sim`'s step limit leaves them out.
+    fn explicit_beams(&self) -> bool {
+        false
     }
 
     fn check(&self) -> Option<String> {

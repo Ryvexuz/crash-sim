@@ -10,6 +10,7 @@ use std::process::exit;
 
 use crash_sim::input::{self, DriveParams, DriveRun, Script};
 use crash_sim::settle::{self, CarSetup, SettleParams};
+use crash_sim::solver_implicit::{ImplicitEuler, M5_TOLERANCES};
 use crash_sim::track::{format_seconds, LapEvent, LapTimer, Track};
 use crash_sim::vec3::Vec3;
 use crash_sim::{collide, pulse, reference, Body, Sim};
@@ -50,7 +51,7 @@ fn usage() -> ! {
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
     eprintln!("       crash-sim --body <file.bsn> [--input <file> [--drive-report ...]] --settle-report ... --crumple-report --crumple-groups <from>,<to> --crumple-min <m> --crumple-max <m> --crumple-drift <m>");
-    eprintln!("       crash-sim --body <file.bsn> --pulse-report <ref>.pulse.csv --duration <s> --dt <s> --substeps <n> --gravity <m/s^2> --pulse-sensor <group> --pulse-crush-groups <a>,<b> --pulse-cfc-shape <cfc> --pulse-cfc-int <cfc> --pulse-window <s> --pulse-threshold <m/s^2> --pulse-crush-tail <s> --setup-mass-tol <f> --setup-speed-tol <f> --margin-dv <f> --margin-peak <f> --margin-peak-time <s> --margin-duration <f> --margin-olc <f> --margin-static-crush <f> [--pulse-csv <path>] [--timing] [--solver node-beam]   (docs/STAGE6-M4-M5.md, \"The pulse report\")");
+    eprintln!("       crash-sim --body <file.bsn> --pulse-report <ref>.pulse.csv --duration <s> --dt <s> --substeps <n> --gravity <m/s^2> --pulse-sensor <group> --pulse-crush-groups <a>,<b> --pulse-cfc-shape <cfc> --pulse-cfc-int <cfc> --pulse-window <s> --pulse-threshold <m/s^2> --pulse-crush-tail <s> --setup-mass-tol <f> --setup-speed-tol <f> --margin-dv <f> --margin-peak <f> --margin-peak-time <s> --margin-duration <f> --margin-olc <f> --margin-static-crush <f> [--pulse-csv <path>] [--timing] [--solver node-beam|m5]   (docs/STAGE6-M4-M5.md, \"The pulse report\")");
     exit(2)
 }
 
@@ -910,11 +911,21 @@ fn run_car(a: &CarArgs) -> i32 {
 /// run is refused (exit 2) instead of exhausting memory. 5 million is 500 s at h = 0.1 ms.
 const PULSE_MAX_SUBSTEPS: u64 = 5_000_000;
 
+/// The solver of a pulse report (`--solver`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PulseSolver {
+    /// `node-beam` or no `--solver`: `SymplecticEuler` through `Sim::from_car`, as before.
+    NodeBeam,
+    /// `m5`: `solver_implicit::ImplicitEuler` with `M5_TOLERANCES` (docs/M5-SOLVER.md option (1)).
+    M5,
+}
+
 /// The checked flags of a pulse report. Every number is finite; see `pulse_params`.
 struct PulseParams {
     ref_path: String,
     csv: Option<String>,
     timing: bool,
+    solver: PulseSolver,
     sensor: String,
     crush: (String, String),
     cfc_shape: f64,
@@ -940,11 +951,16 @@ fn pulse_params(f: &PulseFlags, ref_path: String) -> Result<PulseParams, String>
             "--pulse-report {ref_path}: the reference must be a path ending in .pulse.csv (its .meta is read beside it)"
         ));
     }
-    if let Some(s) = &f.solver {
-        if s != "node-beam" {
-            return Err(format!("--solver {s}: only `node-beam` is available here"));
+    // The complete rule, exact and case-sensitive: absent or `node-beam`, or `m5`.
+    let solver = match f.solver.as_deref() {
+        None | Some("node-beam") => PulseSolver::NodeBeam,
+        Some("m5") => PulseSolver::M5,
+        Some(s) => {
+            return Err(format!(
+                "--solver {s}: accepted values are node-beam (default) and m5"
+            ))
         }
-    }
+    };
     fn need<T: Clone>(v: &Option<T>, flag: &str) -> Result<T, String> {
         v.clone()
             .ok_or_else(|| format!("--pulse-report needs {flag}"))
@@ -963,6 +979,7 @@ fn pulse_params(f: &PulseFlags, ref_path: String) -> Result<PulseParams, String>
         ref_path,
         csv: f.csv.clone(),
         timing: f.timing,
+        solver,
         sensor: need(&f.sensor, "--pulse-sensor")?,
         crush: need(&f.crush, "--pulse-crush-groups")?,
         cfc_shape: number(&f.cfc_shape, "--pulse-cfc-shape", 0.0, false)?,
@@ -1238,7 +1255,13 @@ fn pulse_report(cfg: &Config, body: &Body, p: &PulseParams) -> Result<PulseOutco
     // The sim, built with the real config (so every refusal is the usual one), then stepped one
     // substep at a time: with dt = h and one substep, `advance` is exactly one substep of the
     // same length h (`cfg` is public).
-    let mut sim = crash_sim::Sim::from_car(cfg.clone(), body)?;
+    let mut sim = match p.solver {
+        PulseSolver::NodeBeam => crash_sim::Sim::from_car(cfg.clone(), body)?,
+        PulseSolver::M5 => {
+            let solver = ImplicitEuler::new(M5_TOLERANCES)?;
+            crash_sim::Sim::from_car_with_solver(cfg.clone(), body, Box::new(solver))?
+        }
+    };
     sim.cfg.dt = h;
     sim.cfg.substeps = 1;
     let wheel_mass: f64 = sim

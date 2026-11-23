@@ -148,6 +148,25 @@ pub struct Sim {
     pub(super) extra_scratch: Vec<Vec3>,
 }
 
+/// The step-limit refusal of every body sim (`Sim::build_from_body`, with and without wheels):
+/// the one place the explicit limit is applied or relaxed. For a solver that integrates the
+/// beams explicitly (`Solver::explicit_beams`, true by default) it is exactly
+/// `solver::step_error_with` with the beams (with no extra masses and elements that is
+/// `solver::body_step_error`, which `Config::validate_body` applies). For an implicit beam
+/// solver the beams leave the bound; the extra masses and elements (the wheels, suspension and
+/// tyres, integrated explicitly by the vehicle code) stay in it with the same node masses.
+fn step_limit_error(
+    solver: &dyn Solver,
+    h: f64,
+    beams: &[Beam],
+    mass: &[f64],
+    extra_mass: &[f64],
+    elements: &[solver::LimitElement],
+) -> Option<String> {
+    let beams = if solver.explicit_beams() { beams } else { &[] };
+    solver::step_error_with(h, beams, mass, extra_mass, elements)
+}
+
 /// The cube's start positions, beams and node masses for `cfg`.
 pub(super) fn build_cube(cfg: &Config) -> (Vec<Vec3>, Vec<Beam>, Vec<f64>) {
     let e = cfg.edge;
@@ -266,8 +285,11 @@ impl Sim {
             planes.push(Plane::from_format(p)?);
         }
         let built = body.build();
+        // The finite-number checks come first on every path, for every solver.
+        cfg.validate_numbers()?;
+        let h = cfg.dt / cfg.substeps as f64;
+        let (beams, mass) = (&built.beams, &built.mass);
         let car = if with_wheels && !body.wheels.is_empty() {
-            cfg.validate_numbers()?;
             let car = vehicle::Car::new(
                 body,
                 &built.pos,
@@ -277,16 +299,17 @@ impl Sim {
                 cfg.gravity,
             )?;
             let (extra_mass, elements) = car.limit_elements(built.mass.len());
-            let h = cfg.dt / cfg.substeps as f64;
-            let (beams, mass) = (&built.beams, &built.mass);
-            if let Some(e) = solver::step_error_with(h, beams, mass, &extra_mass, &elements) {
+            let limit = step_limit_error(&*solver, h, beams, mass, &extra_mass, &elements);
+            if let Some(e) = limit {
                 return Err(format!(
                     "{e} (the chassis with its wheels, suspension and tyres)"
                 ));
             }
             Some(car)
         } else {
-            cfg.validate_body(&built.beams, &built.mass)?;
+            if let Some(e) = step_limit_error(&*solver, h, beams, mass, &[], &[]) {
+                return Err(e);
+            }
             None
         };
         let yield_strain: Vec<Option<f64>> = body

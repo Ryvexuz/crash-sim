@@ -751,10 +751,10 @@ fn pulse_report_refusals_are_exit_2_with_empty_stdout() {
         "gravity >= 0",
     );
     refuse(
-        "solver other than node-beam",
+        "solver other than node-beam and m5",
         &flags,
-        &["--solver", "m5"],
-        "--solver m5",
+        &["--solver", "implicit"],
+        "crash-sim: --solver implicit: accepted values are node-beam (default) and m5",
     );
     refuse(
         "--summary",
@@ -980,4 +980,145 @@ fn gravity_zero_is_accepted_and_bad_gravity_is_refused() {
             "validate_body, gravity {bad}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// `--solver` (task t-20261123-202940): `node-beam` (default) or `m5`, the implicit solver.
+
+/// The first stderr line of a refused `--solver` value.
+fn solver_refusal(value: &str) -> String {
+    format!("crash-sim: --solver {value}: accepted values are node-beam (default) and m5\n")
+}
+
+/// The box body with beams 5000 times stiffer (k = 1e8 N/m): the explicit step limit is then
+/// about 43 us, so the default h = 0.1 ms is refused for node-beam and h = 10 us is accepted.
+fn stiff_box() -> String {
+    let text = box_bsn(10.0, 2.1, 1.0);
+    let stiff = text.replacen("stiffness 20000 damping", "stiffness 100000000 damping", 1);
+    assert_ne!(stiff, text);
+    stiff
+}
+
+#[test]
+fn pulse_solver_values() {
+    let c = default_case("solver_values");
+    let flags = report_flags(&c);
+    // The complete rule: exact, case-sensitive; anything else is a usage error.
+    for v in ["M5", "implicit", "", "node-beam,m5", "Node-Beam", " m5", "m5 "] {
+        let o = run_flags(&flags, &["--solver", v]);
+        assert_eq!(o.status.code(), Some(2), "--solver {v:?}: {}", stderr(&o));
+        assert_eq!(stdout(&o), "", "--solver {v:?}: stdout");
+        assert!(
+            stderr(&o).starts_with(&solver_refusal(v)),
+            "--solver {v:?}: stderr {}",
+            stderr(&o)
+        );
+    }
+    // Repeated: the last one wins.
+    let o = run_flags(&flags, &["--solver", "M5", "--solver", "m5"]);
+    assert!(
+        o.status.code().is_some_and(|c| c <= 1) && stdout(&o).contains("pulse_score="),
+        "last --solver m5 must run: {}",
+        stderr(&o)
+    );
+    let o = run_flags(&flags, &["--solver", "m5", "--solver", "M5"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(stdout(&o), "");
+    assert!(stderr(&o).starts_with(&solver_refusal("M5")), "{}", stderr(&o));
+    // Outside --pulse-report, --solver is refused as before.
+    let body = vec![("--body".to_string(), c.body.to_str().unwrap().to_string())];
+    let o = run_flags(&body, &["--solver", "m5"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(stdout(&o), "");
+    assert!(
+        stderr(&o).starts_with("--pulse-csv, --timing, --solver and the --pulse-*, --setup-* and --margin-* flags need --pulse-report\n"),
+        "{}",
+        stderr(&o)
+    );
+    // A body with tets: m5 is a node-beam solver, so the existing tet rule refuses it, with the
+    // same message as node-beam.
+    let tets = box_bsn(10.0, 2.1, 1.0)
+        .replacen("bsn 1\n", "bsn 3\n", 1)
+        .replacen(
+            "yield_strain 0.02\n",
+            "yield_strain 0.02\nsolid s plateau_stress 1000000 yield_strain 0.02 damping_ratio 0.01\n",
+            1,
+        )
+        .replacen("group rear", "tet 0 4 2 1 s\ngroup rear", 1);
+    let ct = case("solver_tets", &tets, &ref_csv(400.0), &meta_text(12.0, 36.0, None));
+    let tflags = report_flags(&ct);
+    let m5 = run_flags(&tflags, &["--solver", "m5"]);
+    let nb = run_flags(&tflags, &["--solver", "node-beam"]);
+    for (name, o) in [("m5", &m5), ("node-beam", &nb)] {
+        assert_eq!(o.status.code(), Some(2), "{name}: {}", stderr(o));
+        assert_eq!(stdout(o), "", "{name}");
+        assert_eq!(
+            stderr(o),
+            "crash-sim: the body has 1 tets, which this solver does not simulate (they would be dropped): tets are simulated by `solver_m5::SolverM5` (docs/PHYSICS.md, \"Solids\")\n",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn pulse_solver_node_beam_is_the_default() {
+    let c = default_case("solver_default");
+    let flags = report_flags(&c);
+    let plain = run_flags(&flags, &[]);
+    let named = run_flags(&flags, &["--solver", "node-beam"]);
+    assert!(plain.status.code().is_some_and(|c| c <= 1), "{}", stderr(&plain));
+    assert!(stdout(&plain).contains("pulse_score="), "{}", stdout(&plain));
+    assert_eq!(named.status.code(), plain.status.code());
+    assert_eq!(named.stdout, plain.stdout, "stdout bytes");
+    assert_eq!(named.stderr, plain.stderr, "stderr bytes");
+}
+
+#[test]
+fn pulse_solver_m5_runs_above_explicit_limit() {
+    let c = case(
+        "solver_m5_above",
+        &stiff_box(),
+        &ref_csv(400.0),
+        &meta_text(12.0, 36.0, Some(0.05)),
+    );
+    let flags = report_flags(&c); // --dt 0.001 --substeps 10: h = 0.1 ms
+    // node-beam (named or by default) is refused by the explicit limit, same bytes either way.
+    let nb = run_flags(&flags, &["--solver", "node-beam"]);
+    let plain = run_flags(&flags, &[]);
+    assert_eq!(nb.status.code(), Some(2), "{}", stderr(&nb));
+    assert_eq!(stdout(&nb), "");
+    assert!(
+        stderr(&nb).starts_with("crash-sim: physics step h = dt/substeps = 0.000100 s reaches the body's stability limit "),
+        "{}",
+        stderr(&nb)
+    );
+    assert_eq!(plain.status.code(), Some(2));
+    assert_eq!(plain.stdout, nb.stdout);
+    assert_eq!(plain.stderr, nb.stderr);
+    // m5 runs at the same step: a report, exit 0 or 1, with a score.
+    let m5 = run_flags(&flags, &["--solver", "m5"]);
+    let out = stdout(&m5);
+    assert!(
+        m5.status.code().is_some_and(|c| c <= 1),
+        "m5: exit {:?}, stderr {}\n{out}",
+        m5.status.code(),
+        stderr(&m5)
+    );
+    assert!(
+        out.lines().any(|l| l.starts_with("pulse_score=")),
+        "m5: no pulse_score line:\n{out}"
+    );
+    // At a step both accept (h = 10 us), both run and m5 is a different integrator.
+    let fine = with(&flags, "--substeps", "100");
+    let nb = run_flags(&fine, &["--solver", "node-beam"]);
+    let m5 = run_flags(&fine, &["--solver", "m5"]);
+    for (name, o) in [("node-beam", &nb), ("m5", &m5)] {
+        assert!(
+            o.status.code().is_some_and(|c| c <= 1) && stdout(o).contains("pulse_score="),
+            "{name} at h = 10 us: exit {:?}, stderr {}",
+            o.status.code(),
+            stderr(o)
+        );
+    }
+    assert_ne!(nb.stdout, m5.stdout, "m5 gave node-beam's report: not the implicit solver");
 }

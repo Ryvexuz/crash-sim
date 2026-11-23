@@ -2,17 +2,13 @@
 //! option (1)): it matches the explicit step at small h, stays stable above the explicit step
 //! limit (H2), plugs in through the `Solver` trait, is deterministic and fails closed.
 
-use crash_sim::solver::{body_step_error, gershgorin_step_limit, Solver, State, SymplecticEuler};
-use crash_sim::solver_implicit::{ImplicitEuler, Tolerances};
+use crash_sim::solver::{
+    body_step_error, gershgorin_step_limit, step_error_with, Solver, State, SymplecticEuler,
+};
+use crash_sim::solver_implicit::{ImplicitEuler, Tolerances, M5_TOLERANCES};
+use crash_sim::solver_m5::SolverM5;
 use crash_sim::vec3::Vec3;
 use crash_sim::*;
-
-const TOL: Tolerances = Tolerances {
-    newton_rtol: 1e-10,
-    newton_max_iter: 50,
-    cg_rtol: 1e-12,
-    cg_max_iter: 2_000,
-};
 
 /// A free body: a regular tetrahedron of four 1 kg nodes, all six pairs joined by beams of
 /// stiffness k, no damping, gravity 0. It starts strained (node 3 pulled out by 2 % of the
@@ -116,7 +112,7 @@ fn implicit(tol: Tolerances) -> ImplicitEuler {
 fn gap(h: f64, t_end: f64) -> (f64, f64) {
     let (mut a, mut b) = (tetra(1.0e4, 0.0), tetra(1.0e4, 0.0));
     let start = a.pos.clone();
-    let (mut ie, mut se) = (implicit(TOL), SymplecticEuler::default());
+    let (mut ie, mut se) = (implicit(M5_TOLERANCES), SymplecticEuler::default());
     let steps = (t_end / h).round() as usize;
     let mut worst: f64 = 0.0;
     let mut moved: f64 = 0.0;
@@ -173,7 +169,7 @@ fn implicit_free_fall_is_exact_backward_euler() {
         beams: vec![],
         mass: vec![2.0, 0.5],
     };
-    let mut s = implicit(TOL);
+    let mut s = implicit(M5_TOLERANCES);
     let h = 1e-3;
     for _ in 0..100 {
         let (p0, v0) = (b.pos.clone(), b.vel.clone());
@@ -218,7 +214,7 @@ fn implicit_is_stable_above_the_explicit_step_limit() {
     );
 
     let mut b = tetra(k, 0.0);
-    let mut s = implicit(TOL);
+    let mut s = implicit(M5_TOLERANCES);
     for n in 0..2_000 {
         step(&mut s, &mut b, 0.0, h);
         assert_eq!(s.check(), None, "implicit step {n} failed");
@@ -241,7 +237,7 @@ fn implicit_solver_plugs_in() {
         ..Config::default()
     };
     let steps = (cfg.duration / cfg.dt).round() as u64;
-    let mut sim = Sim::with_solver(cfg.clone(), Box::new(implicit(TOL)));
+    let mut sim = Sim::with_solver(cfg.clone(), Box::new(implicit(M5_TOLERANCES)));
     let mut reference = Sim::new(cfg);
     let (mut a, mut b) = (vec![sim.sample()], vec![reference.sample()]);
     for _ in 0..steps {
@@ -276,7 +272,7 @@ fn implicit_solver_plugs_in() {
 fn implicit_same_input_same_bytes() {
     let run = || {
         let mut b = tetra(1.0e6, 3.0);
-        let mut s = implicit(TOL);
+        let mut s = implicit(M5_TOLERANCES);
         let h = 4e-3;
         for _ in 0..300 {
             step(&mut s, &mut b, 9.81, h);
@@ -335,7 +331,7 @@ fn implicit_newton_cap_fails_closed() {
     let h = 5.0 * gershgorin_step_limit(4, &b.beams, &b.mass);
     let mut s = implicit(Tolerances {
         newton_max_iter: 1,
-        ..TOL
+        ..M5_TOLERANCES
     });
     let err = fails_closed(&mut s, &mut b, h);
     assert!(
@@ -350,7 +346,7 @@ fn implicit_cg_cap_fails_closed() {
     let h = 5.0 * gershgorin_step_limit(4, &b.beams, &b.mass);
     let mut s = implicit(Tolerances {
         cg_max_iter: 1,
-        ..TOL
+        ..M5_TOLERANCES
     });
     let err = fails_closed(&mut s, &mut b, h);
     assert!(
@@ -365,7 +361,7 @@ fn implicit_cg_cap_fails_closed() {
 fn implicit_nan_node_fails_closed() {
     let mut b = tetra(1.0e4, 0.0);
     b.pos[2].y = f64::NAN;
-    let mut s = implicit(TOL);
+    let mut s = implicit(M5_TOLERANCES);
     let (p0, v0) = (b.pos.clone(), b.vel.clone());
     step(&mut s, &mut b, 0.0, 1e-3);
     let err = s.check().expect("a NaN node must fail");
@@ -385,56 +381,56 @@ fn implicit_refuses_bad_tolerances() {
         (
             Tolerances {
                 newton_rtol: 0.0,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "newton_rtol",
         ),
         (
             Tolerances {
                 newton_rtol: -1e-9,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "newton_rtol",
         ),
         (
             Tolerances {
                 newton_rtol: f64::NAN,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "newton_rtol",
         ),
         (
             Tolerances {
                 newton_rtol: f64::INFINITY,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "newton_rtol",
         ),
         (
             Tolerances {
                 cg_rtol: 0.0,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "cg_rtol",
         ),
         (
             Tolerances {
                 cg_rtol: f64::NAN,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "cg_rtol",
         ),
         (
             Tolerances {
                 newton_max_iter: 0,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "newton_max_iter",
         ),
         (
             Tolerances {
                 cg_max_iter: 0,
-                ..TOL
+                ..M5_TOLERANCES
             },
             "cg_max_iter",
         ),
@@ -443,7 +439,7 @@ fn implicit_refuses_bad_tolerances() {
         let err = ImplicitEuler::new(t).expect_err(name);
         assert!(err.contains(name), "{err}");
     }
-    assert_eq!(implicit(TOL).tolerances(), TOL);
+    assert_eq!(implicit(M5_TOLERANCES).tolerances(), M5_TOLERANCES);
 }
 
 #[test]
@@ -454,7 +450,7 @@ fn implicit_keeps_matrix_positive_under_compression() {
     let mut b = compressed_chain(20, 1.0e7);
     let h = 5.0 * gershgorin_step_limit(20, &b.beams, &b.mass);
     let e0 = energy(&b);
-    let mut s = implicit(TOL);
+    let mut s = implicit(M5_TOLERANCES);
     for n in 0..200 {
         step(&mut s, &mut b, 0.0, h);
         assert_eq!(s.check(), None, "step {n}");
@@ -487,7 +483,7 @@ fn implicit_solves_a_slightly_strained_stiff_beam() {
     };
     let u = b.pos[1].x - 1.0; // the stretch as stored
     let w = -h * k * u / (0.5 + h * h * k);
-    let mut s = implicit(TOL);
+    let mut s = implicit(M5_TOLERANCES);
     step(&mut s, &mut b, 0.0, h);
     assert_eq!(s.check(), None);
     let got = b.vel[1].x - b.vel[0].x;
@@ -497,4 +493,218 @@ fn implicit_solves_a_slightly_strained_stiff_beam() {
         "relative velocity {got} vs backward Euler {w}"
     );
     assert!(s.stats().newton_iters >= 1);
+}
+
+// ---------------------------------------------------------------------------------------
+// The solver-aware step limit of `Sim` (task t-20261123-202940, R3): `Solver::explicit_beams`.
+
+/// The suffix `Sim` adds to the step-limit error of a body with wheels.
+const CAR_SUFFIX: &str = " (the chassis with its wheels, suspension and tyres)";
+
+/// A `.bsn` body (`crash_sim::Body`; this file's own `Body` is the bare solver state).
+fn bsn(text: &str) -> crash_sim::Body {
+    crash_sim::format::parse(text).expect("a valid body")
+}
+
+/// A 2 x 2 x 2 cube of 1 kg nodes, lowest face at y = 0.5 m, every node pair joined by a stiff
+/// beam (k = 1e6 N/m, c = 1 N s/m). No wheels and no tets.
+fn stiff_cube() -> crash_sim::Body {
+    let mut s = String::from("bsn 1\nmaterial m stiffness 1000000 damping 1\n");
+    for i in 0..8 {
+        let (x, y, z) = (i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        s.push_str(&format!("node {i} {x} {} {z} mass 1\n", f64::from(y) + 0.5));
+    }
+    for a in 0..8 {
+        for b in a + 1..8 {
+            s.push_str(&format!("beam {a} {b} m\n"));
+        }
+    }
+    bsn(&s)
+}
+
+/// scenarios/car_basic.bsn: a body with wheels.
+fn car_basic() -> crash_sim::Body {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/scenarios/car_basic.bsn");
+    bsn(&std::fs::read_to_string(path).expect("scenarios/car_basic.bsn"))
+}
+
+/// A config whose physics step dt / substeps is `h` (to rounding), with dt >= `MIN_DT`, and the
+/// step it really gives.
+fn cfg_at(h: f64, gravity: f64) -> (Config, f64) {
+    let substeps = (MIN_DT / h).ceil().max(1.0) as u32;
+    let cfg = Config {
+        duration: 1.0,
+        dt: h * f64::from(substeps),
+        substeps,
+        gravity,
+        ..Config::default()
+    };
+    let h_eff = cfg.dt / cfg.substeps as f64;
+    assert!(cfg.dt >= MIN_DT && (h_eff - h).abs() <= 1e-12 * h, "cfg for h = {h}");
+    (cfg, h_eff)
+}
+
+/// The step at which `refused` turns true, by bisection (the bounds are monotone in h).
+fn limit_of(refused: impl Fn(f64) -> bool) -> f64 {
+    let (mut lo, mut hi) = (1e-9, 1.0);
+    assert!(!refused(lo) && refused(hi), "the limit is not between {lo} and {hi}");
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if refused(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// The car's chassis beams and node masses and its wheel extras, as `Sim::from_car` builds them.
+struct CarLimit {
+    beams: Vec<Beam>,
+    mass: Vec<f64>,
+    extra_mass: Vec<f64>,
+    elements: Vec<crash_sim::solver::LimitElement>,
+}
+
+fn car_limit(body: &crash_sim::Body) -> CarLimit {
+    let built = body.build();
+    let car = crash_sim::vehicle::Car::new(
+        body,
+        &built.pos,
+        &built.vel,
+        &built.mass,
+        1 + body.planes.len(),
+        9.81,
+    )
+    .expect("the car is valid");
+    let (extra_mass, elements) = car.limit_elements(built.mass.len());
+    CarLimit {
+        beams: built.beams,
+        mass: built.mass,
+        extra_mass,
+        elements,
+    }
+}
+
+/// A solver that does not override `explicit_beams`: it must get the default, the strict side.
+struct DefaultSolver(SymplecticEuler);
+
+impl Solver for DefaultSolver {
+    fn step(&mut self, s: State<'_>, h: f64) {
+        self.0.step(s, h);
+    }
+}
+
+fn err_of(r: Result<Sim, String>) -> String {
+    match r {
+        Ok(_) => panic!("the sim was built; a refusal was expected"),
+        Err(e) => e,
+    }
+}
+
+#[test]
+fn implicit_sim_runs_above_explicit_beam_limit() {
+    let body = stiff_cube();
+    let built = body.build();
+    let limit = gershgorin_step_limit(built.mass.len(), &built.beams, &built.mass);
+    let (cfg, h) = cfg_at(5.0 * limit, 9.81);
+    let expected = body_step_error(h, &built.beams, &built.mass)
+        .expect("the explicit check refuses 5 x its limit");
+
+    // Explicit: refused with exactly `body_step_error`'s text, by both body constructors.
+    let se = Sim::from_body_with_solver(cfg.clone(), &body, Box::new(SymplecticEuler::default()));
+    assert_eq!(err_of(se), expected);
+    assert_eq!(err_of(Sim::from_body(cfg.clone(), &body)), expected);
+
+    // Implicit: built, and 200 substeps stay finite and valid (it falls 0.5 m onto the ground).
+    let ie = Box::new(implicit(M5_TOLERANCES));
+    let mut sim = Sim::from_body_with_solver(cfg.clone(), &body, ie).expect("implicit is accepted");
+    let start = sim.pos.clone();
+    let mut done = 0;
+    while done < 200 {
+        sim.advance();
+        done += cfg.substeps;
+        sim.check().expect("the implicit run stays valid");
+    }
+    assert!(sim.pos.iter().chain(&sim.vel).all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()));
+    assert!(sim.first_contact_s.is_some(), "the body never reached the ground");
+    let moved = sim.pos.iter().zip(&start).map(|(p, q)| (*p - *q).length()).fold(0.0, f64::max);
+    assert!(moved > 0.1, "the body barely moved: {moved}");
+    // The same through `from_car_with_solver` (a body without wheels is `from_body`'s sim).
+    let ie = Box::new(implicit(M5_TOLERANCES));
+    assert!(Sim::from_car_with_solver(cfg, &body, ie).is_ok());
+}
+
+#[test]
+fn explicit_step_limit_unchanged() {
+    // Body path: SymplecticEuler, SolverM5 and a solver with the default are all refused with
+    // exactly `body_step_error`'s text, by `from_body_with_solver` and `from_car_with_solver`.
+    let body = stiff_cube();
+    let built = body.build();
+    let limit = gershgorin_step_limit(built.mass.len(), &built.beams, &built.mass);
+    let (cfg, h) = cfg_at(5.0 * limit, 9.81);
+    let expected = body_step_error(h, &built.beams, &built.mass).expect("refused");
+    let solvers = |b: &crash_sim::Body, small_h: f64| -> Vec<(&str, Box<dyn Solver>)> {
+        vec![
+            ("SymplecticEuler", Box::new(SymplecticEuler::default())),
+            ("SolverM5", Box::new(SolverM5::from_body(b, small_h).expect("m5 at a small h"))),
+            ("default", Box::new(DefaultSolver(SymplecticEuler::default()))),
+        ]
+    };
+    for (name, s) in solvers(&body, 0.1 * limit) {
+        assert!(s.explicit_beams(), "{name}");
+        let got = err_of(Sim::from_body_with_solver(cfg.clone(), &body, s));
+        assert_eq!(got, expected, "{name}, from_body_with_solver");
+    }
+    for (name, s) in solvers(&body, 0.1 * limit) {
+        let got = err_of(Sim::from_car_with_solver(cfg.clone(), &body, s));
+        assert_eq!(got, expected, "{name}, from_car_with_solver");
+    }
+    // Just below the limit all three are accepted (the refusal above is the limit, not a solver).
+    let (below, _) = cfg_at(0.9 * limit, 9.81);
+    for (name, s) in solvers(&body, 0.1 * limit) {
+        assert!(Sim::from_body_with_solver(below.clone(), &body, s).is_ok(), "{name}");
+    }
+
+    // Car path: refused with `step_error_with` over the beams and the wheels, plus the suffix.
+    let car = car_basic();
+    let cl = car_limit(&car);
+    let all = |h: f64| step_error_with(h, &cl.beams, &cl.mass, &cl.extra_mass, &cl.elements);
+    let l_all = limit_of(|h| all(h).is_some());
+    let (cfg, h) = cfg_at(2.0 * l_all, 9.81);
+    let expected = format!("{}{CAR_SUFFIX}", all(h).expect("refused"));
+    for (name, s) in solvers(&car, 0.1 * l_all) {
+        let got = err_of(Sim::from_car_with_solver(cfg.clone(), &car, s));
+        assert_eq!(got, expected, "{name}, car");
+    }
+    assert_eq!(err_of(Sim::from_car(cfg, &car)), expected);
+}
+
+#[test]
+fn implicit_car_keeps_wheel_limit() {
+    let car = car_basic();
+    let cl = car_limit(&car);
+    let all = |h: f64| step_error_with(h, &cl.beams, &cl.mass, &cl.extra_mass, &cl.elements);
+    let wheels = |h: f64| step_error_with(h, &[], &cl.mass, &cl.extra_mass, &cl.elements);
+    let l_all = limit_of(|h| all(h).is_some());
+    let l_wheels = limit_of(|h| wheels(h).is_some());
+    assert!(
+        l_wheels > 2.0 * l_all,
+        "car_basic's beams must bind the explicit limit: with beams {l_all} s, wheels only {l_wheels} s"
+    );
+
+    // Between the two limits: implicit accepted, explicit refused.
+    let (cfg, h) = cfg_at((l_all * l_wheels).sqrt(), 9.81);
+    assert!(all(h).is_some() && wheels(h).is_none());
+    let ie = Box::new(implicit(M5_TOLERANCES));
+    assert!(Sim::from_car_with_solver(cfg.clone(), &car, ie).is_ok(), "implicit at {h} s");
+    let expected = format!("{}{CAR_SUFFIX}", all(h).unwrap());
+    assert_eq!(err_of(Sim::from_car(cfg, &car)), expected);
+
+    // Above the wheel limit: implicit refused with today's wheel message (no beams in it).
+    let (cfg, h) = cfg_at(1.5 * l_wheels, 9.81);
+    let expected = format!("{}{CAR_SUFFIX}", wheels(h).expect("refused"));
+    let ie = Box::new(implicit(M5_TOLERANCES));
+    assert_eq!(err_of(Sim::from_car_with_solver(cfg, &car, ie)), expected);
 }

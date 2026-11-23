@@ -44,6 +44,16 @@ pub trait Solver {
         false
     }
 
+    /// True if this solver integrates the beams explicitly, so `Sim` holds the step below the
+    /// explicit beam limit (`step_error_with` with the beams). Only an implicit beam solver
+    /// (`solver_implicit::ImplicitEuler`) returns false: then the beams leave the bound, and the
+    /// wheels, suspension and tyres, which the vehicle code integrates explicitly, stay in it.
+    /// The default is true, the strict side: a solver that does not say otherwise is held to
+    /// the explicit limit.
+    fn explicit_beams(&self) -> bool {
+        true
+    }
+
     /// The first error this solver found in its own working data (for the m5 solver: an
     /// inverted or collapsed tet, or an exceeded stiffness bound), or None. `Sim::check` returns
     /// it, so the run ends like it does on a beam strain. The default is None: a solver that
