@@ -464,6 +464,13 @@ Milestone 5 is done when 5.1 to 5.4, 5.5a, 5.5, 5.5b and 5.6 pass on crash-sim m
 
 What guards against tuning to the test in milestone 5: the same process, metrics and test B as m4, frozen before m5's calibration starts (5.2, 5.3); m5's B run is exactly one started job on a clean checkout of a freeze commit on main, checked against its own checkpoint (5.5a, 5.5b); node-beam's number is m4's single B run, so it cannot be made worse after the fact; a gain must exceed both solvers' step-size noise; a gain bought on one metric at the cost of another fails; and a run-time cap stops brute force from counting as fidelity.
 
+**Independent Astra review (m5 option (1) part 3a, task t-20261123-210157).** Recorded under Lazlo's standing orders of 2026-11-22 04:47:49Z and S4 (2026-11-23 00:07Z, `state/standing-orders.md`): a design-value change inside the stage rules and pre-approved ranges is approved by an independent Astra high review, and the verdict and quote go next to the change. The change is the 13 option (1) frozen lines in `docs/M5-SOLVER.md` section 8 (ranges and grid equal to m4's lines, N5 = 10, method implicit backward Euler, tolerances `M5_TOLERANCES`) and their test `m5_option1_frozen_lines`. The reviewer did not work on the change.
+
+- **Model and effort:** gpt-6.2-astra, effort high, via `codex exec` on the ChatGPT plan (no per-call charge; 6.1 Astra returned 404 at step 8).
+- **Round 1: FAIL** (`scratch/m5p3a-astra/answer.md`, 28,626 tokens, 79 s). Three blocking points (an order claim in section 8, an N5 test that accepted 11, a method test that only matched a substring) and two minor. Quote: "I found no evidence of score-based tuning."
+- **Round 2: FAIL** (`scratch/m5p3a-astra/answer-r2.md`, 17,551 tokens, 17 s). One remaining wording point at section 8. Quote: "The other four round-1 findings are resolved."
+- **Round 3: PASS** (`scratch/m5p3a-astra/answer-r3.md`, 12,413 tokens, 11 s). Quote: "the round 2 finding is resolved without affecting the frozen values".
+
 ## Who builds what
 
 | Check | Brief(s) |
