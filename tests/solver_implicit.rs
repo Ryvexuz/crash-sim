@@ -293,6 +293,51 @@ fn implicit_same_input_same_bytes() {
     assert_eq!(sa, sb);
 }
 
+#[test]
+fn implicit_creates_no_energy() {
+    // A free, undamped, gravity-free tetrahedron, strained 1e-3 (node 3 stretched, node 2
+    // sheared) and carrying a rigid velocity. Backward Euler is dissipative, so total energy
+    // may never rise above its start by more than 1e-6 relative (the allowance for Newton's
+    // 1e-10 tolerance and the beam energy being non-convex at strain 1e-3), and the internal
+    // forces sum to zero, so total linear momentum stays within 1e-9 of its scale. Angular
+    // momentum is not exactly conserved by backward Euler and is not asserted.
+    let rigid = Vec3::new(0.3, 0.1, -0.2);
+    let start = || {
+        let mut b = tetra(1.0e4, 0.0);
+        let rest = tetra(1.0e4, 0.0);
+        b.pos[3] = rest.pos[3] * (1.001 / 1.02);
+        b.pos[2] = rest.pos[2] + Vec3::new(1.0e-3, 0.0, 0.0);
+        b.vel = vec![rigid; 4];
+        b
+    };
+    let probe = start();
+    let limit = gershgorin_step_limit(4, &probe.beams, &probe.mass);
+    let e0 = energy(&probe);
+    assert!(e0 > 0.0);
+    let scale = probe.mass.iter().sum::<f64>() * rigid.length();
+    let momentum = |b: &Body| (0..4).fold(Vec3::ZERO, |p, i| p + b.vel[i] * b.mass[i]);
+    let p0 = momentum(&probe);
+    for factor in [0.1, 5.0] {
+        let h = factor * limit;
+        let mut b = start();
+        let mut s = implicit(M5_TOLERANCES);
+        for n in 0..2_000 {
+            step(&mut s, &mut b, 0.0, h);
+            assert_eq!(s.check(), None, "h = {factor} x limit, substep {n} failed");
+            let e = energy(&b);
+            assert!(
+                e <= e0 * (1.0 + 1e-6),
+                "h = {factor} x limit: energy rose at substep {n}: {e} > {e0}"
+            );
+            let dp = (momentum(&b) - p0).length();
+            assert!(
+                dp <= 1e-9 * scale,
+                "h = {factor} x limit: momentum drifted {dp} at substep {n}"
+            );
+        }
+    }
+}
+
 /// Runs one step expected to fail; returns the error and checks nothing was written, and that
 /// a later step applies nothing either.
 fn fails_closed(s: &mut ImplicitEuler, b: &mut Body, h: f64) -> String {
