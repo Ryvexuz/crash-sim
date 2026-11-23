@@ -566,7 +566,7 @@ class M5Flags(unittest.TestCase):
         self.assertEqual(len(five4), 1)
         n5 = sweep.m5_substeps(M5_DOC_TEXT)
         want = five4[0].split(" -- ", 1)[1].split(" > ")[0].replace("<N5>", str(n5)).split()
-        got = sweep.command("bs.exe", "t-1", "../x/point-001.bsn", sweep.m5_flags(sweep.run_flags(DOC_TEXT), n5),
+        got = sweep.command("bs.exe", "t-1", "../x/point-001.bsn", sweep.m5_flags(sweep.run_flags_text(DOC_TEXT), n5),
                             sweep.M5)
         self.assertEqual(got[:6], ["bs.exe", "run", "crash-sim", "--task", "t-1", "--"])
         got_rest = got[6:]
@@ -579,13 +579,18 @@ class M5Flags(unittest.TestCase):
 
     def test_only_the_step_is_replaced_by_n5(self):
         flags = sweep.run_flags(DOC_TEXT)
-        got = sweep.m5_flags(flags, 7)
+        text = sweep.run_flags_text(DOC_TEXT)
+        got = sweep.m5_flags(text, 7)
         i = flags.index("--substeps")
         self.assertEqual(got[i:i + 2], ["--substeps", "7"])
         self.assertEqual(got[:i] + got[i + 2:], flags[:i] + flags[i + 2:])
-        self.assertNotEqual(sweep.m5_flags(flags, 7), sweep.m5_flags(flags, 8))
-        for bad in (flags + ["--substeps", "10"], [f for f in flags if f != "--substeps"],
-                    " ".join(flags).replace("--substeps 10", "--substeps 11").split()):
+        self.assertNotEqual(sweep.m5_flags(text, 7), sweep.m5_flags(text, 8))
+        # The exact source text is checked: a double-space spelling, a duplicate or an adjacent
+        # duplicate `--substeps`, a missing or other value are all refused.
+        for bad in (text + " --substeps 10", text.replace("--substeps 10", "--substeps  10"),
+                    text.replace("--substeps 10", "--substeps 10 --substeps 10"),
+                    text.replace(" --substeps 10", ""), text.replace("--substeps 10", "--substeps 11"),
+                    text.replace("--substeps 10", "--substeps 100"), flags):
             with self.assertRaises(sweep.SweepError):
                 sweep.m5_flags(bad, 7)
 
@@ -703,7 +708,9 @@ class M5Sandbox(unittest.TestCase):
         sweep_dir = os.path.join(self.root, "scratch", "m5-sweep", "t-1")
         for i in range(1, 5):
             v = sweep.read_text(os.path.join(sweep_dir, f"point-{i:03d}.bsn"))
-            d = [(a, b) for a, b in zip(wall.split("\n"), v.split("\n")) if a != b]
+            wl, vl = wall.split("\n"), v.split("\n")
+            self.assertEqual(len(wl), len(vl))  # no appended or dropped line
+            d = [(a, b) for a, b in zip(wl, vl) if a != b]
             self.assertEqual(len(d), 2)
             self.assertTrue(d[0][1].startswith("material crush_front "))
             self.assertTrue(d[1][1].startswith("material crush_rear "))
@@ -726,6 +733,33 @@ class M5Sandbox(unittest.TestCase):
         self.run_chunk(1, 1)
         with self.assertRaises(sweep.SweepError):  # the grid has 70 points
             self.run_chunk(71, 71)
+
+    def test_ranges_come_from_the_m5_doc_not_the_m4_one(self):
+        # A range edited in the m5 doc alone changes the m5 setup; one edited in STAGE6 alone does not.
+        old = [l for l in M5_DOC_TEXT.splitlines() if l.startswith("frozen: range crush.yield_strain = ")]
+        self.assertEqual(len(old), 1)
+        lo, hi = old[0].split(" = ")[1].split()
+        self.edit_doc("STAGE6-M4-M5.md", old[0], f"frozen: range crush.yield_strain = {lo} 0.5")
+        self.assertEqual(sweep.setup_for(self.repo, sweep.M5).rng["yield_strain"][1], float(hi))
+        self.assertEqual(sweep.setup_for(self.repo, None).rng["yield_strain"][1], 0.5)
+        self.edit_doc("M5-SOLVER.md", old[0], f"frozen: range crush.yield_strain = {lo} 0.4")
+        self.assertEqual(sweep.setup_for(self.repo, sweep.M5).rng["yield_strain"][1], 0.4)
+
+    def test_scores_must_match_verdicts_before_choose_and_verify(self):
+        self.full_m5_block({70: "0.5000"})
+        text = sweep.read_text(self.log)
+        for old_end, new_end in (("score=0.5000 verdict=FAIL", "score=0.5000 verdict=refused"),
+                                 ("score=9.0000 verdict=FAIL", "score=none verdict=ok")):
+            line = [l for l in text.splitlines() if l.startswith(("run A m5 70 ", "run A m5 71 "))
+                    and l.endswith(old_end)][0]
+            with open(self.log, "w", encoding="utf-8", newline="") as f:
+                f.write(text.replace(line, line.replace(old_end, new_end)))
+            with self.assertRaises(sweep.SweepError):
+                sweep.do_choose(self.repo, self.log, sweep.M5)
+            runs = sweep.log_runs(sweep.read_text(self.log), sweep.M5)
+            with open(self.log, "a", encoding="utf-8", newline="") as f:  # a hand-written calibrated line
+                f.write(sweep.calibrated_line(sweep.choose(runs), self.rng, sweep.M5) + "\nfreeze_m5 = " + "a" * 40 + "\n")
+            self.assertTrue(sweep.verify(self.repo, self.log, sweep.M5).startswith("calibration: FAIL run "))
 
     def test_rear_outside_is_refused_without_a_run(self):
         self.full_m5_block({}, upto=80)

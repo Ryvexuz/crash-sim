@@ -963,7 +963,9 @@ fn crush_p123(text: &str, stage: &str, steel_e: f64) -> Result<[f64; 3], String>
         .iter()
         .find(|m| m.name == stage)
         .ok_or(format!("no material `{stage}`"))?;
-    let yield_strain = mat.yield_strain.ok_or(format!("`{stage}` has no yield_strain"))?;
+    let yield_strain = mat
+        .yield_strain
+        .ok_or(format!("`{stage}` has no yield_strain"))?;
     let beams: Vec<_> = body.beams.iter().filter(|b| b.material == stage).collect();
     if beams.is_empty() {
         return Err(format!("no beam uses `{stage}`"));
@@ -1000,12 +1002,19 @@ fn check_differs_only_in_crush_lines(nb: &str, m5: &str) -> Result<(), String> {
         for (name, lines) in [("node-beam", &a), ("m5", &b)] {
             let n = lines.iter().filter(|l| l.starts_with(prefix)).count();
             if n != 1 {
-                return Err(format!("the {name} file has {n} `{}` lines, not 1", prefix.trim()));
+                return Err(format!(
+                    "the {name} file has {n} `{}` lines, not 1",
+                    prefix.trim()
+                ));
             }
         }
     }
     for (i, (x, y)) in a.iter().zip(&b).enumerate() {
-        if x != y && !CRUSH_LINES.iter().any(|p| x.starts_with(p) && y.starts_with(p)) {
+        if x != y
+            && !CRUSH_LINES
+                .iter()
+                .any(|p| x.starts_with(p) && y.starts_with(p))
+        {
             return Err(format!("line {}: `{x}` against `{y}`", i + 1));
         }
     }
@@ -1014,23 +1023,41 @@ fn check_differs_only_in_crush_lines(nb: &str, m5: &str) -> Result<(), String> {
 
 /// P1 to P3 of both stages of the two `_m5` files agree within 1e-9 relative and lie inside the
 /// frozen ranges of docs/M5-SOLVER.md.
-fn check_m5_physics(a_m5: &str, b_m5: &str, steel_e: f64, ranges: &[(f64, f64); 3]) -> Result<(), String> {
+fn check_m5_physics(
+    a_m5: &str,
+    b_m5: &str,
+    steel_e: f64,
+    ranges: &[(f64, f64); 3],
+) -> Result<(), String> {
     for stage in ["crush_front", "crush_rear"] {
         let a = crush_p123(a_m5, stage, steel_e)?;
         let b = crush_p123(b_m5, stage, steel_e)?;
-        for (q, (x, y)) in ["area_m2", "yield_strain", "damping_ratio"].iter().zip(a.iter().zip(&b)) {
+        for (q, (x, y)) in ["area_m2", "yield_strain", "damping_ratio"]
+            .iter()
+            .zip(a.iter().zip(&b))
+        {
             // Exactly equal values (0 against 0 included) agree.
-            let rel = if x == y { 0.0 } else { (x - y).abs() / x.abs().max(y.abs()) };
+            let rel = if x == y {
+                0.0
+            } else {
+                (x - y).abs() / x.abs().max(y.abs())
+            };
             if rel.is_nan() || rel > 1e-9 {
-                return Err(format!("{stage} {q}: {x} against {y}, relative difference {rel}"));
+                return Err(format!(
+                    "{stage} {q}: {x} against {y}, relative difference {rel}"
+                ));
             }
         }
-        for (q, (v, (lo, hi))) in ["area_m2", "yield_strain", "damping_ratio"]
-            .iter()
-            .zip(a.iter().zip(ranges))
-        {
-            if v.is_nan() || v < lo || v > hi {
-                return Err(format!("{stage} {q} = {v} is outside [{lo}, {hi}]"));
+        // Each file is range-checked on its own: agreement within 1e-9 would let B sit just
+        // outside a bound that A sits on.
+        for (file, vals) in [("A", &a), ("B", &b)] {
+            for (q, (v, (lo, hi))) in ["area_m2", "yield_strain", "damping_ratio"]
+                .iter()
+                .zip(vals.iter().zip(ranges))
+            {
+                if v.is_nan() || v < lo || v > hi {
+                    return Err(format!("{file} {stage} {q} = {v} is outside [{lo}, {hi}]"));
+                }
             }
         }
     }
@@ -1042,9 +1069,16 @@ fn m5_files_differ_only_in_crush_lines() {
     let st6 = repo_text("docs/STAGE6-M4-M5.md");
     let m5doc = repo_text("docs/M5-SOLVER.md");
     let e = frozen_line(&st6, "docs/STAGE6-M4-M5.md", "steel_E_pa");
-    let steel_e: f64 = e["frozen: steel_E_pa = ".len()..].trim().parse().expect("steel_E_pa");
+    let steel_e: f64 = e["frozen: steel_E_pa = ".len()..]
+        .trim()
+        .parse()
+        .expect("steel_E_pa");
     let mut ranges = [(0.0, 0.0); 3];
-    for (slot, q) in ranges.iter_mut().zip(["crush.area_m2", "crush.yield_strain", "crush.damping_ratio"]) {
+    for (slot, q) in
+        ranges
+            .iter_mut()
+            .zip(["crush.area_m2", "crush.yield_strain", "crush.damping_ratio"])
+    {
         let l = frozen_line(&m5doc, "docs/M5-SOLVER.md", &format!("range {q}"));
         let v: Vec<f64> = l[format!("frozen: range {q} = ").len()..]
             .split_whitespace()
@@ -1054,15 +1088,24 @@ fn m5_files_differ_only_in_crush_lines() {
         *slot = (v[0], v[1]);
     }
     let pairs = [
-        ("scenarios/validation_wall.bsn", "scenarios/validation_wall_m5.bsn"),
-        ("scenarios/validation_wall_b.bsn", "scenarios/validation_wall_b_m5.bsn"),
+        (
+            "scenarios/validation_wall.bsn",
+            "scenarios/validation_wall_m5.bsn",
+        ),
+        (
+            "scenarios/validation_wall_b.bsn",
+            "scenarios/validation_wall_b_m5.bsn",
+        ),
     ];
     for (nb, m5) in pairs {
         let (nb_text, m5_text) = (repo_text(nb), repo_text(m5));
-        check_differs_only_in_crush_lines(&nb_text, &m5_text).unwrap_or_else(|e| panic!("{m5}: {e}"));
+        check_differs_only_in_crush_lines(&nb_text, &m5_text)
+            .unwrap_or_else(|e| panic!("{m5}: {e}"));
         // No solid or tet in an option (1) file.
         assert!(
-            !m5_text.lines().any(|l| l.starts_with("solid") || l.starts_with("tet") || l.starts_with("bsn 3")),
+            !m5_text
+                .lines()
+                .any(|l| l.starts_with("solid") || l.starts_with("tet") || l.starts_with("bsn 3")),
             "{m5}: a solid, tet or bsn 3 line"
         );
     }

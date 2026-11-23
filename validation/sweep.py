@@ -187,7 +187,12 @@ def grid(doc_text):
 
 
 def run_flags(doc_text):
-    return frozen(doc_text, "run_flags").split()
+    return run_flags_text(doc_text).split()
+
+
+def run_flags_text(doc_text):
+    """The exact text of the `frozen: run_flags` line (spacing as written)."""
+    return frozen(doc_text, "run_flags")
 
 
 def is_edge(point, rng):
@@ -338,13 +343,16 @@ def command(exe, task, body_rel, flags, solver=None):
             "--", "--body", body_rel] + extra + ["--pulse-report", PULSE_A] + flags
 
 
-def m5_flags(flags, n5):
-    """The frozen run flags with ` --substeps 10 ` replaced by ` --substeps <N5> `, nothing else
-    changed; refused if that text is not there exactly once."""
-    text = " " + " ".join(flags) + " "
-    if text.count(M4_SUBSTEPS_TEXT) != 1:
+def m5_flags(text, n5):
+    """The frozen run flags, taken as the exact source text (not re-joined from words), with
+    ` --substeps 10 ` replaced by ` --substeps <N5> `, nothing else changed; refused if that text
+    is not there exactly once, or if `--substeps` appears anywhere else."""
+    if not isinstance(text, str):
+        raise SweepError("m5_flags needs the exact text of the frozen run_flags line")
+    padded = " " + text + " "
+    if padded.count(M4_SUBSTEPS_TEXT) != 1 or text.count("--substeps") != 1:
         raise SweepError(f"frozen: run_flags does not hold `{M4_SUBSTEPS_TEXT.strip()}` exactly once")
-    return text.replace(M4_SUBSTEPS_TEXT, f" --substeps {n5} ").split()
+    return padded.replace(M4_SUBSTEPS_TEXT, f" --substeps {n5} ").split()
 
 
 def m5_substeps(m5_doc):
@@ -436,6 +444,15 @@ def choose(runs):
     return best[1]
 
 
+def check_scores_match_verdicts(runs):
+    """Every run line: `refused` has no score, `ok` has one (`FAIL` may have either)."""
+    for r in runs:
+        if r[5] == "refused" and r[4] != "none":
+            raise SweepError(f"run {r[0]}: score={r[4]} with verdict=refused")
+        if r[5] == "ok" and r[4] == "none":
+            raise SweepError(f"run {r[0]}: verdict=ok without a score")
+
+
 def check_runs_are_grid(runs, pts):
     if len(runs) != len(pts):
         raise SweepError(f"{len(runs)} run lines, not {len(pts)}")
@@ -471,7 +488,7 @@ def setup_for(repo, solver):
     flags = run_flags(st6)
     if solver == M5:
         gdoc = read_text(os.path.join(repo, "docs", "M5-SOLVER.md"))
-        flags = m5_flags(flags, m5_substeps(gdoc))
+        flags = m5_flags(run_flags_text(st6), m5_substeps(gdoc))
         wall_rel, dir_name = WALL_A_M5, SWEEP_DIR_M5
     else:
         gdoc, wall_rel, dir_name = st6, WALL_A, SWEEP_DIR
@@ -597,6 +614,8 @@ def do_choose(repo=REPO, log=LOG, solver=None):
         raise SweepError("the log has no m5 block")
     runs = log_runs(text, solver)
     check_runs_are_grid(runs, grid(gdoc))
+    if solver == M5:
+        check_scores_match_verdicts(runs)
     line = calibrated_line(choose(runs), ranges(gdoc), solver)
     append(log, line + "\n")
     print(line)
@@ -769,6 +788,7 @@ def verify_m5(repo=REPO, log=LOG):
         runs = log_runs(text, M5)
         check_runs_are_grid(runs, pts)
         ratio = strength_ratio(st6)
+        check_scores_match_verdicts(runs)
         for r in runs:
             for p, v in zip(PARAMS, r[1:4]):
                 if not rng[p][0] <= float(v) <= rng[p][1]:
