@@ -285,3 +285,4 @@ run A m5 137 area_m2=0.002 yield_strain=0.0057 damping_ratio=0 score=none verdic
 run A m5 138 area_m2=0.002 yield_strain=0.0057 damping_ratio=0.01 score=none verdict=refused
 run A m5 139 area_m2=0.002 yield_strain=0.0057 damping_ratio=0.025 score=none verdict=refused
 run A m5 140 area_m2=0.002 yield_strain=0.0057 damping_ratio=0.05 score=none verdict=refused
+calibrated m5 23 area_m2=0.00012239209422144513 yield_strain=0.001 damping_ratio=0.025 score=0.8185 edge
