@@ -540,14 +540,20 @@ fn cfg_at(h: f64, gravity: f64) -> (Config, f64) {
         ..Config::default()
     };
     let h_eff = cfg.dt / cfg.substeps as f64;
-    assert!(cfg.dt >= MIN_DT && (h_eff - h).abs() <= 1e-12 * h, "cfg for h = {h}");
+    assert!(
+        cfg.dt >= MIN_DT && (h_eff - h).abs() <= 1e-12 * h,
+        "cfg for h = {h}"
+    );
     (cfg, h_eff)
 }
 
 /// The step at which `refused` turns true, by bisection (the bounds are monotone in h).
 fn limit_of(refused: impl Fn(f64) -> bool) -> f64 {
     let (mut lo, mut hi) = (1e-9, 1.0);
-    assert!(!refused(lo) && refused(hi), "the limit is not between {lo} and {hi}");
+    assert!(
+        !refused(lo) && refused(hi),
+        "the limit is not between {lo} and {hi}"
+    );
     for _ in 0..200 {
         let mid = 0.5 * (lo + hi);
         if refused(mid) {
@@ -627,9 +633,21 @@ fn implicit_sim_runs_above_explicit_beam_limit() {
         done += cfg.substeps;
         sim.check().expect("the implicit run stays valid");
     }
-    assert!(sim.pos.iter().chain(&sim.vel).all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()));
-    assert!(sim.first_contact_s.is_some(), "the body never reached the ground");
-    let moved = sim.pos.iter().zip(&start).map(|(p, q)| (*p - *q).length()).fold(0.0, f64::max);
+    assert!(sim
+        .pos
+        .iter()
+        .chain(&sim.vel)
+        .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()));
+    assert!(
+        sim.first_contact_s.is_some(),
+        "the body never reached the ground"
+    );
+    let moved = sim
+        .pos
+        .iter()
+        .zip(&start)
+        .map(|(p, q)| (*p - *q).length())
+        .fold(0.0, f64::max);
     assert!(moved > 0.1, "the body barely moved: {moved}");
     // The same through `from_car_with_solver` (a body without wheels is `from_body`'s sim).
     let ie = Box::new(implicit(M5_TOLERANCES));
@@ -648,14 +666,21 @@ fn explicit_step_limit_unchanged() {
     let solvers = |b: &crash_sim::Body, small_h: f64| -> Vec<(&str, Box<dyn Solver>)> {
         vec![
             ("SymplecticEuler", Box::new(SymplecticEuler::default())),
-            ("SolverM5", Box::new(SolverM5::from_body(b, small_h).expect("m5 at a small h"))),
-            ("default", Box::new(DefaultSolver(SymplecticEuler::default()))),
+            (
+                "SolverM5",
+                Box::new(SolverM5::from_body(b, small_h).expect("m5 at a small h")),
+            ),
+            (
+                "default",
+                Box::new(DefaultSolver(SymplecticEuler::default())),
+            ),
         ]
     };
     for (name, s) in solvers(&body, 0.1 * limit) {
-        assert!(s.explicit_beams(), "{name}");
+        let explicit = s.explicit_beams();
         let got = err_of(Sim::from_body_with_solver(cfg.clone(), &body, s));
         assert_eq!(got, expected, "{name}, from_body_with_solver");
+        assert!(explicit, "{name}");
     }
     for (name, s) in solvers(&body, 0.1 * limit) {
         let got = err_of(Sim::from_car_with_solver(cfg.clone(), &body, s));
@@ -664,7 +689,10 @@ fn explicit_step_limit_unchanged() {
     // Just below the limit all three are accepted (the refusal above is the limit, not a solver).
     let (below, _) = cfg_at(0.9 * limit, 9.81);
     for (name, s) in solvers(&body, 0.1 * limit) {
-        assert!(Sim::from_body_with_solver(below.clone(), &body, s).is_ok(), "{name}");
+        assert!(
+            Sim::from_body_with_solver(below.clone(), &body, s).is_ok(),
+            "{name}"
+        );
     }
 
     // Car path: refused with `step_error_with` over the beams and the wheels, plus the suffix.
@@ -698,7 +726,10 @@ fn implicit_car_keeps_wheel_limit() {
     let (cfg, h) = cfg_at((l_all * l_wheels).sqrt(), 9.81);
     assert!(all(h).is_some() && wheels(h).is_none());
     let ie = Box::new(implicit(M5_TOLERANCES));
-    assert!(Sim::from_car_with_solver(cfg.clone(), &car, ie).is_ok(), "implicit at {h} s");
+    assert!(
+        Sim::from_car_with_solver(cfg.clone(), &car, ie).is_ok(),
+        "implicit at {h} s"
+    );
     let expected = format!("{}{CAR_SUFFIX}", all(h).unwrap());
     assert_eq!(err_of(Sim::from_car(cfg, &car)), expected);
 

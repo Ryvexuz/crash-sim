@@ -1004,7 +1004,15 @@ fn pulse_solver_values() {
     let c = default_case("solver_values");
     let flags = report_flags(&c);
     // The complete rule: exact, case-sensitive; anything else is a usage error.
-    for v in ["M5", "implicit", "", "node-beam,m5", "Node-Beam", " m5", "m5 "] {
+    for v in [
+        "M5",
+        "implicit",
+        "",
+        "node-beam,m5",
+        "Node-Beam",
+        " m5",
+        "m5 ",
+    ] {
         let o = run_flags(&flags, &["--solver", v]);
         assert_eq!(o.status.code(), Some(2), "--solver {v:?}: {}", stderr(&o));
         assert_eq!(stdout(&o), "", "--solver {v:?}: stdout");
@@ -1024,7 +1032,11 @@ fn pulse_solver_values() {
     let o = run_flags(&flags, &["--solver", "m5", "--solver", "M5"]);
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(stdout(&o), "");
-    assert!(stderr(&o).starts_with(&solver_refusal("M5")), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with(&solver_refusal("M5")),
+        "{}",
+        stderr(&o)
+    );
     // Outside --pulse-report, --solver is refused as before.
     let body = vec![("--body".to_string(), c.body.to_str().unwrap().to_string())];
     let o = run_flags(&body, &["--solver", "m5"]);
@@ -1045,7 +1057,12 @@ fn pulse_solver_values() {
             1,
         )
         .replacen("group rear", "tet 0 4 2 1 s\ngroup rear", 1);
-    let ct = case("solver_tets", &tets, &ref_csv(400.0), &meta_text(12.0, 36.0, None));
+    let ct = case(
+        "solver_tets",
+        &tets,
+        &ref_csv(400.0),
+        &meta_text(12.0, 36.0, None),
+    );
     let tflags = report_flags(&ct);
     let m5 = run_flags(&tflags, &["--solver", "m5"]);
     let nb = run_flags(&tflags, &["--solver", "node-beam"]);
@@ -1066,8 +1083,16 @@ fn pulse_solver_node_beam_is_the_default() {
     let flags = report_flags(&c);
     let plain = run_flags(&flags, &[]);
     let named = run_flags(&flags, &["--solver", "node-beam"]);
-    assert!(plain.status.code().is_some_and(|c| c <= 1), "{}", stderr(&plain));
-    assert!(stdout(&plain).contains("pulse_score="), "{}", stdout(&plain));
+    assert!(
+        plain.status.code().is_some_and(|c| c <= 1),
+        "{}",
+        stderr(&plain)
+    );
+    assert!(
+        stdout(&plain).contains("pulse_score="),
+        "{}",
+        stdout(&plain)
+    );
     assert_eq!(named.status.code(), plain.status.code());
     assert_eq!(named.stdout, plain.stdout, "stdout bytes");
     assert_eq!(named.stderr, plain.stderr, "stderr bytes");
@@ -1082,7 +1107,7 @@ fn pulse_solver_m5_runs_above_explicit_limit() {
         &meta_text(12.0, 36.0, Some(0.05)),
     );
     let flags = report_flags(&c); // --dt 0.001 --substeps 10: h = 0.1 ms
-    // node-beam (named or by default) is refused by the explicit limit, same bytes either way.
+                                  // node-beam (named or by default) is refused by the explicit limit, same bytes either way.
     let nb = run_flags(&flags, &["--solver", "node-beam"]);
     let plain = run_flags(&flags, &[]);
     assert_eq!(nb.status.code(), Some(2), "{}", stderr(&nb));
@@ -1120,5 +1145,8 @@ fn pulse_solver_m5_runs_above_explicit_limit() {
             stderr(o)
         );
     }
-    assert_ne!(nb.stdout, m5.stdout, "m5 gave node-beam's report: not the implicit solver");
+    assert_ne!(
+        nb.stdout, m5.stdout,
+        "m5 gave node-beam's report: not the implicit solver"
+    );
 }
