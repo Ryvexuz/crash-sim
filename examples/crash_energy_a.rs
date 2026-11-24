@@ -58,11 +58,11 @@ pub fn frozen(doc: &str) -> Result<Config> {
         return Err("duplicate frozen run_flags".into());
     }
     let words: Vec<_> = line.split_ascii_whitespace().collect();
-    if !words.chunks_exact(2).remainder().is_empty() || words.is_empty() {
+    if !words.as_chunks::<2>().1.is_empty() || words.is_empty() {
         return Err("invalid frozen flag/value pairs".into());
     }
     let mut flags = std::collections::BTreeMap::new();
-    for pair in words.chunks_exact(2) {
+    for pair in words.as_chunks::<2>().0 {
         if !pair[0].starts_with("--") || flags.insert(pair[0], pair[1]).is_some() {
             return Err("invalid or duplicate frozen flag".into());
         }

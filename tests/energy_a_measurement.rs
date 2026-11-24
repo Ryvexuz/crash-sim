@@ -580,9 +580,7 @@ fn measurement_a_sensor_com_and_rebound_are_distinct() {
     assert!(m.rows.iter().any(|r| r.velocity[0] != r.velocity[1]));
     let (cfg, body) = inputs().unwrap();
     let mut unequal = Sim::from_car(cfg, &body).unwrap();
-    for v in &mut unequal.vel {
-        *v = Vec3::ZERO;
-    }
+    unequal.vel.fill(Vec3::ZERO);
     for w in &mut unequal.car.as_mut().unwrap().wheels {
         w.vel = Vec3::new(3.0, 0.0, 0.0);
     }
@@ -701,7 +699,7 @@ fn measurement_a_phase_sums_and_output_contract() {
             "{prefix}"
         );
     }
-    for (i, row) in lines[..m.rows.len() * 6].chunks_exact(6).enumerate() {
+    for (i, row) in lines[..m.rows.len() * 6].as_chunks::<6>().0.iter().enumerate() {
         for (line, material) in row[..4].iter().zip(MATERIALS) {
             assert!(line.contains(&format!("material={material} ")), "{line}");
             let expected_phase = if i <= m.split {
