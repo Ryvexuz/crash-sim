@@ -19,6 +19,7 @@ pub mod reference;
 pub mod save;
 pub mod settings;
 pub mod settle;
+pub mod shell;
 mod sim;
 pub mod sparse;
 pub mod solver;
