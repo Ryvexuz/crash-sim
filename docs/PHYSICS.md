@@ -281,3 +281,149 @@ After every output step (not every substep), `Sim::check()` fails the run if:
 Contact time is tracked separately, in the substep loop: `Sim::first_contact_s` is the time of the first substep at which any node is at or behind any collider plane, ground or wall (0 if the body starts there). `--summary` prints it, so it does not depend on the output sampling, which can miss a touchdown that begins and ends between two samples.
 
 `run_checked` then stops and returns the good samples so far plus an error reading `unstable at t = ... s: ...`. A config that `validate()` accepts can still abort here, for example `--gravity 5000` crushes the cube on impact (`tests/risky.rs`). A config refused by `validate()` returns no samples and the validation error. `run` is the same but panics on any error.
+
+## Inter-car chassis contact (n20-19a kernel)
+
+`car_contact::{detect_contacts, apply_contacts}` takes cars in caller-defined fixed
+order, with chassis node positions **before and after one physics substep**,
+post-substep velocities, node masses, beams and a parallel broken-beam mask.
+Indices in those slices are the car/node/beam identities; broken beams are not
+compacted. Save positions before stepping, step each car using the existing
+single-car integrator, then call contact after **every physics substep**, not
+only at output frames. This module is not a race loop or a wheel collider.
+
+The caller supplies `ContactSettings::new(skin, restitution, timestep,
+max_motion, max_penetration)`. Distances are metres, timestep is seconds, mass is
+kg, velocity is m/s and impulse is kg m/s. There are no scene defaults or
+hard-coded scene caps in the kernel. Skin must be positive; restitution must be
+finite in `[0,1]`; timestep must be positive and have a finite reciprocal.
+`max_motion` and `max_penetration` must be positive, finite, and respectively at
+most `skin/8` and `skin/2`. All settings are constructor-validated and immutable.
+The test fixtures' values are explicit test inputs, not production defaults.
+
+### Geometry, candidates and supported motion
+
+A **live beam is a capsule of radius skin** about its current endpoint segment;
+a source node is a point. Contact includes tangency: the computed Euclidean
+closest-point distance is `<= skin`, with no extra contact tolerance.
+The beam fraction is `t = clamp(dot(p-a,b-a)/dot(b-a,b-a), 0, 1)`.
+The normal points from that closest point toward the source node.
+Endpoints use spherical caps. Sparse beam capsules are **not** a solid car
+surface: holes between beams, beam-versus-beam crossings without a nearby node,
+wheels and self-contact are not resolved by this model. Nearby endpoints alone
+are never evidence of contact. There is no tangential friction in this kernel.
+
+Nodes are flattened in car/node order and passed to the merged
+`broadphase::candidate_pairs`, skipping every same-car pair. The query radius is
+`(longest_live_beam + skin + 2*max_motion) * (1 + 64*EPSILON)`;
+the longest length includes both snapshots. The full beam length is a
+conservative endpoint expansion: a node near any point on a segment is within
+that length plus its distance from either endpoint. The motion term also
+includes possible swept hits. Padding protects query recall from roundoff; it
+does not change the narrow-phase boundary. Each endpoint candidate maps to its
+incident live beams in **both directions**. A sorted set deduplicates keys
+`(source_car, node, target_car, beam)`; geometry and responses use that fixed
+lexicographic order. The exhaustive oracle in `tests/multi_car.rs` visits every
+cross-car node/beam and uses endpoint spheres or a cross-product line distance,
+independently of candidate generation and the kernel's closest-point formula.
+
+The discrete rule requires a straight-line interpolation of each node between
+the saved snapshots. Each node's actual displacement and `|velocity|*timestep`
+must be `<= max_motion`, including the trial response velocities. The distance
+to every candidate beam in **both** snapshots must be at least
+`skin-max_penetration`. Thus a node and any point of a moving segment have at
+most `2*max_motion <= skin/4` relative travel; a supported sample at distance at
+least `skin/2` cannot cross the beam axis in that substep. Deep penetration,
+zero-distance/undefined normals and zero-length live beams are explicit errors,
+not guessed normals or successful empty results.
+
+Shallow grazing could still enter and exit the skin between two outside
+samples. For an outside/outside candidate within `skin+2*max_motion` at the
+end, the kernel requires a separating-plane certificate. Using either snapshot's
+closest-point normal, **both endpoints in both snapshots** must project strictly
+farther than skin from the source. Convex interpolation then certifies that
+every point of the linearly moving segment stays outside that plane throughout
+the substep. The implemented certificate accounts for the computed normal's
+length and adds a conservative `64*EPSILON` roundoff margin scaled by the larger
+position norm or skin. Identical source/endpoint snapshots need no sweep check.
+If neither normal certifies separation, `UnsupportedSweep` refuses
+the pass, even when a more expensive continuous solver might prove it safe.
+Reduce the substep or use a future continuous contact model; do not ignore this
+error and continue ghosting. Curved within-substep trajectories are outside this
+API's geometric contract.
+
+### Impulses, atomicity and numerical band
+
+Let `u = 1-t`, source mass be `m`, endpoint masses be `ma, mb`, and normal relative
+velocity be `vn = dot(v - u*va - t*vb, n)`. For approaching contact (`vn < 0`):
+
+```
+w = 1/m + u*u/ma + t*t/mb
+j = -(1+restitution)*vn/w
+v  += n*j/m
+va -= n*j*u/ma
+vb -= n*j*t/mb
+```
+
+The endpoint impulses sum to the negative source impulse; interpolation also
+places their resultant at the closest point. Separating or stationary normal
+motion receives no impulse. In exact arithmetic the kinetic change is
+`-(1-restitution^2)*vn^2/(2*w) <= 0`. This is one sequential pass, not an
+iterated simultaneous-contact solve. Positions are **never** projected to
+remove penetration: spring lengths, rest lengths and elastic energy are
+unchanged by contact. Wheel state is unchanged during the pass; its subsequent
+carrier/suspension interaction remains the existing single-car implementation.
+
+All lengths, indices (including broken-beam indices), masses, node components,
+and beam scalar fields are validated before response. Masses must be positive
+and have a normal finite reciprocal. Beam rest lengths must be positive;
+stiffness and damping must be nonnegative and finite. To bound geometric
+products, skin is restricted to
+`[64*sqrt(MIN_POSITIVE), sqrt(MAX)/64]`, every coordinate magnitude to
+`min(skin/(64*EPSILON), sqrt(MAX)/64)`, and live beam squared lengths must be
+positive normal numbers in both snapshots. These are IEEE-754 representability
+and resolution bounds, not tunable world-size limits. Speed/displacement norms
+use `hypot` to avoid squared-norm overflow/underflow. Unrepresentable impulse,
+effective inverse mass, kinetic sum or output velocity arithmetic is refused.
+Tests use exact rational impulse references, power-of-two rescaling, numerical
+skin-band endpoints, extreme masses and nearly cancelling common velocities.
+
+Response runs on private trial velocities. Only after finite output, energy and
+next-step speed checks does it copy velocities back; **any error leaves all
+incoming caller state untouched**, even after a trial impulse. A refusal names
+the car and node/beam/contact key (settings errors have no car), with a named
+failure such as `MotionBound`, `PenetrationBound` or `EnergyIncrease`.
+The result counts deduplicated candidates, actual contacts and applied impulses,
+and reports their summed normal impulse magnitude. Zero impulses are not an
+error for valid separating contacts.
+
+### Conservation checks and retained integration work
+
+`head_on_at_low_speed_conserves_momentum` uses two `car_basic.bsn` cars and real
+single-car substeps, with no gravity, planes, tyre contact, drag, rolling
+resistance or controls supplying external momentum. Momentum includes chassis
+and wheel translation. At every substep its error must be at most
+`1e-6 * max(1 kg m/s, sum(initial mass * speed))`. It also requires nonzero
+collision impulses and changed velocities on both cars.
+
+`car_contact_never_creates_energy` measures `Sim::total_energy` immediately
+before/after each contact pass, including chassis kinetic, live beam elastic,
+wheel translation/spin and suspension/tyre energy. Only
+`1e-10 * max(1 J, |E_before|)` roundoff is allowed. The kernel itself enforces
+that same tolerance on chassis kinetic energy before copying back; all other
+energy terms are unchanged during contact. In the nonnegative-energy test
+setup this is at least as strict as the full-state tolerance.
+The complete unpowered collision run measures every substep through 12 s:
+gain must be at most `0.01 * E(0)`, and the largest later-minus-earlier energy
+rise over the window from 8 s through 12 s must be at most `0.01 J`.
+These are the existing settle **energy** rules, not a claim that the separate
+settle speed rule is tested here. A violation fails; tolerances are not widened.
+The tests use `h=0.0005 s`, one single-car substep per advance
+(`24000*h=12 s`, `16000*h=8 s`).
+Arithmetic re-read with PowerShell: `run_seconds=12`, `settle_start_seconds=8`.
+
+This is the contact kernel only. n20-19b still owns the ordered multi-car
+stepping/control API, one-car byte identity, driving-apart independence, full-run
+byte determinism, per-car chassis/wheel-mount geometry, full ordered
+node/wheel/beam state access and STAGE7 2.4(b) replay integration. None of those
+parent completion gates is certified by these contact tests.

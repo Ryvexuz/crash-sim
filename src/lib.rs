@@ -5,6 +5,7 @@
 
 pub mod ai;
 pub mod broadphase;
+pub mod car_contact;
 pub mod collide;
 pub mod format;
 pub mod input;
