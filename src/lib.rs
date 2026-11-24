@@ -13,6 +13,7 @@ pub mod menu;
 pub mod multi_car;
 pub mod net;
 pub mod pulse;
+pub mod race;
 pub mod reference;
 pub mod save;
 pub mod settings;
