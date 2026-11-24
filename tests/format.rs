@@ -971,8 +971,8 @@ fn every_scenario_file_writes_back_byte_for_byte() {
     println!("scenario files checked: {} ({canonical} identical to the file, {pinned} pinned to main's output)", names.len());
     assert_eq!(
         (names.len(), canonical, pinned),
-        (16, 14, 2),
-        "the 16 committed scenario files (the 12 of main at the task start plus validation_car.bsn, validation_wall.bsn, validation_car_b.bsn and validation_wall_b.bsn): {names:?}"
+        (18, 16, 2),
+        "the 18 committed scenario files (the 12 of main at the task start plus validation_car.bsn, validation_wall.bsn, validation_car_b.bsn, validation_wall_b.bsn, validation_wall_m5.bsn and validation_wall_b_m5.bsn): {names:?}"
     );
 }
 
