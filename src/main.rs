@@ -49,7 +49,7 @@ fn usage() -> ! {
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
     eprintln!("       crash-sim --body <car.bsn> --input <file> [--duration <s>] [--slope-grip-frac <f>]   (per-step rows and a final line)");
     eprintln!("       crash-sim --body <car.bsn> (--input <file> | --live) --trajectory-v2   (trajectory v2 frames, every node, instead of the drive rows; for the renderer)");
-    eprintln!("       crash-sim --body <car.bsn> --track <file.track> (--input <file> [--duration <s>] | --live [--trajectory-v2]) [--dt <s>] [--substeps <n>]   (a timed lap: docs/STAGE7.md, \"The race program\")");
+    eprintln!("       crash-sim --body <car.bsn> --track <file.track> (--input <file> [--duration <s>] | --live [--trajectory-v2]) [--grid-slot <k> --grid-gap <m>] [--dt <s>] [--substeps <n>]   (a timed lap: docs/STAGE7.md, \"The race program\")");
     eprintln!("       crash-sim --body <car.bsn> --live [--dt <s>] [--substeps <n>] [--trajectory-v2]   (input lines on stdin, rows on stdout: docs/STAGE6.md, \"The live protocol\")");
     eprintln!("       crash-sim --body <car.bsn> [--input <file>] [--slope-grip-frac <f>] (--settle-report ... | --slope-report --slope-from <s> --slope-to <s>)");
     eprintln!("       crash-sim --body <car.bsn> --input <file> --drive-report --lap-min-heading <deg> --lap-min-path <m> --lap-close <m> --impact-min-kmh <km/h> --impact-max-kmh <km/h> [--settle-report ...]");
@@ -168,6 +168,7 @@ fn main() {
     let mut input_path: Option<String> = None;
     let mut live = false;
     let mut track_path: Option<String> = None;
+    let (mut grid_slot, mut grid_gap) = (None, None);
     let mut trajectory_v2 = false;
     let mut duration_given = false;
     let mut drive_report = false;
@@ -249,6 +250,8 @@ fn main() {
             },
             "--live" => live = true,
             "--track" => track_path = Some(text_arg(&mut args, "--track")),
+            "--grid-slot" => grid_slot = Some(num::<usize>(&mut args, "--grid-slot")),
+            "--grid-gap" => grid_gap = Some(num::<f64>(&mut args, "--grid-gap")),
             "--trajectory-v2" => trajectory_v2 = true,
             "--drive-report" => drive_report = true,
             "--lap-min-heading" => lap_heading = Some(num(&mut args, "--lap-min-heading")),
@@ -294,6 +297,10 @@ fn main() {
             "--crumple-drift" => cdrift = Some(num(&mut args, "--crumple-drift")),
             _ => usage(),
         }
+    }
+    if (grid_slot.is_some() || grid_gap.is_some()) && track_path.is_none() {
+        eprintln!("--grid-slot and --grid-gap need --track");
+        usage()
     }
     let body = match &body_path {
         Some(path) => {
@@ -405,6 +412,25 @@ fn main() {
             eprintln!("--track takes only --body, --input (or --live), --duration, --dt, --substeps, --gravity and, with --live, --trajectory-v2");
             usage()
         }
+        let grid = match (grid_slot, grid_gap) {
+            (Some(_), None) => {
+                eprintln!("--grid-slot needs --grid-gap");
+                usage()
+            }
+            (None, Some(_)) => {
+                eprintln!("--grid-gap in a single-car run needs --grid-slot");
+                usage()
+            }
+            (Some(k), Some(_)) if !(1..=3).contains(&k) => {
+                eprintln!("--grid-slot <k>: expected 1 to 3");
+                usage()
+            }
+            (Some(_), Some(gap)) if !gap.is_finite() || gap <= 0.0 => {
+                eprintln!("--grid-gap <m>: must be finite and above zero");
+                usage()
+            }
+            pair => pair.0.zip(pair.1),
+        };
         let Some(b) = body.as_ref() else {
             eprintln!("--track needs --body");
             usage()
@@ -429,7 +455,7 @@ fn main() {
                 duration_given,
             }
         };
-        exit(run_race(&cfg, b, &track_path, mode));
+        exit(run_race(&cfg, b, &track_path, mode, grid));
     }
     if live {
         // The live run has its own path: the input comes from stdin, the length from the input.

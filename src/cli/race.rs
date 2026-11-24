@@ -93,38 +93,6 @@ fn chassis_centroid(sim: &Sim) -> Vec3 {
     c * (1.0 / m)
 }
 
-/// `body` turned about the vertical axis so that its +x points along the track's start tangent,
-/// and moved so that its chassis centroid is on the grid point; heights are unchanged. The start
-/// velocities turn with it. Refused when the body has wall planes: they would stay where the
-/// file put them, and a track has no walls in milestone 1.
-pub(super) fn place_on_grid(body: &Body, track: &Track) -> Result<Body, String> {
-    if !body.planes.is_empty() {
-        return Err("--track: the body has wall planes, which a track run cannot place".into());
-    }
-    let t = track.tangent(track.start);
-    let g = track.grid_point();
-    let turn = |x: f64, z: f64| (x * t[0] - z * t[1], x * t[1] + z * t[0]);
-    let built = body.build();
-    let total: f64 = built.mass.iter().sum();
-    let (mut cx, mut cz) = (0.0, 0.0);
-    for (p, m) in built.pos.iter().zip(&built.mass) {
-        cx += p.x * m / total;
-        cz += p.z * m / total;
-    }
-    let (rx, rz) = turn(cx, cz);
-    let (dx, dz) = (g[0] - rx, g[1] - rz);
-    let mut placed = body.clone();
-    for n in &mut placed.nodes {
-        let (x, z) = turn(n.pos.x, n.pos.z);
-        n.pos = Vec3::new(x + dx, n.pos.y, z + dz);
-    }
-    for v in &mut placed.velocities {
-        let (x, z) = turn(v.velocity.x, v.velocity.z);
-        v.velocity = Vec3::new(x, v.velocity.y, z);
-    }
-    Ok(placed)
-}
-
 /// A sim and its lap timer, advanced one substep at a time.
 pub(super) struct Race {
     pub(super) sim: Sim,
@@ -288,7 +256,13 @@ pub(super) fn track_draw_lines(track: &Track) -> String {
 
 /// A timed lap (`--track`): returns the exit code: 0 the run reached its end (even with no valid
 /// lap), 1 the sim aborted or an output write failed, 2 a refused file or flag value.
-pub(super) fn run_race(cfg: &Config, body: &Body, track_path: &str, mode: RaceMode) -> i32 {
+pub(super) fn run_race(
+    cfg: &Config,
+    body: &Body,
+    track_path: &str,
+    mode: RaceMode,
+    grid: Option<(usize, f64)>,
+) -> i32 {
     let text = match std::fs::read_to_string(track_path) {
         Ok(t) => t,
         Err(e) => {
@@ -310,10 +284,23 @@ pub(super) fn run_race(cfg: &Config, body: &Body, track_path: &str, mode: RaceMo
         eprintln!("crash-sim: --track needs --body with wheels and `front` and `rear` groups");
         return 2;
     };
-    let placed = match place_on_grid(body, &track) {
+    let distance = match grid {
+        None => track.grid,
+        Some((k, gap)) => crash_sim::race::slot_distance(&track, k, gap),
+    };
+    if let Some((k, gap)) = grid {
+        if distance > track.centre_length() {
+            eprintln!(
+                "crash-sim: --grid-slot {k} --grid-gap {gap}: slot {k} is {distance:.2} m before the line, beyond the centreline loop of {:.2} m",
+                track.centre_length()
+            );
+            return 2;
+        }
+    }
+    let placed = match crash_sim::race::place_on_grid(body, &track, distance) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("crash-sim: {e}");
+            eprintln!("crash-sim: --track: {e}");
             return 2;
         }
     };
