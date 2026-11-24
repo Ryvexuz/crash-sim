@@ -27,6 +27,7 @@ use crate::{Body, Config, Sim};
 use lap_stats::{LapStats, LapStatsTracker};
 
 pub mod lap_stats;
+pub mod lockstep;
 pub mod near;
 
 pub const CONTROL_DT: f64 = 0.02;
