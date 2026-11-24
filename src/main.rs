@@ -47,6 +47,7 @@ fn emit(text: &str) {
 
 fn usage() -> ! {
     eprintln!("{}", ai_race::USAGE);
+    eprintln!("       crash-sim --shell --data <dir> --shell-track <file> [--shell-track <file> ...] --shell-car <file> [--shell-car <file> ...] --today <YYYY-MM-DD>   (the game shell: docs/SHELL.md)");
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
@@ -159,6 +160,14 @@ fn crumple_params(
 
 fn main() {
     let ai_args: Vec<String> = std::env::args().skip(1).collect();
+    if ai_args.iter().any(|a| a == "--shell") {
+        exit(crash_sim::shell::run(
+            &ai_args,
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr(),
+        ));
+    }
     if ai_args.iter().any(|a| a == "--ai") {
         exit(ai_race::run_ai_cli(&ai_args));
     }
