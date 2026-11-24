@@ -4,6 +4,7 @@
 //! restitution and friction. Std only, deterministic (no RNG, fixed step order).
 
 pub mod ai;
+pub mod broadphase;
 pub mod collide;
 pub mod format;
 pub mod input;
