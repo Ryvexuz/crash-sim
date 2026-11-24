@@ -326,7 +326,7 @@ fn race_lines(
         .filter(|car| car.laps.len() >= laps as usize)
         .count();
     let walls: u64 = result.cars.iter().map(|car| car.wall_substeps).sum();
-    if finished == cars && walls == 0 && near == 0 {
+    if race_ok(finished, cars, walls, near) {
         out.push_str(&format!(
             "race: ok cars={cars} finished={finished} wall_substeps=0 near_substeps=0 end_t={end_t:.4}\n"
         ));
@@ -381,4 +381,22 @@ fn script(result: &RaceResult, inputs: &[CarControls]) -> Result<String, String>
         }
     }
     Ok(text)
+}
+
+/// The `race: ok` rule: every car finished, no wall substep and no near substep. Every other result is a FAIL.
+fn race_ok(finished: usize, cars: usize, walls: u64, near: u64) -> bool {
+    finished == cars && walls == 0 && near == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::race_ok;
+
+    #[test]
+    fn race_ok_needs_every_rule() {
+        assert!(race_ok(2, 2, 0, 0));
+        assert!(!race_ok(1, 2, 0, 0), "a car did not finish");
+        assert!(!race_ok(2, 2, 1, 0), "a wall substep");
+        assert!(!race_ok(2, 2, 0, 1), "all finished, no walls, a near substep");
+    }
 }
