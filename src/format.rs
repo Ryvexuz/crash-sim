@@ -72,6 +72,8 @@ pub struct Material {
     pub yield_strain: Option<f64>,
     /// Strain beyond which a beam breaks (used from nb-35 on).
     pub break_strain: Option<f64>,
+    /// Fraction of stored elastic energy returned on unloading, finite and in (0, 1].
+    pub unload_return: Option<f64>,
 }
 
 /// A solid (version 3): the material of a set of tets. Units in docs/FORMAT.md; the law that
@@ -604,8 +606,17 @@ pub fn parse(text: &str) -> Result<Body, ParseError> {
                     }
                     break_strain = Some(v);
                 }
+                let mut unload_return = None;
+                if t.peek().map(|p| p.1) == Some("unload_return") {
+                    t.keyword("unload_return")?;
+                    let (c, v) = t.number("unload_return")?;
+                    if !(v > 0.0 && v <= 1.0) {
+                        return Err(t.err(Some(c), format!("unload_return {v} must be > 0 and <= 1")));
+                    }
+                    unload_return = Some(v);
+                }
                 t.done()?;
-                body.materials.push(Material { name: name.to_string(), stiffness, damping, yield_strain, break_strain });
+                body.materials.push(Material { name: name.to_string(), stiffness, damping, yield_strain, break_strain, unload_return });
             }
             "solid" => {
                 if body.solids.len() >= MAX_SOLIDS {
@@ -1187,6 +1198,9 @@ pub fn write(body: &Body) -> String {
         }
         if let Some(b) = m.break_strain {
             s.push_str(&format!(" break_strain {b}"));
+        }
+        if let Some(u) = m.unload_return {
+            s.push_str(&format!(" unload_return {u}"));
         }
         s.push('\n');
     }

@@ -155,7 +155,7 @@ fn random_body(rng: &mut Rng) -> Body {
         .map(|i| {
             let y = if rng.below(2) == 0 { Some(rng.positive()) } else { None };
             let b = if rng.below(2) == 0 { Some(y.unwrap_or(0.0) * 2.0 + rng.positive()) } else { None };
-            Material { name: format!("m{i}"), stiffness: rng.positive(), damping: if rng.below(3) == 0 { 0.0 } else { rng.positive() }, yield_strain: y, break_strain: b }
+            Material { name: format!("m{i}"), stiffness: rng.positive(), damping: if rng.below(3) == 0 { 0.0 } else { rng.positive() }, yield_strain: y, break_strain: b, unload_return: None }
         })
         .collect();
     let n_nodes = 1 + rng.below(9) as u32;

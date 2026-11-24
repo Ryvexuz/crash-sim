@@ -304,6 +304,7 @@ fn m5_same_input_same_bytes() {
         damping: 1.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_grid(&mut b, 3, 2, 2, 0.2, Vec3::new(0.0, 100.0, 0.0), 1.0);
     b.nodes.sort_by_key(|n| n.id);
@@ -382,6 +383,7 @@ fn m5_coupling_creates_no_energy() {
         damping: 0.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_grid(&mut b, 4, 2, 2, c, Vec3::new(0.0, 100.0, 0.0), 1.0);
     add_tet_cells(&mut b, 0..2, 2, 2, "s");

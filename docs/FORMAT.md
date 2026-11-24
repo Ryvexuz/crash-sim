@@ -8,7 +8,7 @@ One record per line. Tokens are separated by exactly one space (no tabs, no lead
 
 ```
 bsn 3
-material <name> stiffness <k> damping <c> [yield_strain <y>] [break_strain <b>]
+material <name> stiffness <k> damping <c> [yield_strain <y>] [break_strain <b>] [unload_return <u>]
 solid <name> plateau_stress <Pa> yield_strain <e> damping_ratio <z>
 node <id> <x> <y> <z> mass <m>
 beam <a> <b> <material> [rest <r>]
@@ -27,7 +27,7 @@ The four lines `wheel`, `suspension`, `tyre` and `controls` are the car sections
 - `<name>`: letters, digits and `_`, starting with a letter or `_`. Material names are unique, solid names are unique, group names are unique, wheel names are unique. A solid and a material are different kinds: a beam names a material, a tet names a solid, and one cannot stand for the other.
 - `<id>`: decimal digits, no sign, no leading zero, at most 4294967295. Node ids are unique. They need not be consecutive; a node's index in the sim is its position in the file.
 - Numbers: anything Rust's `f64` parser reads, but it must be finite (`nan`, `inf` and `1e999` are refused).
-- `material`: `stiffness` (N/m) > 0; `damping` (N s/m) >= 0; `yield_strain` and `break_strain`, if given, > 0 and in that order, and `break_strain` > `yield_strain` when both are given. Yield and break strain are stored now and used by later stages.
+- `material`: `stiffness` (N/m) > 0; `damping` (N s/m) >= 0; `yield_strain` and `break_strain`, if given, > 0 and in that order, and `break_strain` > `yield_strain` when both are given. Optional `unload_return <u>` follows both strain keys (when present), in every version: the fraction of stored elastic energy returned during unloading (see docs/PHYSICS.md, "Unloading return (hysteresis)"). It must be > 0 and <= 1, otherwise `unload_return <u> must be > 0 and <= 1` is reported at the number's column. NaN, infinity and a missing value use the existing number refusals; a duplicate or out-of-order key is an unexpected extra token. Absence is `None` and `write` adds nothing; `Some(u)` writes `unload_return <u>` after `break_strain`.
 - `node`: any finite position (m); `mass` (kg) > 0. At least one node is required (an empty body is refused). A body with nodes but no beams is allowed.
 - `beam`: both nodes must be declared above the beam, differ, and be at different positions (a zero-length beam is refused even when `rest` is given); the material must exist; a pair of nodes has at most one beam (either order). The rest length is the distance between the two nodes unless `rest <r>` gives it (`r` > 0).
 - `group`: at least one node, each declared, none twice.

@@ -1,3 +1,5 @@
+mod unload;
+
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -123,6 +125,9 @@ pub struct Sim {
     /// Per beam: the strain beyond which it yields (its rest length moves, see
     /// `apply_yield`), or None for an elastic beam. One entry per beam, same order.
     pub yield_strain: Vec<Option<f64>>,
+    /// Per beam: fraction of stored elastic energy returned on unloading, or None.
+    /// One entry per beam in beam order; a finite number in (0, 1].
+    pub unload_return: Vec<Option<f64>>,
     /// Per beam: its rest length when the sim was built (rest0), same order as `beams`. Never
     /// changes. Compressive yield flows at the force k * y * rest0 (`apply_yield`).
     pub rest0: Vec<f64>,
@@ -219,7 +224,7 @@ impl Sim {
         let yield_strain = vec![None; beams.len()];
         let n_beams = beams.len();
         let rest0 = beams.iter().map(|b| b.rest).collect();
-        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, rest0, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0, extra_scratch: Vec::new() }
+        Sim { cfg, pos, vel: vec![Vec3::ZERO; n], beams, mass, first_contact_s, planes, yield_strain, unload_return: vec![None; n_beams], rest0, yield_refused: Vec::new(), break_strain: vec![None; n_beams], broken: vec![false; n_beams], breaks: Vec::new(), car: None, gravity_tilt: 0.0, solver, step: 0, extra_scratch: Vec::new() }
     }
 
     /// A sim of a body loaded from a `.bsn` file, with the default solver.
@@ -322,10 +327,20 @@ impl Sim {
             .iter()
             .map(|b| body.materials.iter().find(|m| m.name == b.material).expect("beam names an existing material").break_strain)
             .collect();
+        let unload_return: Vec<Option<f64>> = body
+            .beams
+            .iter()
+            .map(|b| body.materials.iter().find(|m| m.name == b.material).expect("beam names an existing material").unload_return)
+            .collect();
         for (i, (y, b)) in yield_strain.iter().zip(&break_strain).enumerate() {
             if let Some(b) = b {
                 if !(b.is_finite() && *b > 0.0) || y.is_some_and(|y| *b <= y) {
                     return Err(format!("beam {i}: break_strain {b} must be a positive number above its yield_strain"));
+                }
+            }
+            if let Some(u) = unload_return[i] {
+                if !(u.is_finite() && u > 0.0 && u <= 1.0) {
+                    return Err(format!("beam {i}: unload_return {u} must be a number > 0 and <= 1"));
                 }
             }
         }
@@ -341,6 +356,7 @@ impl Sim {
             first_contact_s,
             planes,
             yield_strain,
+            unload_return,
             rest0,
             yield_refused: Vec::new(),
             break_strain,
@@ -407,9 +423,9 @@ impl Sim {
         e
     }
 
-    /// One solver substep of length `h` (no yield pass). `advance` does this and then
-    /// `apply_yield`, once per substep; the two are public so a test can measure the energy
-    /// between them.
+    /// One solver substep of length `h`, including contacts but no material passes.
+    /// `advance` follows this with `apply_breaks`, `apply_yield`, then `apply_unload`
+    /// once per substep; public passes let tests measure energy between them.
     pub fn integrate(&mut self, h: f64) {
         // Broken beams are not given to the solver at all, so they cannot apply force.
         let live: Vec<Beam>;
@@ -537,12 +553,19 @@ impl Sim {
         yielded
     }
 
+    /// One complete substep: integrate (including contacts), breaks, yield, then unload.
     pub(crate) fn substep(&mut self, substep: u32, h: f64) {
         self.integrate(h);
         // Breaking is judged before yielding: a beam with both limits must be able to reach
         // its break strain, which plastic flow would otherwise hold at the yield strain.
         self.apply_breaks(substep, h);
         self.apply_yield();
+        self.apply_unload(h);
+    }
+
+    /// Dissipate on unloading after breaks and yield; return how many beams changed.
+    pub fn apply_unload(&mut self, h: f64) -> usize {
+        unload::apply(self, h)
     }
 
     pub fn sample(&self) -> Sample {

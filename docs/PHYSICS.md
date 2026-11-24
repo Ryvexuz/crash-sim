@@ -50,6 +50,56 @@ Output (body runs only; the cube's output is byte-for-byte what it was): the CSV
 
 Total energy for a plastic body uses each beam's current rest length (`settle::total_energy` already does), so the energy before and after a yield can be compared directly (`tests/deform.rs`).
 
+## Unloading return (hysteresis)
+
+A material may specify `unload_return u`, a finite fraction with `0 < u <= 1`.
+`Sim::unload_return` has one entry per beam in beam order, mapped by the shared
+`build_from_body` for both body and car constructors; the cube has only `None`.
+The parser and the shared constructor refuse invalid values by name, including a
+`Body` built in code. No scenario file opts in as part of this change.
+
+After every physics substep of length `h`, the order is `integrate` (solver and
+contacts), `apply_breaks`, `apply_yield`, `apply_unload`. The last pass is implemented
+in `src/sim/unload.rs`, allocates nothing, and returns how many beams changed:
+
+1. For each unbroken beam with `Some(u)`, set `d = pos[b] - pos[a]`, `len = |d|`.
+   Skip a non-finite length or `len < 1e-12` m (the force-step cutoff); `check`
+   reports a non-finite state.
+2. Set deflection `x = len - rest` (negative in compression), lengthening rate
+   `r = d . (vel[b] - vel[a]) / len` (m/s, after solver and contacts), and
+   length-change estimate `delta = r * h`.
+3. Unloading means `(x < 0 && delta > 0) || (x > 0 && delta < 0)`. Otherwise
+   (loading, zero deflection, zero delta, or NaN) nothing changes.
+4. Set `beta = 1/u - 1`. If `beta == 0` (`u == 1`), nothing changes: this case is
+   bit-identical to no key.
+5. Set `shift = beta * delta`. If `|shift| >= |x|`, set `rest' = len`, stopping
+   deflection at zero without changing sign. Otherwise `rest' = rest - shift`,
+   so `x' = x + shift` moves toward zero.
+6. Apply only a positive finite `rest'`; otherwise keep the old rest length
+   (the fail-closed guard). Positions, velocities, stiffness, damping, `rest0`
+   and every other field are untouched.
+
+While unloading, `x` shrinks by `(1 + beta)` per unit of lengthening, so the spring
+returns `k*x0^2 / (2*(1 + beta)) = u * (1/2)*k*x0^2`. Each pass has
+`|x'| <= |x|`: stored elastic energy `(1/2)*k*x^2` never rises; the pass only removes
+energy. Loading never triggers the pass, so the loading stroke, peak force path
+and step limit are unchanged. Rest may move below `rest0` (compression set) or
+above it (tension set); `apply_yield` already uses its exact path outside
+`[0.5*rest0, rest0]`.
+
+`tests/unload_return.rs` covers parsing, canonical writing and refusals,
+bit-identical no-key/u=1 runs, the unchanged loading stroke, the returned-energy
+fraction on release, tiny-u zero capping and energy, both constructors and invalid
+in-code values, and broken beams. Direct pass checks include tension, compression,
+exact rational references, subnormal/overflow and near-cancelling inputs, and
+non-finite or collapsed geometry.
+
+Follow-up: `examples/crash_energy_a.rs`, `examples/wall_force_a.rs`,
+`examples/profile_step.rs` and `tests/validation_files.rs` copy the substep sequence
+by hand and do not yet call this pass. Their `validation_wall.bsn` has no key.
+The substep-copy sync and crash step 2b's test-A measurement
+(`ready-crash2-02-unload-test-a.md`) are separate tasks.
+
 ## Bodies from a file
 
 `crash-sim --body <file.bsn>` builds the sim from a `.bsn` body (docs/FORMAT.md) instead of the built-in cube: node positions, masses and start velocities, beam stiffness and damping from the beam's material, rest lengths from the file. `--drop-height`, `--no-tilt` (they set up the cube) and `--settle-report` (it builds its own cube sim; not wired yet) are refused with exit code 2, and so is a body with collider planes (the sim has only the y = 0 ground until nb-36). `--duration`, `--dt`, `--substeps`, `--gravity` and `--summary` work as before and the output columns are the same. The CSV of `--body scenarios/cube.bsn` is byte-identical to the CSV of the default cube.

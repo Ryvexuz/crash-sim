@@ -173,6 +173,7 @@ fn a_nan_node_shared_by_a_beam_and_a_tet_stops_the_step_before_any_force() {
         damping: 1.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_beam(&mut b, 10, 14, "m"); // node 10 is in the tet and in the beam
     let h = 1e-5;
@@ -260,6 +261,7 @@ fn two_node_beam(gap: f64, mass: f64, k: f64, rest: f64) -> Body {
         damping: 0.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_node(&mut b, 0, Vec3::new(-gap / 2.0, 10.0, 0.0), mass);
     add_node(&mut b, 1, Vec3::new(gap / 2.0, 10.0, 0.0), mass);
@@ -505,6 +507,7 @@ fn every_error_path_of_a_substep_applies_nothing() {
         damping: 0.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_beam(&mut b, 8, 9, "m");
     let limit = SolverM5::from_body(&b, 1e-12).unwrap().step_limit();
@@ -709,6 +712,7 @@ fn an_overflowing_beam_never_reaches_the_force_array() {
         damping: 0.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     add_node(&mut b, 0, Vec3::new(0.0, 10.0, 0.0), 1e300);
     add_node(&mut b, 1, Vec3::new(3.5, 10.0, 0.0), 1e300);
@@ -804,6 +808,7 @@ fn hostile_and_bad_bodies_are_refused_by_name() {
         damping: 0.0,
         yield_strain: None,
         break_strain: None,
+        unload_return: None,
     });
     beamy.beams.push(BodyBeam {
         a: 0,
