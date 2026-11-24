@@ -10,6 +10,8 @@ use std::fmt;
 // Explicit path to the session file under src/net/. The tests reach it as `crash_sim::net::session`.
 #[path = "net/session.rs"]
 pub mod session;
+#[path = "net/confirm.rs"]
+pub mod confirm;
 
 /// Wire protocol version carried by `hello`.
 pub const VERSION: u32 = 1;
