@@ -4,6 +4,7 @@
 //! restitution and friction. Std only, deterministic (no RNG, fixed step order).
 
 pub mod ai;
+pub mod ai_params;
 pub mod broadphase;
 pub mod car_contact;
 pub mod collide;
