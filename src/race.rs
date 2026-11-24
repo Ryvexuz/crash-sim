@@ -17,11 +17,14 @@
 use crate::ai::{CarState, Driver, DriverParams};
 use crate::car_contact::{ContactError, ContactSettings};
 use crate::multi_car::{CarControls, CarPlacement, MultiError, MultiSim};
+use crate::race::near::{GapStats, NearTracker};
 use crate::settle::{self, CarSetup};
 use crate::speed_profile::{self, ProfileError};
 use crate::track::{LapEvent, LapRecord, LapTimer, TimerError, Track};
 use crate::vec3::Vec3;
 use crate::{Body, Config, Sim};
+
+pub mod near;
 
 pub const CONTROL_DT: f64 = 0.02;
 pub const MAX_CARS: usize = 3;
@@ -146,6 +149,8 @@ pub struct RaceResult {
     /// Sums of successful MultiSim StepReports.
     pub contacts: usize,
     pub impulses: usize,
+    /// Near rule over every completed substep; None with one car.
+    pub gap: Option<GapStats>,
     pub end: RaceEnd,
     /// Final state, available read-only through MultiSim.
     pub multi: MultiSim,
@@ -499,9 +504,11 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
         control_substeps,
         contacts: 0,
         impulses: 0,
+        gap: None,
         end: RaceEnd::TimeLimit,
         multi,
     };
+    let mut tracker = NearTracker::new();
     for _ in 0..max_intervals {
         let mut controls = Vec::with_capacity(setup.cars);
         for (k, driver) in drivers.iter_mut().enumerate() {
@@ -526,12 +533,15 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
                 }
                 Err(error) => {
                     result.end = RaceEnd::Failed(RaceFailure::Sim { t: t1, error });
+                    result.gap = tracker.stats();
                     return Ok(result);
                 }
             }
+            let mut centres = Vec::with_capacity(setup.cars);
             for (k, (timer, previous)) in timers.iter_mut().zip(&mut prev).enumerate() {
                 let sim = result.multi.sim(k);
                 let pos = car_position(sim);
+                centres.push(pos);
                 let events = match timer.update(*previous, pos, t0, t1) {
                     Ok(events) => events,
                     Err(error) => {
@@ -540,6 +550,7 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
                             t: t1,
                             error,
                         });
+                        result.gap = tracker.stats();
                         return Ok(result);
                     }
                 };
@@ -566,6 +577,7 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
                     car.first_wall_t.get_or_insert(t1);
                 }
             }
+            tracker.observe(&centres, t1);
             result.substeps += 1;
         }
         if result
@@ -577,5 +589,6 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
             break;
         }
     }
+    result.gap = tracker.stats();
     Ok(result)
 }
