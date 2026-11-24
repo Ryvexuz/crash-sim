@@ -1,5 +1,7 @@
 #[path = "cli/ai_race.rs"]
 mod ai_race;
+#[path = "cli/net_race.rs"]
+mod net_race;
 #[path = "cli/race.rs"]
 mod race;
 use race::{run_race, RaceMode};
@@ -170,6 +172,9 @@ fn main() {
     }
     if ai_args.iter().any(|a| a == "--ai") {
         exit(ai_race::run_ai_cli(&ai_args));
+    }
+    if net_race::wants_reference(&ai_args) {
+        exit(net_race::run_reference_cli(&ai_args));
     }
     let mut cfg = Config::default();
     let mut summary = false;
