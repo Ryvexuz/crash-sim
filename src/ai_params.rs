@@ -193,14 +193,19 @@ pub fn parse(text: &str) -> Result<AiParams, ParseError> {
         values[i] = value;
         lines[i] = Some(line);
     }
+    // Every slot of `found` is written from `lines` or the read is refused: no line number is defaulted.
+    let mut found = [0usize; 11];
     for (i, source) in lines.iter().enumerate() {
-        if source.is_none() {
-            return Err(error(
-                ErrorKind::MissingKey,
-                last_line,
-                None,
-                &format!("missing key {}", KEYS[i]),
-            ));
+        match source {
+            Some(line) => found[i] = *line,
+            None => {
+                return Err(error(
+                    ErrorKind::MissingKey,
+                    last_line,
+                    None,
+                    &format!("missing key {}", KEYS[i]),
+                ));
+            }
         }
     }
     Ok(AiParams {
@@ -219,7 +224,6 @@ pub fn parse(text: &str) -> Result<AiParams, ParseError> {
             a_brake: values[9],
             v_max: values[10],
         },
-        // Every entry was checked above; no caller input can reach this with a missing key.
-        lines: lines.map(|source| source.unwrap_or(0)),
+        lines: found,
     })
 }
