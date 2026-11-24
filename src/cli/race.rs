@@ -1,4 +1,5 @@
 use super::*;
+use crash_sim::race::lap_stats::LapStatsTracker;
 
 // ---------------------------------------------------------------------------------------
 // The timed lap (docs/STAGE7.md, "The race program")
@@ -9,16 +10,6 @@ pub(super) enum RaceMode {
     File { input: String, duration_given: bool },
     /// `--live`: input lines on stdin; `v2` writes trajectory v2 frames, else the drive rows.
     Live { v2: bool },
-}
-
-/// What one lap has measured so far (the lap timer decides validity and time; these are the
-/// numbers it does not keep).
-#[derive(Clone, Copy)]
-struct LapStats {
-    /// Path of the car position since the lap's start crossing (m).
-    path: f64,
-    /// Largest horizontal speed of the car position over a substep of the lap (m/s).
-    max_speed: f64,
 }
 
 /// The `front` and `rear` node indices a heading is read from.
@@ -101,7 +92,7 @@ pub(super) struct Race {
     /// Substeps done.
     pub(super) i: u64,
     prev: Vec3,
-    stats: Option<LapStats>,
+    stats: LapStatsTracker,
 }
 
 impl Race {
@@ -113,7 +104,7 @@ impl Race {
             h,
             i: 0,
             prev,
-            stats: None,
+            stats: LapStatsTracker::new(),
         }
     }
 
@@ -132,32 +123,22 @@ impl Race {
             .timer
             .update(self.prev, pos, t0, t1)
             .map_err(|e| (t1, e.to_string()))?;
-        let len = ((pos.x - self.prev.x).powi(2) + (pos.z - self.prev.z).powi(2)).sqrt();
-        let speed = len / self.h;
+        let stats = self.stats.observe(self.prev, pos, t0, t1, self.h, &events);
+        let mut stats = stats.into_iter();
         self.prev = pos;
         let mut out = String::new();
-        let mut crossed = false;
         for ev in events {
-            // The fraction of this substep before the crossing.
-            let frac = |t: f64| ((t - t0) / (t1 - t0)).clamp(0.0, 1.0);
             match ev {
                 LapEvent::Start { t } => {
                     out.push_str(&format!("start t={t:.4}\n"));
-                    self.stats = Some(LapStats {
-                        path: len * (1.0 - frac(t)),
-                        max_speed: speed,
-                    });
-                    crossed = true;
                 }
                 LapEvent::Checkpoint { lap, k, t } => {
                     out.push_str(&format!("checkpoint lap={lap} k={k} t={t:.4}\n"));
                 }
                 LapEvent::Lap(rec) => {
-                    let f = frac(rec.end_t);
-                    let done = self.stats.take().unwrap_or(LapStats {
-                        path: 0.0,
-                        max_speed: 0.0,
-                    });
+                    let Some(done) = stats.next() else {
+                        return Err((t1, "missing lap statistics".into()));
+                    };
                     out.push_str(&format!(
                         "lap n={} start_t={:.4} end_t={:.4} time_s={} valid={} reason={} path_m={:.2} max_speed_kmh={:.1} off_track_s={:.3}\n",
                         rec.n,
@@ -166,22 +147,11 @@ impl Race {
                         format_seconds(rec.time_ms),
                         if rec.valid() { "yes" } else { "no" },
                         rec.invalid.map_or("none", |r| r.as_str()),
-                        done.path + len * f,
-                        done.max_speed.max(speed) * 3.6,
+                        done.path_m,
+                        done.max_speed_mps * 3.6,
                         rec.off_track_s,
                     ));
-                    self.stats = Some(LapStats {
-                        path: len * (1.0 - f),
-                        max_speed: speed,
-                    });
-                    crossed = true;
                 }
-            }
-        }
-        if !crossed {
-            if let Some(s) = self.stats.as_mut() {
-                s.path += len;
-                s.max_speed = s.max_speed.max(speed);
             }
         }
         Ok(out)

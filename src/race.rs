@@ -24,6 +24,9 @@ use crate::track::{LapEvent, LapRecord, LapTimer, TimerError, Track};
 use crate::vec3::Vec3;
 use crate::{Body, Config, Sim};
 
+use lap_stats::{LapStats, LapStatsTracker};
+
+pub mod lap_stats;
 pub mod near;
 
 pub const CONTROL_DT: f64 = 0.02;
@@ -132,6 +135,8 @@ pub struct CarResult {
     /// Every LapTimer event, in order.
     pub events: Vec<LapEvent>,
     pub laps: Vec<LapRecord>,
+    /// Statistics parallel to `laps`, in completion order.
+    pub lap_stats: Vec<LapStats>,
     /// end_t of the setup's requested lap count, valid or not.
     pub finish_t: Option<f64>,
     pub wall_substeps: u64,
@@ -486,12 +491,14 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
         .map(|_| LapTimer::new(setup.track))
         .collect();
     let mut drivers: Vec<_> = (0..setup.cars).map(|_| Driver::new(setup.driver)).collect();
+    let mut lap_trackers = vec![LapStatsTracker::new(); setup.cars];
     let cars = (1..=setup.cars)
         .map(|slot| CarResult {
             slot,
             inputs: Vec::new(),
             events: Vec::new(),
             laps: Vec::new(),
+            lap_stats: Vec::new(),
             finish_t: None,
             wall_substeps: 0,
             first_wall_t: None,
@@ -555,6 +562,8 @@ pub fn run(setup: &RaceSetup<'_>) -> Result<RaceResult, RaceError> {
                     }
                 };
                 let car = &mut result.cars[k];
+                car.lap_stats
+                    .extend(lap_trackers[k].observe(*previous, pos, t0, t1, h, &events));
                 for event in events {
                     if let LapEvent::Lap(lap) = &event {
                         car.laps.push(lap.clone());
