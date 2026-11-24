@@ -152,6 +152,34 @@ fn stem(path: &str) -> String {
         .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
 }
 
+fn guard_save_inputs(flags: &Flags<'_>) -> Result<(), String> {
+    let Some(prefix) = flags.save else {
+        return Ok(());
+    };
+    // Canonical paths resolve aliases and symlinks, but not hard links (out of scope).
+    for slot in 1..=flags.cars {
+        let path = format!("{prefix}{slot}.input");
+        let Ok(save) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        for (flag, input) in [
+            ("--body", flags.body),
+            ("--track", flags.track),
+            ("--ai-params", flags.params),
+        ] {
+            let source = std::fs::canonicalize(input).map_err(|e| {
+                format!("--save-inputs {path}: cannot resolve {flag} {input}: {e}")
+            })?;
+            if save == source {
+                return Err(format!(
+                    "--save-inputs {path}: is the {flag} file {input}; refusing to overwrite an input"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn execute(flags: &Flags<'_>) -> Result<(String, i32), String> {
     let body = crash_sim::format::parse(&read("--body", flags.body)?)
         .map_err(|e| format!("{}: {e}", flags.body))?;
@@ -162,6 +190,7 @@ fn execute(flags: &Flags<'_>) -> Result<(String, i32), String> {
         .map_err(|e| format!("{}: {e}", flags.track))?;
     let params = ai_params::parse(&read("--ai-params", flags.params)?)
         .map_err(|e| format!("{}: {e}", flags.params))?;
+    guard_save_inputs(flags)?;
     let setup = RaceSetup {
         cfg: &flags.cfg,
         body: &body,
