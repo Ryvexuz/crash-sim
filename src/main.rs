@@ -1,3 +1,5 @@
+#[path = "cli/ai_race.rs"]
+mod ai_race;
 #[path = "cli/race.rs"]
 mod race;
 use race::{run_race, RaceMode};
@@ -44,6 +46,7 @@ fn emit(text: &str) {
 }
 
 fn usage() -> ! {
+    eprintln!("{}", ai_race::USAGE);
     eprintln!("usage: crash-sim [--duration <s>] [--dt <s>] [--substeps <n>] [--drop-height <m>] [--gravity <m/s^2>] [--no-tilt] [--summary]");
     eprintln!("       crash-sim --body <file.bsn> [--duration <s>] [--dt <s>] [--substeps <n>] [--gravity <m/s^2>] [--summary] [--events]");
     eprintln!("       crash-sim ... --settle-report --settle-by <s> --settle-hold <s> --settle-speed <m/s> --energy-rise <J> --energy-gain <fraction>");
@@ -155,6 +158,10 @@ fn crumple_params(
 }
 
 fn main() {
+    let ai_args: Vec<String> = std::env::args().skip(1).collect();
+    if ai_args.iter().any(|a| a == "--ai") {
+        exit(ai_race::run_ai_cli(&ai_args));
+    }
     let mut cfg = Config::default();
     let mut summary = false;
     let mut events = false;
