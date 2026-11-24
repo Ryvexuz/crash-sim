@@ -537,7 +537,7 @@ impl Sim {
         yielded
     }
 
-    fn substep(&mut self, substep: u32, h: f64) {
+    pub(crate) fn substep(&mut self, substep: u32, h: f64) {
         self.integrate(h);
         // Breaking is judged before yielding: a beam with both limits must be able to reach
         // its break strain, which plastic flow would otherwise hold at the yield strain.

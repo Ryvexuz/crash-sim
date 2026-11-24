@@ -427,3 +427,101 @@ stepping/control API, one-car byte identity, driving-apart independence, full-ru
 byte determinism, per-car chassis/wheel-mount geometry, full ordered
 node/wheel/beam state access and STAGE7 2.4(b) replay integration. None of those
 parent completion gates is certified by these contact tests.
+
+## Several cars in one sim
+
+`multi_car::MultiSim` owns cars in the caller's slice order (car 0 first),
+fixed for its lifetime. Construction requires at least one wheeled car,
+one placement per car, bit-identical `cfg.dt` and `cfg.substeps`, matching
+initial output-step counters, and `substep_h` bit-identical to `dt/substeps`.
+Config numbers must pass the existing finite-number validation. Placement
+components and all resulting node/wheel centres must be finite. Placement is
+plain vector addition, once, to every chassis node and wheel centre. An offset
+whose three components compare equal to zero is not added at all, preserving
+stored negative zero. Construction is not a replacement for `Sim::check` or
+the contact kernel's numerical/geometry validation.
+
+One `advance` holds throttle, brake and steer for one output interval (0.02 s
+at 50 Hz when configured that way). The road-car tests use 20 substeps per
+interval, keeping h below the body's stability limit. Calculation with
+PowerShell: `road_substep_seconds=0.001` (`0.02 / 20`).
+It checks the controls count and calls
+`Car::set_controls` in car order before moving any car. Each physics substep:
+
+1. Snapshots every car's chassis positions, in car order.
+2. Calls the existing `Sim::substep(k + 1, h)` for every car in that order,
+   including its existing breaking and yielding work, with `h = dt/substeps`.
+3. Calls `Sim::check` for every car in order.
+4. For two or more cars, calls `apply_contacts` once over ordered car views,
+   using those snapshots as `previous_pos`. Counts are summed across substeps.
+5. For every car in order, sets a previously absent `first_contact_s` if a
+   chassis node is at/behind a collider plane, to
+   `sim.step as f64 * dt + (k + 1) as f64 * h`, just like `Sim::advance`.
+
+After all substeps, every car's output-step counter increments once. A single
+car bypasses the contact kernel entirely and reports zero candidates, contacts
+and impulses. Its integration path is the existing single-car path; the new
+tests compare the full specified state at every output step against a plain
+`Sim`, including the first-plane-contact timestamp. Errors name the car where
+applicable; contact errors are carried untouched, never converted into zero
+contacts. Failure does not roll back work already performed: stop using that
+`MultiSim`. A controls refusal moves no car, though earlier controls may have
+been assigned.
+
+Contact settings belong to the caller; `MultiSim` stores them, never invents
+them. The caller must give `ContactSettings::new` the same timestep as
+`substep_h` (settings have no timestep getter). The low-speed contact tests use
+skin 0.125 m, restitution 0.0, max_motion 0.015625 m, and max_penetration
+0.0625 m. These numbers apply only while `max_motion <= skin/8` covers both
+displacement and `speed*h`. The driving-apart road test instead selects skin
+1 m, max_motion 0.125 m and max_penetration 0.5 m at h=0.001 s: the speed bound
+is 125 m/s, and violations still return errors. Calculation with PowerShell:
+`road_speed_bound_m_per_s=125` (`0.125 / (0.02 / 20)`).
+Higher-speed racing needs a larger skin chosen and
+justified by n20-20, not a swallowed motion refusal.
+
+The short deterministic collision fixture retains the 19a free-flight speeds
+and h, but closes the initial gap by an additional 0.01001 m to ensure contact
+within 400 steps without targeting tangency at an exact substep boundary.
+Calculation with PowerShell:
+`0.14 - 0.04*400*0.0005 = 0.132` m (outside skin);
+`0.14 - 0.01001 - 0.04*400*0.0005 = 0.12199` m (inside skin without response).
+The two-substep variant compares counts and car state with an independent
+`Sim::advance` plus kernel driver at every physics substep, not just at the end.
+
+### State words and geometry
+
+`chassis_positions(car)` borrows live node positions in node order.
+`wheel_mount_positions(car)` returns one list per wheel, each containing its
+live mount-node positions in `WheelParams::mount` order. These are not wheel
+centres, a mount centroid or tyre-edge points. Consumers needing a tyre-edge
+point must derive it from the exposed sim/wheel geometry; this API itself makes
+no tyre-edge approximation.
+
+`state_words()` is read-only and emits this fixed sequence of u64 words:
+
+1. Car count, then output-step index.
+2. For each car, starting with car 0: node count, wheel count, beam count.
+3. For that car's every node in node order: position x,y,z then velocity x,y,z.
+4. For every wheel in wheel order: position x,y,z, velocity x,y,z, spin;
+   every deflection vector's x,y,z in index order; every load in index order;
+   then suspension length.
+5. For every beam in beam order: current rest length (including yielding),
+   then broken as 0 or 1. Continue with the next car's counts.
+
+Counts, step index and broken flags are integers. All other words are
+`f64::to_bits()`, with no negative-zero normalisation. A car contributes
+`3 + 6*nodes + sum_wheels(8 + 3*deflections.len() + loads.len()) + 2*beams`
+words, following the two-word global prefix. There are no extra delimiters or
+per-wheel deflection/load counts in this contract. It is the specified
+node/wheel/beam state stream, not a serialised solver checkpoint or a hash.
+
+Every traversal uses fixed index order, with no randomness, threads, clocks,
+addresses or unordered iteration in the state stream. Repeated inputs and
+initial state must give identical words; swapping cars changes their ordered
+state identity. Independent cars' substep/check operations commute, so merely
+reversing those two loops cannot be detected by comparing successful-run
+bytes; ordering is also a source-review obligation. The driving-apart test
+compares each car with its independently placed single-car run: this is the
+in-process premise for n20-20's `ai_inputs_replay_one_car_alone`. CLI replay,
+wall policy and state hashing remain outside this module.

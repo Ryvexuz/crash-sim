@@ -10,6 +10,7 @@ pub mod collide;
 pub mod format;
 pub mod input;
 pub mod menu;
+pub mod multi_car;
 pub mod net;
 pub mod pulse;
 pub mod reference;

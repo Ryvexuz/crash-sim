@@ -807,3 +807,562 @@ fn car_contact_never_creates_energy() {
     assert!(min_after.is_finite(), "the post-8 s window must be populated");
     assert!(cars.iter().all(|s| s.car.as_ref().unwrap().drive_work == 0.0));
 }
+
+use crash_sim::multi_car::{CarControls, CarPlacement, MultiError, MultiSim};
+
+const ZERO_CONTROLS: CarControls = CarControls {
+    throttle: 0.0,
+    brake: 0.0,
+    steer: 0.0,
+};
+const ZERO_PLACEMENT: CarPlacement = CarPlacement { offset: Vec3::ZERO };
+
+fn x_placement(x: f64) -> CarPlacement {
+    CarPlacement {
+        offset: Vec3::new(x, 0.0, 0.0),
+    }
+}
+
+fn road_car() -> Sim {
+    let body = parse(include_str!("../scenarios/car_basic.bsn")).unwrap();
+    Sim::from_car(
+        Config {
+            dt: 0.02,
+            // h=0.001 s stays below this body's stability limit.
+            substeps: 20,
+            duration: 6.0,
+            ..Config::default()
+        },
+        &body,
+    )
+    .unwrap()
+}
+
+fn contact_settings(h: f64) -> ContactSettings {
+    ContactSettings::new(0.125, 0.0, h, 0.015625, 0.0625).unwrap()
+}
+
+// Independent writer: scalar lists, not the production vector writer.
+fn car_words(sim: &Sim) -> Vec<u64> {
+    let wheels = &sim.car.as_ref().unwrap().wheels;
+    let mut words = vec![
+        sim.pos.len() as u64,
+        wheels.len() as u64,
+        sim.beams.len() as u64,
+    ];
+    for i in 0..sim.pos.len() {
+        words.extend(
+            [
+                sim.pos[i].x,
+                sim.pos[i].y,
+                sim.pos[i].z,
+                sim.vel[i].x,
+                sim.vel[i].y,
+                sim.vel[i].z,
+            ]
+            .map(f64::to_bits),
+        );
+    }
+    for w in wheels {
+        words.extend(
+            [w.pos.x, w.pos.y, w.pos.z, w.vel.x, w.vel.y, w.vel.z, w.spin].map(f64::to_bits),
+        );
+        for d in &w.deflection {
+            words.extend([d.x, d.y, d.z].map(f64::to_bits));
+        }
+        for &load in &w.load {
+            words.push(load.to_bits());
+        }
+        words.push(w.length.to_bits());
+    }
+    for i in 0..sim.beams.len() {
+        words.push(sim.beams[i].rest.to_bits());
+        words.push(if sim.broken[i] { 1 } else { 0 });
+    }
+    words
+}
+
+fn assert_same_car(actual: &Sim, expected: &Sim, step: u64) {
+    assert_eq!(car_words(actual), car_words(expected), "step={step}");
+    assert_eq!(
+        actual.first_contact_s.map(f64::to_bits),
+        expected.first_contact_s.map(f64::to_bits),
+        "first contact at step={step}"
+    );
+    let time = (step as f64 * expected.cfg.dt).to_bits();
+    assert_eq!(actual.sample().t.to_bits(), time);
+    assert_eq!(expected.sample().t.to_bits(), time);
+}
+
+fn alone_step(sim: &mut Sim, c: CarControls) {
+    sim.car
+        .as_mut()
+        .unwrap()
+        .set_controls(c.throttle, c.brake, c.steer)
+        .unwrap();
+    sim.advance();
+    sim.check().unwrap();
+}
+
+#[test]
+fn one_car_matches_the_single_car_run_byte_for_byte() {
+    let mut plain = road_car();
+    let mut other = road_car();
+    // Explicit signed zero makes the zero-placement constructor check non-vacuous.
+    plain.pos[16].x = -0.0;
+    other.pos[16].x = -0.0;
+    let mut multi = MultiSim::new(
+        vec![other],
+        &[ZERO_PLACEMENT],
+        contact_settings(0.001),
+        0.001,
+    )
+    .unwrap();
+    assert_same_car(multi.sim(0), &plain, 0);
+    let mut initial_words = vec![1, 0];
+    initial_words.extend(car_words(&plain));
+    assert_eq!(multi.state_words(), initial_words);
+    for step in 1..=300 {
+        let c = CarControls {
+            throttle: if step <= 100 {
+                step as f64 / 100.0
+            } else if step <= 220 {
+                0.5
+            } else {
+                0.0
+            },
+            brake: if step > 220 { 0.75 } else { 0.0 },
+            steer: if (120..=200).contains(&step) {
+                0.125
+            } else {
+                0.0
+            },
+        };
+        alone_step(&mut plain, c);
+        let report = multi.advance(&[c]).unwrap();
+        assert_eq!(report.substeps, 20);
+        assert_eq!(
+            (report.candidates, report.contacts, report.impulses),
+            (0, 0, 0)
+        );
+        assert_eq!(multi.step_index(), step);
+        assert_same_car(multi.sim(0), &plain, step);
+    }
+    let mut expected = vec![1, 300];
+    expected.extend(car_words(&plain));
+    assert_eq!(multi.state_words(), expected);
+
+    // A road car's tyres can keep every chassis node off the ground forever.
+    // Use a tangent front wall in a short free-flight variant to guarantee the
+    // first_contact_s update is exercised, not merely None == None.
+    let [mut plain, _] = collision_cars();
+    let [mut other, _] = collision_cars();
+    let wall = crash_sim::collide::Plane::new(plain.pos[32], Vec3::new(-1.0, 0.0, 0.0)).unwrap();
+    plain.planes.push(wall);
+    other.planes.push(wall);
+    let mut multi = MultiSim::new(
+        vec![other],
+        &[ZERO_PLACEMENT],
+        contact_settings(0.0005),
+        0.0005,
+    )
+    .unwrap();
+    assert!(plain.first_contact_s.is_none());
+    alone_step(&mut plain, ZERO_CONTROLS);
+    multi.advance(&[ZERO_CONTROLS]).unwrap();
+    assert_eq!(
+        plain.first_contact_s.map(f64::to_bits),
+        Some(0.0005_f64.to_bits())
+    );
+    assert_same_car(multi.sim(0), &plain, 1);
+}
+
+#[test]
+fn two_cars_driving_apart_never_interact() {
+    let offset = Vec3::new(-12.0, 0.0, 0.0);
+    let mut alone = [road_car(), road_car()];
+    for p in &mut alone[1].pos {
+        *p += offset;
+    }
+    for w in &mut alone[1].car.as_mut().unwrap().wheels {
+        w.pos += offset;
+    }
+    // Higher-speed road driving needs a larger caller-selected skin/motion
+    // band than the low-speed contact fixture (see PHYSICS.md).
+    let settings = ContactSettings::new(1.0, 0.0, 0.001, 0.125, 0.5).unwrap();
+    let mut multi = MultiSim::new(
+        vec![road_car(), road_car()],
+        &[ZERO_PLACEMENT, CarPlacement { offset }],
+        settings,
+        0.001,
+    )
+    .unwrap();
+    let controls = [
+        CarControls {
+            throttle: 1.0,
+            ..ZERO_CONTROLS
+        },
+        CarControls {
+            brake: 1.0,
+            ..ZERO_CONTROLS
+        },
+    ];
+    for step in 1..=300 {
+        let r = multi.advance(&controls).unwrap();
+        assert_eq!(
+            (r.candidates, r.contacts, r.impulses),
+            (0, 0, 0),
+            "step={step}"
+        );
+        for (sim, &control) in alone.iter_mut().zip(&controls) {
+            alone_step(sim, control);
+        }
+    }
+    // n20-20's ai_inputs_replay_one_car_alone relies on this in-process property.
+    for (i, sim) in alone.iter().enumerate() {
+        assert_same_car(multi.sim(i), sim, 300);
+    }
+    assert_eq!(multi.step_index(), 300);
+}
+
+fn short_collision_cars() -> [Sim; 2] {
+    let mut cars = collision_cars();
+    // The original gap is 0.14 m: closing at 0.04 m/s for 400*0.0005 s
+    // does not reach skin=0.125 m. Close it by 0.01001 m once, so this bounded
+    // fixture actually collides, retaining the original velocities and h.
+    // Avoid 0.01 m, which targets tangency exactly at a substep boundary.
+    let offset = Vec3::new(-0.01001, 0.0, 0.0);
+    for p in &mut cars[1].pos {
+        *p += offset;
+    }
+    for w in &mut cars[1].car.as_mut().unwrap().wheels {
+        w.pos += offset;
+    }
+    cars
+}
+
+fn ordered_collision(substeps: u32, reverse: bool) -> MultiSim {
+    let mut cars = short_collision_cars();
+    for sim in &mut cars {
+        sim.cfg.substeps = substeps;
+        sim.cfg.dt = 0.0005 * substeps as f64;
+    }
+    if reverse {
+        cars.reverse();
+    }
+    MultiSim::new(
+        Vec::from(cars),
+        &[ZERO_PLACEMENT; 2],
+        contact_settings(0.0005),
+        0.0005,
+    )
+    .unwrap()
+}
+
+#[test]
+fn multi_car_same_inputs_same_bytes() {
+    let mut first = ordered_collision(1, false);
+    let mut second = ordered_collision(1, false);
+    let mut reversed = ordered_collision(1, true);
+    let mut contacts = [0; 2];
+    for step in 1..=400 {
+        contacts[0] += first.advance(&[ZERO_CONTROLS; 2]).unwrap().contacts;
+        contacts[1] += second.advance(&[ZERO_CONTROLS; 2]).unwrap().contacts;
+        reversed.advance(&[ZERO_CONTROLS; 2]).unwrap();
+        if step % 50 == 0 || step == 400 {
+            assert_eq!(first.state_words(), second.state_words(), "step={step}");
+        }
+    }
+    println!("ordered_collision contacts={contacts:?}");
+    assert!(contacts.iter().all(|&n| n > 0));
+    assert_ne!(first.state_words(), reversed.state_words());
+
+    let mut a = ordered_collision(2, false);
+    let mut b = ordered_collision(2, false);
+    let mut reference = short_collision_cars();
+    let mut variant_contacts = 0;
+    // Two h-sized reference output steps are exactly one two-substep output
+    // step here: no planes, controls or gravity; yielding is independent of
+    // output time and this body has no break limits. The independent reference
+    // uses Sim::advance plus the kernel, not MultiSim. Compare car words without
+    // step_index, which intentionally differs. Counts prove both passes ran.
+    for step in 1..=200 {
+        let ra = a.advance(&[ZERO_CONTROLS; 2]).unwrap();
+        let rb = b.advance(&[ZERO_CONTROLS; 2]).unwrap();
+        let r0 = step_contact(&mut reference);
+        let r1 = step_contact(&mut reference);
+        assert_eq!((ra.substeps, rb.substeps), (2, 2));
+        assert_eq!(ra, rb);
+        assert_eq!(ra.candidates, r0.candidates + r1.candidates, "step={step}");
+        assert_eq!(ra.contacts, r0.contacts + r1.contacts, "step={step}");
+        assert_eq!(ra.impulses, r0.impulses + r1.impulses, "step={step}");
+        assert_eq!(a.state_words(), b.state_words());
+        for (i, sim) in reference.iter().enumerate() {
+            assert_eq!(car_words(a.sim(i)), car_words(sim));
+        }
+        variant_contacts += ra.contacts;
+    }
+    assert!(variant_contacts > 0);
+    // Full words cannot equal the first run: 200 versus 400 output steps.
+    assert_eq!(&a.state_words()[2..], &first.state_words()[2..]);
+}
+
+#[test]
+fn same_car_overlap_never_responds_through_multi_sim() {
+    let [mut own, far] = collision_cars();
+    // Put node 2 one quarter along beam 0--8. All beams retain their real
+    // rest lengths; this overlap stays inside the existing strain limit.
+    // Self-pairs must be skipped even when they would have an undefined normal.
+    let beam = own.beams.iter().find(|b| b.a == 0 && b.b == 8).unwrap();
+    own.pos[2] = own.pos[beam.a] + (own.pos[beam.b] - own.pos[beam.a]) * 0.25;
+    own.check().unwrap();
+    let mut multi = MultiSim::new(
+        vec![own, far],
+        &[ZERO_PLACEMENT, x_placement(50.0)],
+        contact_settings(0.0005),
+        0.0005,
+    )
+    .unwrap();
+    let r = multi.advance(&[ZERO_CONTROLS; 2]).unwrap();
+    assert_eq!((r.candidates, r.contacts, r.impulses), (0, 0, 0));
+}
+
+#[test]
+fn multi_sim_refuses_bad_construction_and_controls() {
+    let build = |cars, placements: &[CarPlacement], h| {
+        MultiSim::new(cars, placements, contact_settings(0.001), h)
+    };
+    assert!(matches!(
+        build(vec![], &[], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    assert!(matches!(
+        build(vec![Sim::new(Config::default())], &[ZERO_PLACEMENT], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    for change_dt in [true, false] {
+        let mut other = road_car();
+        if change_dt {
+            other.cfg.dt = 0.01;
+        } else {
+            other.cfg.substeps = 40;
+        }
+        assert!(matches!(
+            build(vec![road_car(), other], &[ZERO_PLACEMENT; 2], 0.001),
+            Err(MultiError::MismatchedConfig { car: 1 })
+        ));
+    }
+    for dt in [0.0, -0.02, f64::NAN, f64::INFINITY, f64::from_bits(1)] {
+        let mut car = road_car();
+        car.cfg.dt = dt;
+        assert!(matches!(
+            build(vec![car], &[ZERO_PLACEMENT], 0.001),
+            Err(MultiError::BadCars(_))
+        ));
+    }
+    let mut car = road_car();
+    car.cfg.substeps = 0;
+    assert!(matches!(
+        build(vec![car], &[ZERO_PLACEMENT], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    let mut car = road_car();
+    car.car.as_mut().unwrap().wheels.clear();
+    assert!(matches!(
+        build(vec![car], &[ZERO_PLACEMENT], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    for h in [
+        0.0,
+        -0.001,
+        f64::NAN,
+        f64::INFINITY,
+        f64::from_bits(1),
+        f64::from_bits(0.001_f64.to_bits() + 1),
+    ] {
+        assert!(matches!(
+            build(vec![road_car()], &[ZERO_PLACEMENT], h),
+            Err(MultiError::BadCars(_))
+        ));
+    }
+    assert!(matches!(
+        build(vec![road_car()], &[], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    for offset in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(
+            build(vec![road_car()], &[x_placement(offset)], 0.001),
+            Err(MultiError::BadCars(_))
+        ));
+    }
+    // Exact binary addition references include subnormals, the largest finite
+    // values, and cancellation of adjacent huge floats. No simulation follows
+    // these deliberately nonphysical constructor-only coordinate fixtures.
+    for (p, offset, expected) in [
+        (-0.0, -0.0, -0.0),
+        (f64::from_bits(1), f64::from_bits(1), f64::from_bits(2)),
+        (-f64::MAX, f64::MAX, 0.0),
+        (
+            -2.0_f64.powi(500),
+            f64::from_bits(2.0_f64.powi(500).to_bits() + 1),
+            2.0_f64.powi(448),
+        ),
+    ] {
+        let mut car = road_car();
+        for node in &mut car.pos {
+            node.x = p;
+        }
+        for wheel in &mut car.car.as_mut().unwrap().wheels {
+            wheel.pos.x = p;
+        }
+        let multi = build(vec![car], &[x_placement(offset)], 0.001).unwrap();
+        assert_eq!(multi.sim(0).pos[0].x.to_bits(), expected.to_bits());
+        assert_eq!(
+            multi.sim(0).car.as_ref().unwrap().wheels[0].pos.x.to_bits(),
+            expected.to_bits()
+        );
+    }
+    let mut car = road_car();
+    car.pos[0].x = f64::MAX;
+    assert!(matches!(
+        build(vec![car], &[x_placement(f64::MAX)], 0.001),
+        Err(MultiError::BadCars(_))
+    ));
+    let mut multi = build(vec![road_car(), road_car()], &[ZERO_PLACEMENT; 2], 0.001).unwrap();
+    let before = multi.state_words();
+    assert!(matches!(
+        multi.advance(&[]),
+        Err(MultiError::ControlCount {
+            expected: 2,
+            got: 0
+        })
+    ));
+    assert_eq!(multi.state_words(), before);
+    for (controls, car) in [
+        (
+            [
+                ZERO_CONTROLS,
+                CarControls {
+                    throttle: 2.0,
+                    ..ZERO_CONTROLS
+                },
+            ],
+            1,
+        ),
+        (
+            [CarControls {
+                throttle: 2.0,
+                ..ZERO_CONTROLS
+            }; 2],
+            0,
+        ),
+        (
+            [
+                ZERO_CONTROLS,
+                CarControls {
+                    brake: f64::NAN,
+                    ..ZERO_CONTROLS
+                },
+            ],
+            1,
+        ),
+        (
+            [
+                ZERO_CONTROLS,
+                CarControls {
+                    steer: f64::INFINITY,
+                    ..ZERO_CONTROLS
+                },
+            ],
+            1,
+        ),
+    ] {
+        let mut multi = build(vec![road_car(), road_car()], &[ZERO_PLACEMENT; 2], 0.001).unwrap();
+        assert!(
+            matches!(multi.advance(&controls), Err(MultiError::Controls { car: i, .. }) if i == car)
+        );
+        assert_eq!(multi.state_words(), before, "no car moved on refusal");
+    }
+    let mut car = road_car();
+    car.vel[0].x = f64::NAN;
+    let mut multi = build(vec![car], &[ZERO_PLACEMENT], 0.001).unwrap();
+    assert!(matches!(
+        multi.advance(&[ZERO_CONTROLS]),
+        Err(MultiError::Unstable { car: 0, .. })
+    ));
+    let mut cars = collision_cars();
+    for sim in &mut cars {
+        for v in &mut sim.vel {
+            v.x = 1.0;
+        }
+        for w in &mut sim.car.as_mut().unwrap().wheels {
+            w.vel.x = 1.0;
+        }
+    }
+    let tiny = ContactSettings::new(0.125, 0.0, 0.0005, 2.0_f64.powi(-40), 0.0625).unwrap();
+    let mut multi = MultiSim::new(
+        Vec::from(cars),
+        &[ZERO_PLACEMENT, x_placement(-4.14)],
+        tiny,
+        0.0005,
+    )
+    .unwrap();
+    let error = multi.advance(&[ZERO_CONTROLS; 2]);
+    assert!(matches!(
+        error,
+        Err(MultiError::Contact(ContactError {
+            car: Some(0),
+            feature: Feature::Node(0),
+            failure: Failure::MotionBound,
+        }))
+    ));
+}
+
+fn car_word_count(sim: &Sim) -> usize {
+    3 + 6 * sim.pos.len()
+        + sim
+            .car
+            .as_ref()
+            .unwrap()
+            .wheels
+            .iter()
+            .map(|w| 8 + 3 * w.deflection.len() + w.load.len())
+            .sum::<usize>()
+        + 2 * sim.beams.len()
+}
+
+#[test]
+fn geometry_and_full_state_access_follow_live_state() {
+    let mut multi = MultiSim::new(
+        vec![road_car(), road_car()],
+        &[ZERO_PLACEMENT, x_placement(-12.0)],
+        contact_settings(0.001),
+        0.001,
+    )
+    .unwrap();
+    let before: Vec<_> = (0..2)
+        .map(|i| multi.chassis_positions(i).to_vec())
+        .collect();
+    multi.advance(&[ZERO_CONTROLS; 2]).unwrap();
+    assert_eq!(multi.car_count(), 2);
+    for (i, old) in before.iter().enumerate() {
+        let sim = multi.sim(i);
+        assert_ne!(multi.chassis_positions(i), old.as_slice());
+        assert_eq!(multi.chassis_positions(i), sim.pos.as_slice());
+        let mounts = multi.wheel_mount_positions(i);
+        let wheels = &sim.car.as_ref().unwrap().wheels;
+        assert_eq!(mounts.len(), wheels.len());
+        for (positions, wheel) in mounts.iter().zip(wheels) {
+            assert_eq!(positions.len(), wheel.p.mount.len());
+            for (&p, &node) in positions.iter().zip(&wheel.p.mount) {
+                assert_eq!(p, sim.pos[node]);
+            }
+        }
+    }
+    let words = multi.state_words();
+    assert_eq!(&words[..2], &[2, 1]);
+    let split = 2 + car_word_count(multi.sim(0));
+    assert_eq!(words.len(), split + car_word_count(multi.sim(1)));
+    assert_eq!(&words[2..split], car_words(multi.sim(0)));
+    assert_eq!(&words[split..], car_words(multi.sim(1)));
+}
