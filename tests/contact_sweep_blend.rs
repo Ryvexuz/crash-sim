@@ -1,4 +1,4 @@
-//! Blended separating planes must not certify sweeps that enter the skin.
+//! Blended planes and subdivided pieces must not certify sweeps that enter the skin.
 
 use crash_sim::car_contact::{
     apply_contacts, detect_contacts, ContactCar, ContactError, ContactKey, ContactSettings, Failure,
@@ -21,7 +21,13 @@ fn velocity_bits(cars: &[ContactCar<'_>]) -> Vec<[u64; 3]> {
         .collect()
 }
 
-fn assert_crossing_refused(old_beam: [Vec3; 2], beam: [Vec3; 2], old_node: Vec3, node: Vec3) {
+fn assert_crossing_refused(
+    old_beam: [Vec3; 2],
+    beam: [Vec3; 2],
+    old_node: Vec3,
+    node: Vec3,
+    inside_s: f64,
+) {
     for (name, p, a, b) in [
         ("old", old_node, old_beam[0], old_beam[1]),
         ("final", node, beam[0], beam[1]),
@@ -33,15 +39,15 @@ fn assert_crossing_refused(old_beam: [Vec3; 2], beam: [Vec3; 2], old_node: Vec3,
             "{name} distance={distance:?} must be outside skin within sweep band"
         );
     }
-    let midpoint_distance = closest(
-        old_node + (node - old_node) * 0.5,
-        old_beam[0] + (beam[0] - old_beam[0]) * 0.5,
-        old_beam[1] + (beam[1] - old_beam[1]) * 0.5,
+    let distance = closest(
+        old_node + (node - old_node) * inside_s,
+        old_beam[0] + (beam[0] - old_beam[0]) * inside_s,
+        old_beam[1] + (beam[1] - old_beam[1]) * inside_s,
     );
-    eprintln!("crossing midpoint distance={midpoint_distance:.9}");
+    eprintln!("crossing inside s={inside_s} distance={distance:.9}");
     assert!(
-        midpoint_distance < 0.25,
-        "midpoint distance={midpoint_distance:?} must enter skin"
+        distance < 0.25,
+        "inside s={inside_s} distance={distance:?} must enter skin"
     );
 
     let beams = [Beam {
@@ -102,6 +108,7 @@ fn crossing_sweep_past_an_end_cap_is_still_refused() {
         beam,
         Vec3::new(-0.2497, -0.015, 0.0),
         Vec3::new(-0.2497, 0.015, 0.0),
+        0.5,
     );
 }
 
@@ -112,5 +119,18 @@ fn crossing_sweep_of_a_moving_beam_is_still_refused() {
         [Vec3::new(0.0, -0.015, 0.0), Vec3::new(1.0, -0.015, 0.0)],
         Vec3::new(-0.2497, 0.0, 0.0),
         Vec3::new(-0.2497, 0.0, 0.0),
+        0.5,
+    );
+}
+
+#[test]
+fn crossing_sweep_between_samples_is_still_refused() {
+    let beam = [Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0)];
+    assert_crossing_refused(
+        beam,
+        beam,
+        Vec3::new(-0.2499, -0.0075, 0.0),
+        Vec3::new(-0.2499, 0.0225, 0.0),
+        0.25,
     );
 }

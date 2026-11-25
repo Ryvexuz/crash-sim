@@ -399,9 +399,11 @@ position norm or skin. Identical source/endpoint snapshots need no sweep check.
 If neither normal certifies separation, the kernel also tries the blended normals
 `n0 + λ(n1 - n0)` at the at most six `λ` in (0, 1) where two of the four endpoint
 projections (linear in `λ`) cross; the same strict test decides, and it is valid
-for any normal because it scales by the normal's length. Only if none certifies
-does `UnsupportedSweep` refuse the pass, even when a more expensive continuous
-solver might prove it safe.
+for any normal because it scales by the normal's length. If none certifies, the
+kernel halves the substep's linear motion at s = k/2^j, at most six times and only
+where a piece is not yet certified, and accepts only when every piece passes the
+same strict test with its own end normals; otherwise `UnsupportedSweep` refuses
+the pass, even when a more expensive continuous solver might prove it safe.
 Reduce the substep or use a future continuous contact model; do not ignore this
 error and continue ghosting. Curved within-substep trajectories are outside this
 API's geometric contract.

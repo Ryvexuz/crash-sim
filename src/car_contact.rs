@@ -267,22 +267,7 @@ fn separated(
     n: Vec3,
     skin: f64,
 ) -> bool {
-    let b = target.beams[key.beam];
-    let normal_length = norm(n);
-    [source.previous_pos[key.node], source.pos[key.node]]
-        .iter()
-        .zip([target.previous_pos, target.pos])
-        .all(|(&p, positions)| {
-            [b.a, b.b].iter().all(|&i| {
-                let q = positions[i];
-                // Bound subtraction, dot-product and normal-length roundoff.
-                // This only makes the refusal more conservative; it never
-                // widens the exact narrow-phase contact predicate.
-                let scale = norm(p).max(norm(q)).max(skin);
-                let margin = 64.0 * f64::EPSILON * scale * normal_length;
-                (p - q).dot(n) > skin * normal_length + margin
-            })
-        })
+    clears(&corners(source, target, key), n, skin)
 }
 
 /// Four strict projections certify every bilinear sweep point by convexity.
@@ -297,19 +282,39 @@ fn separated_blend(
     n0: Vec3,
     skin: f64,
 ) -> bool {
+    blend_clears(&corners(source, target, key), n1, n0, skin)
+}
+
+type Corners = [(Vec3, Vec3); 4];
+
+fn corners(source: &ContactCar<'_>, target: &ContactCar<'_>, key: ContactKey) -> Corners {
     let b = target.beams[key.beam];
+    [
+        (source.previous_pos[key.node], target.previous_pos[b.a]),
+        (source.previous_pos[key.node], target.previous_pos[b.b]),
+        (source.pos[key.node], target.pos[b.a]),
+        (source.pos[key.node], target.pos[b.b]),
+    ]
+}
+
+fn clears(c: &Corners, n: Vec3, skin: f64) -> bool {
+    let normal_length = norm(n);
+    c.iter().all(|&(p, q)| {
+        // Bound subtraction, dot-product and normal-length roundoff.
+        // This only makes the refusal more conservative; it never
+        // widens the exact narrow-phase contact predicate.
+        let scale = norm(p).max(norm(q)).max(skin);
+        let margin = 64.0 * f64::EPSILON * scale * normal_length;
+        (p - q).dot(n) > skin * normal_length + margin
+    })
+}
+
+fn blend_clears(c: &Corners, n1: Vec3, n0: Vec3, skin: f64) -> bool {
     let mut lines = [(0.0, 0.0); 4];
-    let mut line = 0;
-    for (p, positions) in [
-        (source.previous_pos[key.node], target.previous_pos),
-        (source.pos[key.node], target.pos),
-    ] {
-        for i in [b.a, b.b] {
-            let w = p - positions[i];
-            let a = w.dot(n0) - skin;
-            lines[line] = (a, w.dot(n1) - skin - a);
-            line += 1;
-        }
+    for (line, &(p, q)) in c.iter().enumerate() {
+        let w = p - q;
+        let a = w.dot(n0) - skin;
+        lines[line] = (a, w.dot(n1) - skin - a);
     }
     for j in 0..4 {
         for k in j + 1..4 {
@@ -317,13 +322,78 @@ fn separated_blend(
             if lambda.is_finite()
                 && lambda > 0.0
                 && lambda < 1.0
-                && separated(source, target, key, n0 + (n1 - n0) * lambda, skin)
+                && clears(c, n0 + (n1 - n0) * lambda, skin)
             {
                 return true;
             }
         }
     }
     false
+}
+
+const SWEEP_DEPTH: u32 = 6;
+
+/// Restricted linear motion is bilinear; certified neighbouring pieces cover it.
+/// Dyadic interior samples come once from the snapshots, shared by both pieces;
+/// their corner error stays inside the existing 64*EPSILON margin.
+/// Depth six is a work cap (at most 127 pieces), not a precision parameter;
+/// only uncertified pieces split, and an uncertified cover still refuses.
+fn separated_pieces(
+    source: &ContactCar<'_>,
+    target: &ContactCar<'_>,
+    key: ContactKey,
+    n1: Vec3,
+    n0: Vec3,
+    skin: f64,
+) -> bool {
+    type Sample = (f64, [Vec3; 3], Vec3);
+    fn split(
+        old: &[Vec3; 3],
+        new: &[Vec3; 3],
+        lo: Sample,
+        hi: Sample,
+        depth: u32,
+        skin: f64,
+    ) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let s = (lo.0 + hi.0) * 0.5;
+        let at = std::array::from_fn(|i| old[i] + (new[i] - old[i]) * s);
+        let (_, delta, d) = closest(at[0], at[1], at[2]);
+        if !(d.is_finite() && d > skin) {
+            return false;
+        }
+        let mid = (s, at, delta * (1.0 / d));
+        piece(old, new, lo, mid, depth - 1, skin) && piece(old, new, mid, hi, depth - 1, skin)
+    }
+    fn piece(
+        old: &[Vec3; 3],
+        new: &[Vec3; 3],
+        lo: Sample,
+        hi: Sample,
+        depth: u32,
+        skin: f64,
+    ) -> bool {
+        let c = [
+            (lo.1[0], lo.1[1]),
+            (lo.1[0], lo.1[2]),
+            (hi.1[0], hi.1[1]),
+            (hi.1[0], hi.1[2]),
+        ];
+        clears(&c, hi.2, skin)
+            || clears(&c, lo.2, skin)
+            || blend_clears(&c, hi.2, lo.2, skin)
+            || split(old, new, lo, hi, depth, skin)
+    }
+    let b = target.beams[key.beam];
+    let old = [
+        source.previous_pos[key.node],
+        target.previous_pos[b.a],
+        target.previous_pos[b.b],
+    ];
+    let new = [source.pos[key.node], target.pos[b.a], target.pos[b.b]];
+    split(&old, &new, (0.0, old, n0), (1.0, new, n1), SWEEP_DEPTH, skin)
 }
 
 fn prepare(
@@ -409,6 +479,7 @@ fn prepare(
             && !separated(source, target, key, normal, cfg.skin)
             && !separated(source, target, key, old_normal, cfg.skin)
             && !separated_blend(source, target, key, normal, old_normal, cfg.skin)
+            && !separated_pieces(source, target, key, normal, old_normal, cfg.skin)
         {
             return Err(refusal(Failure::UnsupportedSweep));
         }
