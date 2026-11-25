@@ -19,14 +19,12 @@ cargo test --offline
 
 `src/main.rs` picks the mode from the flags, in this order (the first match wins):
 
-1. **Tune**: chosen by a leading `tune` command; usage `crash-sim tune --body <file.bsn> --out <fresh-dir> [--tune <file>]... [--set <keyword>.<name>.<field>=<value>]... [--jobs <n>] [--show <prefix>]... -- <run flags...>`; doc [runtime tuning](docs/TUNING.md).
+1. **Tune**: chosen by a leading `tune` command; usage `crash-sim tune --body <file.bsn> --out <dir> [--tune <file>]... [--set <keyword>.<name>.<field>=<value>]... [--jobs <1..=16>] [--show <prefix>]... -- <run flags...>`; doc [runtime tuning](docs/TUNING.md).
 2. **Game shell**: chosen by `--shell`; usage `crash-sim --shell`; doc [shell protocol](docs/SHELL.md), checks 3.1 to 3.3 of [Stage 7 milestone 3](docs/STAGE7.md).
 3. **Network peer (one of two machines)**: chosen by `--host <addr:port>` or `--join <addr:port>`, without `--input2`; usage `usage: crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> (--host <addr:port> | --join <addr:port>) --input <file> --net-delay <ticks> --net-hash-every <ticks> --net-timeout <s> --net-connect-timeout <s> --net-seed <u64>`; docs [net messages](docs/NET.md), [Stage 7 milestone 4](docs/STAGE7.md).
 4. **Two-car reference run, no network**: chosen by any of `--input2`, `--net-delay`, `--net-hash-every`; usage `usage: crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> --input <file> --input2 <file> --net-delay <ticks> --net-hash-every <ticks>`; doc [Stage 7 milestone 4](docs/STAGE7.md).
 5. **AI race**: chosen by `--ai <n>`; usage `usage: crash-sim --body <car.bsn> --track <file> --ai <n> --laps <N> --time-limit <s> --grid-gap <m> --ai-params <file> [--save-inputs <prefix>] [--substeps <n>]`; doc [Stage 7 milestone 2](docs/STAGE7.md).
 6. **Single run**: chosen by everything else; usage: the cube by default, `--body <file.bsn>` ([format](docs/FORMAT.md)), `--input <file>` (a driver script), `--live`, `--track <file>` (a timed lap, [Stage 7 milestone 1](docs/STAGE7.md)), and report flags `--summary`, `--events`, `--settle-report`, `--crumple-report`, `--slope-report`, `--drive-report`, `--pulse-report` ([Stage 6](docs/STAGE6.md), [Stage 6 milestones 4 and 5](docs/STAGE6-M4-M5.md)).
-
-A tune command is added by task t-20261125-163520 (`docs/TUNING.md`).
 
 ## Docs and examples
 
