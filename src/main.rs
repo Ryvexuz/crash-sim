@@ -177,11 +177,11 @@ fn main() {
     {
         exit(net_peer::run_peer_cli(&ai_args));
     }
-    if ai_args.iter().any(|a| a == "--ai") {
-        exit(ai_race::run_ai_cli(&ai_args));
-    }
     if net_race::wants_reference(&ai_args) {
         exit(net_race::run_reference_cli(&ai_args));
+    }
+    if ai_args.iter().any(|a| a == "--ai") {
+        exit(ai_race::run_ai_cli(&ai_args));
     }
     let mut cfg = Config::default();
     let mut summary = false;

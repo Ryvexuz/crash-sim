@@ -280,6 +280,7 @@ fn reference_usage_errors() {
     for (flag, value) in [
         ("--host", "127.0.0.1:0"),
         ("--join", "127.0.0.1:0"),
+        ("--ai", "3"),
         ("--substeps", "5"),
         ("--dt", "0.01"),
         ("--live", ""),
