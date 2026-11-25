@@ -1,0 +1,28 @@
+src/ai.rs: let alpha = wrap_angle(dz.atan2(dx) - s.heading);
+src/ai.rs: let delta = (2.0 * s.wheelbase * alpha.sin() / d).atan();
+src/car_contact.rs: v.x.hypot(v.y).hypot(v.z)
+src/cli/race.rs: d.z.atan2(d.x).to_degrees()
+src/format.rs: let k = longest.log2().ceil() as i32;
+src/input.rs: v.z.atan2(v.x)
+src/pulse.rs: let wa = (wd * dt / 2.0).sin() / (wd * dt / 2.0).cos();
+src/race.rs: d.z.atan2(d.x)
+src/race.rs: let right = Vec3::new(-heading.sin(), 0.0, heading.cos());
+src/race.rs: speed: v.dot(Vec3::new(heading.cos(), 0.0, heading.sin())),
+src/settle.rs: predicted: cfg.gravity * (theta.sin() - mu * theta.cos()),
+src/settle.rs: tan: theta.tan(),
+src/sim.rs: let (s, c) = TILT_DEG.to_radians().sin_cos();
+src/sim.rs: let (s, c) = self.gravity_tilt.sin_cos();
+src/solver_m5.rs: add_outer(fe, flow.d.exp() - 1.0, mat_vec(fe, flow.n), flow.n)
+src/solver_m5.rs: bound_from(sym_eigen(&ata(fe)).lower, je.ln(), law)
+src/solver_m5.rs: flow_from(&sym_eigen(&ata(fe)), je.ln(), e_c, law)
+src/solver_m5.rs: fp = add_outer(&fp, (-flow.d).exp() - 1.0, flow.n, fpt_n);
+src/solver_m5.rs: je *= flow.d.exp();
+src/solver_m5.rs: law.mu * (l1 * (2.0 * d).exp() - 1.0) + law.lambda * (ln_je + d) + law.sigma_y(e_c + d)
+src/solver_m5.rs: let d_hi = (-0.5 * l1.ln()).min(law.e_max - e_c);
+src/solver_m5.rs: let l = je.ln();
+src/solver_m5.rs: let mut ln_je = je_trial.ln();
+src/solver_m5.rs: piola_from(fe, je, je.ln(), law)
+src/solver_m5.rs: t.eta * je * e_c.exp() / eig.lower
+src/vehicle.rs: Ok((grip_frac * first.mu).atan())
+src/vehicle.rs: c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()
+src/vehicle.rs: let (s, c) = (self.steer * self.max_steer).sin_cos();
