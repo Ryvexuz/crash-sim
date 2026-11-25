@@ -10,6 +10,7 @@ use crash_sim::vehicle::REVERSE_MAX_FORWARD_SPEED;
 use crash_sim::{Config, Sim};
 use std::io::Write;
 use std::process::{Command, Stdio};
+mod run_tmp;
 
 fn car_path() -> String {
     format!("{}/scenarios/car_basic.bsn", env!("CARGO_MANIFEST_DIR"))
@@ -182,7 +183,7 @@ fn crash_sim_bin() -> std::path::PathBuf {
 /// bytes, the car ends behind where it started) and -1.01 is refused by both with exit 2.
 #[test]
 fn input_and_live_accept_minus_one_and_refuse_below() {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let live = |text: &str| {
         let mut child = Command::new(crash_sim_bin())

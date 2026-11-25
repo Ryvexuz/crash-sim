@@ -12,6 +12,7 @@ use crash_sim::{Body, Config};
 use std::fmt::Write;
 use std::process::{Command, Stdio};
 use std::time::Instant;
+mod run_tmp;
 
 struct WallTime {
     name: &'static str,
@@ -194,7 +195,7 @@ fn one_car_race_matches_the_timed_lap_program() {
         c.steer
     )
     .unwrap();
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let input = dir.join("race_core_one_car.input");
     std::fs::write(&input, script).unwrap();

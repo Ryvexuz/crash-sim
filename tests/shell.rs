@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+mod run_tmp;
 
 fn exe() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
@@ -21,7 +22,7 @@ fn exe() -> std::path::PathBuf {
 }
 
 fn dir(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let root = run_tmp::run_tmp();
     fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
     let d = root.join(format!("shell-bin-{name}"));

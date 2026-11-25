@@ -8,6 +8,7 @@ use crash_sim::settle::{car_sim, CarSetup};
 use crash_sim::vec3::Vec3;
 use crash_sim::{Config, Sim};
 use std::process::Command;
+mod run_tmp;
 
 fn scenario(name: &str) -> String {
     let path = format!("{}/scenarios/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -84,7 +85,7 @@ fn crash_sim_bin() -> std::path::PathBuf {
 
 /// A file in the build's own temp folder (the test binary's, not the repo).
 fn tmp_file(name: &str, text: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();

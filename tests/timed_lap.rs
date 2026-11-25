@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+mod run_tmp;
 
 /// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
 /// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
@@ -47,7 +48,7 @@ fn lap_input_path() -> String {
 
 /// A file in the build's own temp folder (the test binary's, not the repo).
 fn tmp_file(name: &str, text: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();

@@ -5,10 +5,11 @@ use crash_sim::save;
 
 use save::{write_atomic, Best, Save, SaveError, UNKNOWN};
 use std::path::PathBuf;
+mod run_tmp;
 
 /// A fresh empty folder under cargo's per-target temp dir (shared build folder, not the repo).
 fn dir(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("save-{name}"));
+    let d = run_tmp::run_tmp().join(format!("save-{name}"));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

@@ -2,9 +2,10 @@ use crash_sim::shell::{self, Shell};
 use std::fs;
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
+mod run_tmp;
 
 fn dir(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let root = run_tmp::run_tmp();
     fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
     let d = root.join(format!("shell-core-{name}"));

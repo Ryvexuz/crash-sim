@@ -8,6 +8,7 @@ use crash_sim::{
     GRAVITY,
 };
 use std::process::{Command, Output};
+mod run_tmp;
 
 const K: f64 = 20_000.0;
 const C: f64 = 20.0;
@@ -340,7 +341,7 @@ fn run(args: &[&str]) -> Output {
 }
 
 fn body_file(name: &str, text: &str) -> String {
-    let path = format!("{}/{name}", env!("CARGO_TARGET_TMPDIR"));
+    let path = run_tmp::run_tmp().join(name).to_string_lossy().into_owned();
     std::fs::write(&path, text).unwrap();
     path
 }

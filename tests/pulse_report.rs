@@ -8,6 +8,7 @@
 use crash_sim::Config;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+mod run_tmp;
 
 /// Path of the crash-sim binary, read at run time: the copy a broadsword test step points
 /// `CARGO_BIN_EXE_crash-sim` at, else the cargo layout next to the test executable.
@@ -28,7 +29,7 @@ fn crash_sim_bin() -> PathBuf {
 
 /// A folder of this test's own files under the target folder.
 fn dir(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("pulse_report_{name}"));
+    let d = run_tmp::run_tmp().join(format!("pulse_report_{name}"));
     std::fs::create_dir_all(&d).unwrap();
     d
 }

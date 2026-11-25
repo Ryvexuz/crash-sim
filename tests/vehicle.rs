@@ -6,6 +6,7 @@ use crash_sim::format::{parse, Body};
 use crash_sim::vec3::Vec3;
 use crash_sim::{settle, solver, vehicle, Config, Sim};
 use std::process::Command;
+mod run_tmp;
 
 /// The input of `scenarios/full_brake.input`: full brake from t = 0.
 fn full_brake() -> crash_sim::input::Script {
@@ -595,7 +596,7 @@ fn car_path() -> String {
 
 /// A one-line input file in the build's own temp folder (the test binary's, not the repo).
 fn input_file(name: &str, text: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();

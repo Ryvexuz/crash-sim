@@ -6,6 +6,7 @@ use crash_sim::reference;
 
 use reference::*;
 use std::path::PathBuf;
+mod run_tmp;
 
 const GOOD_PULSE: &str = "tests/data/reference/good.pulse.csv";
 const GOOD_META: &str = "tests/data/reference/good.meta";
@@ -170,7 +171,7 @@ fn crlf_files_load() {
 
 #[test]
 fn load_pulse_reads_a_temp_file() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("reference_test_pulse.csv");
     std::fs::write(&path, with_line(&text(12, |i| i as f64), 9, "0.001000,1.0")).unwrap();

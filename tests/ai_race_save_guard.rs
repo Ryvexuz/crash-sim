@@ -3,6 +3,7 @@ use crash_sim::race::{ProfileParams, RaceSetup};
 use crash_sim::track::Track;
 use crash_sim::{Body, Config};
 use std::process::{Command, Stdio};
+mod run_tmp;
 
 fn body() -> Body {
     crash_sim::format::parse(include_str!("../scenarios/car_basic.bsn")).unwrap()
@@ -109,7 +110,7 @@ fn cli(args: &[String]) -> Run {
 }
 
 fn folder(name: &str) -> std::path::PathBuf {
-    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let root = run_tmp::run_tmp();
     std::fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
     let dir = root.join(format!("save_guard_{name}"));

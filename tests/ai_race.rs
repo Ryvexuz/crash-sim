@@ -4,6 +4,7 @@ use crash_sim::ai::DriverParams;
 use crash_sim::race::{self, ProfileParams, RaceEnd, RaceSetup};
 use crash_sim::track::Track;
 use crash_sim::{Body, Config};
+mod run_tmp;
 
 fn body() -> Body {
     crash_sim::format::parse(include_str!("../scenarios/car_basic.bsn")).unwrap()
@@ -154,7 +155,7 @@ fn exe() -> std::path::PathBuf {
 }
 
 fn temp_file(name: &str, text: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dir = run_tmp::run_tmp();
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();
