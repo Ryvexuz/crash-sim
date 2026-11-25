@@ -1,5 +1,7 @@
 //! Reference-mode output, independent single-car replay, and strict usage diagnostics.
 
+mod run_tmp;
+
 use std::process::{Command, Stdio};
 
 const USAGE: &str = "usage: crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> --input <file> --input2 <file> --net-delay <ticks> --net-hash-every <ticks>";
@@ -26,8 +28,7 @@ fn exe() -> std::path::PathBuf {
 }
 
 fn tmp_file(name: &str, text: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = run_tmp::run_tmp();
     let path = dir.join(format!("net_reference_{}_{name}.input", std::process::id()));
     std::fs::write(&path, text).unwrap();
     path.to_string_lossy().into_owned()
