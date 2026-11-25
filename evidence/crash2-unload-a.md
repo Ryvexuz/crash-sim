@@ -207,3 +207,4 @@ pulse: FAIL static_crush_m norm=1.4829
 (to be appended by the orchestrator)
 
 Independent review: gpt-6.2-astra, high effort, codex exec read-only, 2026-11-25 ~09:45Z, 79 s, 42,748 tokens (ChatGPT plan). Verdict REJECT with one exact fix (delete the stale follow-up 3: three copies already call apply_unload and the energy tool refuses the key since ready-83, commit 315af13); applied. Quote: `Every field in table rows 29–35 matches its raw report`. Raw: scratch/astra-092422.md.
+Second pass (same model and effort, 20,385 tokens): VERDICT: APPROVE, queueing this record only (no u adopted). Quote: `I found no unsupported measurement claim`. Raw: scratch/astra-092422-r2.md.
