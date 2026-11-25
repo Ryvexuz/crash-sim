@@ -235,7 +235,7 @@ fn connect(flags: &Flags<'_>) -> Result<(TcpStream, SocketAddr), String> {
                     .map_err(|e| format!("net: FAIL {e}"))?;
                 return Ok((stream, addr));
             }
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+            Err(e) if accept_error_is_retried(e.kind()) => {
                 std::thread::sleep(
                     Duration::from_millis(10)
                         .min(flags.connect_timeout.saturating_sub(started.elapsed())),
@@ -244,6 +244,19 @@ fn connect(flags: &Flags<'_>) -> Result<(TcpStream, SocketAddr), String> {
             Err(e) => return Err(format!("net: FAIL {e}")),
         }
     }
+}
+
+/// An accept error that leaves the listener usable, so the host keeps waiting (within the
+/// connect timeout): no connection yet, a signal, or one incoming connection that was reset or
+/// aborted before it was accepted (a port scan, a peer that gave up). Anything else ends the host.
+fn accept_error_is_retried(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::WouldBlock
+            | ErrorKind::Interrupted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+    )
 }
 
 fn session_failure(error: SessionError) -> String {
@@ -352,6 +365,36 @@ pub fn run_peer_cli(args: &[String]) -> i32 {
             lines.discard();
             print_line(&e);
             1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accept_errors_that_keep_the_listener_are_retried() {
+        let retried: [ErrorKind; 4] = [
+            ErrorKind::WouldBlock,
+            ErrorKind::Interrupted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+        ];
+        for k in retried {
+            assert!(accept_error_is_retried(k), "{k:?}");
+        }
+        let fatal: [ErrorKind; 7] = [
+            ErrorKind::AddrInUse,
+            ErrorKind::PermissionDenied,
+            ErrorKind::InvalidInput,
+            ErrorKind::OutOfMemory,
+            ErrorKind::Other,
+            ErrorKind::NotFound,
+            ErrorKind::TimedOut,
+        ];
+        for k in fatal {
+            assert!(!accept_error_is_retried(k), "{k:?}");
         }
     }
 }
