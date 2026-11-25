@@ -1,13 +1,12 @@
-//! This file pins today's refusal so that its numbers can be read; the fix task
-//! replaces the expected failure with the fixed behaviour.
+//! This file pinned the refusal that ready-101 fixed and now pins the fixed
+//! behaviour, retaining the sweep geometry and the network run's early hashes.
+//! The later tick-284 refusal remains a known defect, captured for diagnosis.
 
-use crash_sim::car_contact::{
-    detect_contacts, ContactCar, ContactError, ContactKey, ContactSettings, Failure, Feature,
-};
+use crash_sim::car_contact::{detect_contacts, ContactCar, ContactKey, ContactSettings};
 use crash_sim::input::Script;
-use crash_sim::multi_car::{CarPlacement, MultiError, MultiSim, StepReport};
+use crash_sim::multi_car::{CarPlacement, MultiSim, StepReport};
 use crash_sim::net::session::{Input, LockstepSim};
-use crash_sim::race::lockstep::{controls_of, LockstepFailure, LockstepRace, LockstepSetup};
+use crash_sim::race::lockstep::{controls_of, LockstepRace, LockstepSetup};
 use crash_sim::race::{car_position, place_on_grid, slot_distance};
 use crash_sim::race_hash::multi_state_hash;
 use crash_sim::settle::{self, CarSetup};
@@ -71,19 +70,6 @@ fn inputs_at(scripts: &[Vec<(f64, Input)>; 2], tick: u64, cfg: &Config) -> [Inpu
     })
 }
 
-fn expected() -> ContactError {
-    ContactError {
-        car: Some(1),
-        feature: Feature::Contact(ContactKey {
-            source_car: 1,
-            node: 32,
-            target_car: 0,
-            beam: 0,
-        }),
-        failure: Failure::UnsupportedSweep,
-    }
-}
-
 fn check_network_hash(tick: u64, found: u64) {
     let expected = match tick {
         99 => 0x8c76e69f8437f16d,
@@ -94,10 +80,9 @@ fn check_network_hash(tick: u64, found: u64) {
 }
 
 #[test]
-fn rear_end_replay_matches_the_network_run() {
+fn rear_end_replay_passes_2780_and_next_refuses_at_284() {
     let (cfg, body, track) = scene();
     let scripts = scripts();
-    let h = cfg.dt / f64::from(cfg.substeps);
     let mut race = LockstepRace::new(&LockstepSetup {
         cfg: &cfg,
         body: &body,
@@ -105,37 +90,32 @@ fn rear_end_replay_matches_the_network_run() {
         grid_gap_m: 10.0,
     })
     .unwrap();
-    for k in 0..=278 {
+    let mut passed_278 = false;
+    for k in 0..=284 {
         race.step(k, inputs_at(&scripts, k, &cfg));
-        if k < 278 {
+        if let Some(failure) = race.failure() {
             assert!(
-                race.failure().is_none(),
-                "tick={k} found failure={:?}",
-                race.failure()
+                passed_278,
+                "tick={k} failed before passing tick 278: {failure:?}"
             );
-            if k == 99 || k == 199 {
-                check_network_hash(k, race.state_hash());
-            }
-        } else {
-            match race.failure() {
-                Some(LockstepFailure::Sim {
-                    tick,
-                    t,
-                    error: MultiError::Contact(e),
-                }) => {
-                    assert_eq!(*tick, 278, "tick={k} found failure={:?}", race.failure());
-                    assert_eq!(
-                        t.to_bits(),
-                        (2781.0 * h).to_bits(),
-                        "tick={k} found time={t:?}, failure={:?}",
-                        race.failure()
-                    );
-                    assert_eq!(*e, expected(), "tick={k} found error={e:?}");
-                }
-                found => panic!("tick={k} expected sweep refusal, found={found:?}"),
-            }
+            // Known defect, not a successful race: follow up with a tick-284
+            // diagnosis. Pin the FIRST failure without widening the blend rule.
+            assert_eq!(
+                format!("{failure:?}"),
+                "Sim { tick: 284, t: 2.849, error: Contact(ContactError { car: Some(0), feature: Contact(ContactKey { source_car: 0, node: 2, target_car: 1, beam: 225 }), failure: UnsupportedSweep }) }",
+                "tick={k} unexpected first failure"
+            );
+            eprintln!("known defect tick={k} failure={failure:?}");
+            return;
+        }
+        if k == 99 || k == 199 {
+            check_network_hash(k, race.state_hash());
+        }
+        if k == 278 {
+            passed_278 = true;
         }
     }
+    panic!("expected the known tick-284 refusal, but the replay never failed");
 }
 
 // Copy of car_contact.rs::closest. Only used on this fixed scene's snapshots
@@ -225,10 +205,8 @@ fn print_nearest(multi: &MultiSim, fin: &[Vec<Vec3>; 2]) {
     }
 }
 
-#[test]
-fn rear_end_sweep_refusal_geometry() {
+fn sweep_scene() -> (Config, MultiSim, ContactSettings) {
     let (cfg, body, track) = scene();
-    let scripts = scripts();
     let h = cfg.dt / f64::from(cfg.substeps);
     assert_eq!(cfg.substeps, 10, "found substeps={}", cfg.substeps);
     let mut sims = Vec::new();
@@ -241,8 +219,61 @@ fn rear_end_sweep_refusal_geometry() {
     }
     // race.rs's unchanged contact settings, with the same substep timestep.
     let settings = ContactSettings::new(0.25, 0.0, h, 0.25 / 8.0, 0.25 / 2.0).unwrap();
-    let mut multi =
+    let multi =
         MultiSim::new(sims, &[CarPlacement { offset: Vec3::ZERO }; 2], settings, h).unwrap();
+    (cfg, multi, settings)
+}
+
+// Copy of car_contact.rs::separated_blend: crossing weights only select
+// candidates; the four strict slacks decide whether a plane certifies.
+fn blend_candidates(endpoints: [(Vec3, Vec3); 4], n0: Vec3, n1: Vec3) -> Vec<(f64, [f64; 4])> {
+    let lines = endpoints.map(|(p, q)| {
+        let w = p - q;
+        let a = w.dot(n0) - 0.25;
+        (a, w.dot(n1) - 0.25 - a)
+    });
+    let mut candidates = Vec::new();
+    for j in 0..4 {
+        for k in j + 1..4 {
+            let lambda = (lines[k].0 - lines[j].0) / (lines[j].1 - lines[k].1);
+            if lambda.is_finite() && lambda > 0.0 && lambda < 1.0 {
+                let n = n0 + (n1 - n0) * lambda;
+                candidates.push((lambda, endpoints.map(|(p, q)| slack(p, q, n))));
+            }
+        }
+    }
+    candidates
+}
+
+fn print_swept_min([p0, a0, b0, p1, a1, b1]: [Vec3; 6]) {
+    // Sample the kernel's linear capsule model for diagnosis only, not proof.
+    // Both captures use this same classifier, with no assertion on its class.
+    let (_, _, d0) = closest(p0, a0, b0);
+    let (mut m, mut min_s) = (d0, 0.0);
+    for j in 0..=10000 {
+        let s = f64::from(j) / 10000.0;
+        let (_, _, d) = closest(
+            p0 + (p1 - p0) * s,
+            a0 + (a1 - a0) * s,
+            b0 + (b1 - b0) * s,
+        );
+        if d < m {
+            m = d;
+            min_s = s;
+        }
+    }
+    eprintln!("sweep min_swept d={m:.9} s={min_s:.4}");
+    if m > 0.25 {
+        eprintln!("sweep class=false_refusal");
+    } else {
+        eprintln!("sweep class=entered_skin_between_samples");
+    }
+}
+
+#[test]
+fn rear_end_sweep_geometry_is_proved_separated() {
+    let (cfg, mut multi, settings) = sweep_scene();
+    let scripts = scripts();
     let mut history = Vec::new();
     let mut totals = StepReport::default();
     let mut first_contact = None;
@@ -253,28 +284,18 @@ fn rear_end_sweep_refusal_geometry() {
         for substep in 0..cfg.substeps {
             let i = k * u64::from(cfg.substeps) + u64::from(substep);
             let prev: [Vec<Vec3>; 2] = std::array::from_fn(|c| multi.sim(c).pos.clone());
-            let result = multi.advance(&controls);
-            if i == 2780 {
-                match &result {
-                    Err(MultiError::Contact(e)) => {
-                        assert_eq!(*e, expected(), "substep={i} found error={e:?}");
-                    }
-                    found => panic!("substep={i} expected sweep refusal, found={found:?}"),
-                }
-            } else {
-                let report = result
-                    .as_ref()
-                    .unwrap_or_else(|e| panic!("substep={i} expected Ok, found={e:?}"));
-                totals.contacts += report.contacts;
-                totals.impulses += report.impulses;
-                if report.contacts > 0 && first_contact.is_none() {
-                    first_contact = Some(i);
-                }
-                if substep + 1 == cfg.substeps && (k == 99 || k == 199) {
-                    let hash = multi_state_hash(k, &multi)
-                        .unwrap_or_else(|e| panic!("tick={k} substep={i} hash error={e:?}"));
-                    check_network_hash(k, hash);
-                }
+            let report = multi
+                .advance(&controls)
+                .unwrap_or_else(|e| panic!("substep={i} expected Ok, found={e:?}"));
+            totals.contacts += report.contacts;
+            totals.impulses += report.impulses;
+            if report.contacts > 0 && first_contact.is_none() {
+                first_contact = Some(i);
+            }
+            if substep + 1 == cfg.substeps && (k == 99 || k == 199) {
+                let hash = multi_state_hash(k, &multi)
+                    .unwrap_or_else(|e| panic!("tick={k} substep={i} hash error={e:?}"));
+                check_network_hash(k, hash);
             }
             let (_, _, d) = closest(
                 multi.sim(1).pos[32],
@@ -289,7 +310,7 @@ fn rear_end_sweep_refusal_geometry() {
             }
         }
     }
-    let (prev, fin) = capture.expect("substep=2780 refusal capture missing");
+    let (prev, fin) = capture.expect("substep=2780 sweep capture missing");
     let mut vel: [Vec<Vec3>; 2] = std::array::from_fn(|c| multi.sim(c).vel.clone());
     {
         let views: Vec<_> = vel
@@ -304,11 +325,17 @@ fn rear_end_sweep_refusal_geometry() {
                 broken: &multi.sim(c).broken,
             })
             .collect();
-        let found = detect_contacts(&views, settings);
-        assert_eq!(
-            found,
-            Err(expected()),
-            "substep=2780 captured kernel inputs found={found:?}"
+        let contacts = detect_contacts(&views, settings)
+            .unwrap_or_else(|e| panic!("substep=2780 captured kernel inputs found={e:?}"));
+        let key = ContactKey {
+            source_car: 1,
+            node: 32,
+            target_car: 0,
+            beam: 0,
+        };
+        assert!(
+            contacts.iter().all(|contact| contact.key != key),
+            "substep=2780 separated key={key:?} found contacts={contacts:?}"
         );
     }
     assert_eq!(multi.sim(0).beams[0].a, 0, "target beam 0 endpoint a");
@@ -329,7 +356,7 @@ fn rear_end_sweep_refusal_geometry() {
     );
     let n1 = delta1 * (1.0 / d1);
     let n0 = delta0 * (1.0 / d0);
-    eprintln!("sweep failure tick=278 substep=2780 key=1/32/0/0");
+    eprintln!("sweep accepted tick=278 substep=2780 key=1/32/0/0");
     eprintln!("sweep old t={t0:.9} d={d0:.9}");
     eprintln!("sweep final t={t1:.9} d={d1:.9} d_minus_skin={:e}", d1 - 0.25);
     eprintln!("sweep normals dot={:.12}", n0.dot(n1));
@@ -347,6 +374,17 @@ fn rear_end_sweep_refusal_geometry() {
             "substep=2780 normal={name} unexpectedly separated, slacks={slacks:?}"
         );
     }
+    let endpoints = [(p0, a0), (p0, b0), (p1, a1), (p1, b1)];
+    let (lambda, slacks) = blend_candidates(endpoints, n0, n1)
+        .into_iter()
+        .find(|(_, slacks)| slacks.iter().all(|&value| value > 0.0))
+        .expect("substep=2780 missing blended separating plane");
+    assert!(
+        slacks.iter().all(|&value| value > 0.0),
+        "substep=2780 blend lambda={lambda:?} slacks={slacks:?}"
+    );
+    let min_slack = slacks.into_iter().fold(f64::INFINITY, f64::min);
+    eprintln!("sweep blend lambda=<{lambda:.6}> min_slack=<{min_slack:e}>");
     let r = (p1 - p0) - ((a1 - a0) * (1.0 - t1) + (b1 - b0) * t1);
     eprintln!(
         "sweep motion node={:.9} a={:.9} b={:.9} rel_normal={:.9} rel_tangent={:.9}",
@@ -372,25 +410,91 @@ fn rear_end_sweep_refusal_geometry() {
         "sweep contacts total={} impulses={} first_contact_substep={first_contact}",
         totals.contacts, totals.impulses
     );
-    // car_contact.rs::separated describes a linearly moving capsule. Sample
-    // that same model here; these diagnostic values never enter the simulation.
-    let (mut m, mut min_s) = (d0, 0.0);
-    for j in 0..=10000 {
-        let s = f64::from(j) / 10000.0;
-        let (_, _, d) = closest(
-            p0 + (p1 - p0) * s,
-            a0 + (a1 - a0) * s,
-            b0 + (b1 - b0) * s,
-        );
-        if d < m {
-            m = d;
-            min_s = s;
+    print_swept_min([p0, a0, b0, p1, a1, b1]);
+}
+
+#[test]
+fn tick_284_sweep_geometry() {
+    let (cfg, mut multi, settings) = sweep_scene();
+    let scripts = scripts();
+    let mut capture = None;
+    'ticks: for k in 0..=284 {
+        let inputs = inputs_at(&scripts, k, &cfg);
+        let controls = [controls_of(inputs[0]), controls_of(inputs[1])];
+        for substep in 0..cfg.substeps {
+            let i = k * u64::from(cfg.substeps) + u64::from(substep);
+            let prev: [Vec<Vec3>; 2] = std::array::from_fn(|c| multi.sim(c).pos.clone());
+            if let Err(error) = multi.advance(&controls) {
+                // Discover the refusing substep; never guess it from the tick.
+                let fin: [Vec<Vec3>; 2] = std::array::from_fn(|c| multi.sim(c).pos.clone());
+                capture = Some((k, i, prev, fin, error));
+                break 'ticks;
+            }
         }
     }
-    eprintln!("sweep min_swept d={m:.9} s={min_s:.4}");
-    if m > 0.25 {
-        eprintln!("sweep class=false_refusal");
-    } else {
-        eprintln!("sweep class=entered_skin_between_samples");
+    let (tick, i, prev, fin, error) = capture.expect("tick-284 refusal capture missing");
+    let mut vel: [Vec<Vec3>; 2] = std::array::from_fn(|c| multi.sim(c).vel.clone());
+    let views: Vec<_> = vel
+        .iter_mut()
+        .enumerate()
+        .map(|(c, v)| ContactCar {
+            previous_pos: &prev[c],
+            pos: &fin[c],
+            vel: v,
+            mass: &multi.sim(c).mass,
+            beams: &multi.sim(c).beams,
+            broken: &multi.sim(c).broken,
+        })
+        .collect();
+    let refusal = detect_contacts(&views, settings)
+        .expect_err("captured refusing sweep unexpectedly accepted by kernel");
+    assert_eq!(
+        format!("{error:?}"),
+        format!("Contact({refusal:?})"),
+        "tick={tick} substep={i} captured refusal must reproduce"
+    );
+    assert_eq!(
+        format!("{refusal:?}"),
+        "ContactError { car: Some(0), feature: Contact(ContactKey { source_car: 0, node: 2, target_car: 1, beam: 225 }), failure: UnsupportedSweep }",
+        "tick={tick} substep={i} expected the known refusal"
+    );
+    eprintln!("sweep refused tick={tick} substep={i} key=0/2/1/225 error={error:?}");
+    let beam = multi.sim(1).beams[225];
+    let (p0, a0, b0) = (prev[0][2], prev[1][beam.a], prev[1][beam.b]);
+    let (p1, a1, b1) = (fin[0][2], fin[1][beam.a], fin[1][beam.b]);
+    let (t0, delta0, d0) = closest(p0, a0, b0);
+    let (t1, delta1, d1) = closest(p1, a1, b1);
+    let n0 = delta0 * (1.0 / d0);
+    let n1 = delta1 * (1.0 / d1);
+    eprintln!("sweep old t={t0:.9} d={d0:.9}");
+    eprintln!("sweep final t={t1:.9} d={d1:.9} d_minus_skin={:e}", d1 - 0.25);
+    eprintln!("sweep normals dot={:.12}", n0.dot(n1));
+    for (name, n) in [("final", n1), ("old", n0)] {
+        for (pos, p, a, b) in [("old", p0, a0, b0), ("final", p1, a1, b1)] {
+            for (end, q) in [("a", a), ("b", b)] {
+                let value = slack(p, q, n);
+                eprintln!("sweep slack n={name} pos={pos} end={end} value={value:e}");
+            }
+        }
     }
+    let candidates = blend_candidates([(p0, a0), (p0, b0), (p1, a1), (p1, b1)], n0, n1);
+    let found = candidates
+        .iter()
+        .any(|(_, slacks)| slacks.iter().all(|&value| value > 0.0));
+    let best = candidates.iter().max_by(|(_, a), (_, b)| {
+        let a = a.iter().copied().fold(f64::INFINITY, f64::min);
+        let b = b.iter().copied().fold(f64::INFINITY, f64::min);
+        a.total_cmp(&b)
+    });
+    eprintln!("sweep blend found={found} best_lambda_slacks={best:?}");
+    let r = (p1 - p0) - ((a1 - a0) * (1.0 - t1) + (b1 - b0) * t1);
+    eprintln!(
+        "sweep motion node={:.9} a={:.9} b={:.9} rel_normal={:.9} rel_tangent={:.9}",
+        (p1 - p0).length(),
+        (a1 - a0).length(),
+        (b1 - b0).length(),
+        r.dot(n1),
+        (r - n1 * r.dot(n1)).length()
+    );
+    print_swept_min([p0, a0, b0, p1, a1, b1]);
 }

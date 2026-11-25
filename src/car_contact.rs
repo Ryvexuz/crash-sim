@@ -285,6 +285,47 @@ fn separated(
         })
 }
 
+/// Four strict projections certify every bilinear sweep point by convexity.
+/// Any nonzero normal works, so extra candidates cannot certify a real crossing.
+/// Projections along n0 + lambda * (n1 - n0) are linear in lambda; try their
+/// at most six pairwise crossings, accepting only through separated's strict bound.
+fn separated_blend(
+    source: &ContactCar<'_>,
+    target: &ContactCar<'_>,
+    key: ContactKey,
+    n1: Vec3,
+    n0: Vec3,
+    skin: f64,
+) -> bool {
+    let b = target.beams[key.beam];
+    let mut lines = [(0.0, 0.0); 4];
+    let mut line = 0;
+    for (p, positions) in [
+        (source.previous_pos[key.node], target.previous_pos),
+        (source.pos[key.node], target.pos),
+    ] {
+        for i in [b.a, b.b] {
+            let w = p - positions[i];
+            let a = w.dot(n0) - skin;
+            lines[line] = (a, w.dot(n1) - skin - a);
+            line += 1;
+        }
+    }
+    for j in 0..4 {
+        for k in j + 1..4 {
+            let lambda = (lines[k].0 - lines[j].0) / (lines[j].1 - lines[k].1);
+            if lambda.is_finite()
+                && lambda > 0.0
+                && lambda < 1.0
+                && separated(source, target, key, n0 + (n1 - n0) * lambda, skin)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn prepare(
     cars: &[ContactCar<'_>],
     cfg: ContactSettings,
@@ -353,6 +394,7 @@ fn prepare(
             return Err(refusal(Failure::PenetrationBound));
         }
         let normal = delta * (1.0 / distance);
+        let old_normal = old_delta * (1.0 / old_distance);
         if distance <= cfg.skin {
             contacts.push(Contact {
                 key,
@@ -365,13 +407,8 @@ fn prepare(
                 || target.previous_pos[b.a] != target.pos[b.a]
                 || target.previous_pos[b.b] != target.pos[b.b])
             && !separated(source, target, key, normal, cfg.skin)
-            && !separated(
-                source,
-                target,
-                key,
-                old_delta * (1.0 / old_distance),
-                cfg.skin,
-            )
+            && !separated(source, target, key, old_normal, cfg.skin)
+            && !separated_blend(source, target, key, normal, old_normal, cfg.skin)
         {
             return Err(refusal(Failure::UnsupportedSweep));
         }
