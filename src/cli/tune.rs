@@ -41,9 +41,10 @@ fn args(args: &[String]) -> Result<Args, String> {
         ) {
             return Err(format!("unknown tune flag {flag:?}\n{USAGE}"));
         }
+        // "--" ends the tune flags; it is never a flag's value.
         let value = args
             .get(index + 1)
-            .filter(|v| !v.is_empty() && !v.chars().any(char::is_control))
+            .filter(|v: &&String| !v.is_empty() && v.as_str() != "--" && !v.chars().any(char::is_control))
             .ok_or_else(|| format!("missing or invalid value for {flag}\n{USAGE}"))?;
         match flag.as_str() {
             "--body" => {
