@@ -14,7 +14,7 @@
 //! `Save::validate` is the one rule set: `parse` (so `load`), `record_lap` and `save` all use it.
 //! Overlapping writers of the same save file are not supported (see `write_atomic`).
 //!
-//! Self-contained (std only); not yet registered in `lib.rs`.
+//! Self-contained (std only); registered in `lib.rs` as `pub mod save`.
 
 use std::collections::BTreeMap;
 use std::fmt;

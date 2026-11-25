@@ -1,7 +1,7 @@
 # Lockstep net messages (n20-25a)
 
 Stage 7 m4: two machines race in lockstep; only inputs and state hashes cross the wire. This
-document is the wire format only (`src/net.rs`). The session layer is a later task (n20-25b).
+document is the wire format only (`src/net.rs`). The session layer is `src/net/session.rs` (n20-25b).
 
 One message is one line of text. `encode(&Msg) -> String` returns the line without a terminator
 (the transport adds `\n`); `decode(&str) -> Result<Msg, NetError>` takes the line without one.
