@@ -6,6 +6,7 @@ use crash_sim::car_contact::{
     apply_contacts, apply_contacts_moving, ContactCar, ContactError, ContactKey, ContactReport,
     ContactSettings, Failure, Feature, MovingContactCar,
 };
+use crash_sim::collide::Plane;
 use crash_sim::format::parse;
 use crash_sim::input::Script;
 use crash_sim::net::session::{Input, LockstepSim};
@@ -22,6 +23,7 @@ struct Chassis {
     mass: Vec<f64>,
     beams: Vec<Beam>,
     broken: Vec<bool>,
+    planes: Vec<Plane>,
 }
 
 impl Chassis {
@@ -42,6 +44,7 @@ impl Chassis {
                 })
                 .collect(),
             broken: vec![false; edges.len()],
+            planes: Vec::new(),
         }
     }
 
@@ -53,6 +56,7 @@ impl Chassis {
             mass: &self.mass,
             beams: &self.beams,
             broken: &self.broken,
+            planes: &self.planes,
         }
     }
 }
@@ -173,6 +177,146 @@ fn fixture(stiffness: f64, vy: f64) -> [Chassis; 2] {
 
 fn settings() -> ContactSettings {
     ContactSettings::new(0.125, 0.0, 0.001, 0.015625, 0.0625).unwrap()
+}
+
+#[test]
+fn follow_refuses_a_node_pushed_through_the_ground() {
+    let mut cars = fixture(1e5, -1.0);
+    for car in &mut cars {
+        car.planes.push(Plane::ground());
+    }
+    let before = state_bits(&cars);
+    let error = apply(&mut cars, settings()).unwrap_err();
+    assert_eq!(error.failure, Failure::PenetrationBound);
+    assert_eq!(error.car, Some(1));
+    assert_eq!(error.feature, Feature::Node(0));
+    assert_eq!(state_bits(&cars), before);
+
+    // Being behind a plane already is owned by the plane rule, not this guard.
+    // A plane below the followed endpoints must not refuse either.
+    // Axis-aligned distances have an independent sign reference: endpoints
+    // start at zero and finish below zero. Exercise tiny offsets, cancellation
+    // at the source's height, and the largest finite plane offsets too.
+    for (y, crosses) in [
+        (1.0, false),
+        (-1.0, false),
+        (0.1, false),
+        (f64::MAX, false),
+        (-f64::MAX, false),
+        (f64::MIN_POSITIVE, false),
+        (-f64::MIN_POSITIVE, true),
+        (f64::from_bits(1), false),
+        (-f64::from_bits(1), true),
+    ] {
+        let mut cars = fixture(1e5, -1.0);
+        for car in &mut cars {
+            car.planes.push(Plane::new(Vec3::new(0.0, y, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap());
+        }
+        let before = state_bits(&cars);
+        let result = apply(&mut cars, settings());
+        if crosses {
+            let error = result.unwrap_err();
+            assert_eq!(error.failure, Failure::PenetrationBound, "plane_y={y:e}");
+            assert_eq!((error.car, error.feature), (Some(1), Feature::Node(0)));
+            assert_eq!(state_bits(&cars), before);
+        } else {
+            assert_eq!(result.unwrap().impulses, 1, "plane_y={y:e}");
+        }
+    }
+    // Public Plane fields cannot let non-finite or unrepresentable arithmetic
+    // bypass the crossing guard, even after trial impulses have been staged.
+    for normal_y in [
+        0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        f64::MAX,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        let mut cars = fixture(1e5, -1.0);
+        cars[1].planes.push(Plane {
+            point: Vec3::ZERO,
+            normal: Vec3::new(0.0, normal_y, 0.0),
+        });
+        let before = state_bits(&cars);
+        let error = apply(&mut cars, settings()).unwrap_err();
+        assert_eq!(error.failure, Failure::NumericalRange);
+        assert_eq!((error.car, error.feature), (Some(1), Feature::Node(0)));
+        assert_eq!(state_bits(&cars), before);
+    }
+}
+
+#[test]
+fn second_contact_cannot_undo_the_first_pairs_depth() {
+    let mut cars = [
+        Chassis::new(vec![Vec3::new(0.0, 0.0625, 0.0)], &[], 0.0, 1.0),
+        Chassis::new(
+            vec![
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(-1.0, 0.15625, 0.0),
+                Vec3::new(1.0, 0.15625, 0.0),
+            ],
+            &[(0, 1, 2.0), (2, 3, 2.0)],
+            0.0,
+            1.0,
+        ),
+    ];
+    cars[1].vel[2].y = -1.0;
+    cars[1].vel[3].y = -1.0;
+    let before = state_bits(&cars);
+    let error = apply(&mut cars, settings()).unwrap_err();
+    assert_eq!(
+        error,
+        ContactError {
+            car: Some(0),
+            feature: Feature::Contact(ContactKey {
+                source_car: 0,
+                node: 0,
+                target_car: 1,
+                beam: 0,
+            }),
+            failure: Failure::PenetrationBound,
+        }
+    );
+    assert_eq!(state_bits(&cars), before);
+}
+
+#[test]
+fn remembered_band_endpoint_is_exact() {
+    let band: f64 = 0.125 + 2.0 * 0.015625;
+    let key = ContactKey {
+        source_car: 0,
+        node: 0,
+        target_car: 1,
+        beam: 0,
+    };
+    let remembered = BTreeSet::from([key]);
+    for (y, expected) in [(band, 1), (f64::from_bits(band.to_bits() + 1), 0)] {
+        let mut cars = [
+            Chassis::new(vec![Vec3::new(0.0, y, 0.0)], &[], 0.0, 1.0),
+            Chassis::new(
+                vec![Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+                &[(0, 1, 2.0)],
+                0.0,
+                1.0,
+            ),
+        ];
+        cars[0].vel[0].y = -1.0;
+        let before = state_bits(&cars);
+        let mut views: Vec<_> = cars.iter_mut().map(Chassis::moving).collect();
+        let (report, keys) = apply_contacts_moving(&mut views, settings(), &remembered).unwrap();
+        assert_eq!((report.contacts, report.impulses), (expected, expected));
+        drop(views);
+        if expected == 0 {
+            assert!(keys.is_empty());
+            assert_eq!(state_bits(&cars), before);
+        } else {
+            assert_eq!(keys, remembered);
+            assert_ne!(state_bits(&cars), before);
+        }
+    }
 }
 
 #[test]
@@ -388,6 +532,7 @@ fn step_contact(
             mass: &sim.mass,
             beams: &sim.beams,
             broken: &sim.broken,
+            planes: &sim.planes,
         })
         .collect();
     let (report, keys) = apply_contacts_moving(&mut views, cfg, previous_impulses)?;

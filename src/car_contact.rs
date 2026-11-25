@@ -512,6 +512,8 @@ pub struct MovingContactCar<'a> {
     pub mass: &'a [f64],
     pub beams: &'a [Beam],
     pub broken: &'a [bool],
+    /// This car's collider planes, in collider order (ground first).
+    pub planes: &'a [crate::collide::Plane],
 }
 
 fn kinetic(cars: &[ContactCar<'_>], velocities: &[Vec<Vec3>]) -> Result<f64, ContactError> {
@@ -568,6 +570,22 @@ pub fn apply_contacts_moving(
             .collect();
         contact_pass(&views, cfg, true, previous_impulses)?
     };
+    for (ci, (car, positions)) in cars.iter().zip(&staged.positions).enumerate() {
+        for (i, (&before, &after)) in car.pos.iter().zip(positions).enumerate() {
+            for plane in car.planes {
+                let old_distance = plane.distance(before);
+                let distance = plane.distance(after);
+                if !(old_distance.is_finite() && distance.is_finite())
+                    || !plane.normal.dot(plane.normal).is_normal()
+                {
+                    return Err(error(Some(ci), Feature::Node(i), Failure::NumericalRange));
+                }
+                if old_distance >= 0.0 && distance < 0.0 {
+                    return Err(error(Some(ci), Feature::Node(i), Failure::PenetrationBound));
+                }
+            }
+        }
+    }
     for ((car, vel), pos) in cars.iter_mut().zip(staged.velocities).zip(staged.positions) {
         car.vel.copy_from_slice(&vel);
         car.pos.copy_from_slice(&pos);
@@ -591,6 +609,7 @@ fn contact_pass(
     let (candidates, contacts) = prepare(cars, cfg, previous_impulses)?;
     let mut velocities: Vec<Vec<Vec3>> = cars.iter().map(|c| c.vel.to_vec()).collect();
     let mut positions: Vec<Vec<Vec3>> = cars.iter().map(|c| c.pos.to_vec()).collect();
+    let mut moved: Vec<Vec<bool>> = cars.iter().map(|c| vec![false; c.pos.len()]).collect();
     let before = kinetic(cars, &velocities)?;
     let mut report = ContactReport {
         candidates,
@@ -631,6 +650,9 @@ fn contact_pass(
         velocities[key.target_car][b.a] += changes[1];
         velocities[key.target_car][b.b] += changes[2];
         if follow {
+            moved[key.source_car][key.node] = true;
+            moved[key.target_car][b.a] = true;
+            moved[key.target_car][b.b] = true;
             positions[key.source_car][key.node] += changes[0] * cfg.timestep;
             positions[key.target_car][b.a] += changes[1] * cfg.timestep;
             positions[key.target_car][b.b] += changes[2] * cfg.timestep;
@@ -669,6 +691,41 @@ fn contact_pass(
         for (ni, &v) in vel.iter().enumerate() {
             if norm(v) * cfg.timestep > cfg.max_motion {
                 return Err(error(Some(ci), Feature::Node(ni), Failure::MotionBound));
+            }
+        }
+    }
+    if follow && !impulse_keys.is_empty() {
+        // Visit affected live pairs in ContactKey order, including pairs absent
+        // from the incoming contacts: another impulse may have moved them inward.
+        for (sc, source) in positions.iter().enumerate() {
+            for (node, &p) in source.iter().enumerate() {
+                for (tc, target) in cars.iter().enumerate() {
+                    if sc == tc {
+                        continue;
+                    }
+                    for (bi, b) in target.beams.iter().enumerate() {
+                        if target.broken[bi]
+                            || !(moved[sc][node] || moved[tc][b.a] || moved[tc][b.b])
+                        {
+                            continue;
+                        }
+                        let key = ContactKey {
+                            source_car: sc,
+                            node,
+                            target_car: tc,
+                            beam: bi,
+                        };
+                        let (_, _, distance) = closest(p, positions[tc][b.a], positions[tc][b.b]);
+                        let failure = if !distance.is_finite() {
+                            Failure::NumericalRange
+                        } else if distance < cfg.skin - cfg.max_penetration {
+                            Failure::PenetrationBound
+                        } else {
+                            continue;
+                        };
+                        return Err(error(Some(sc), Feature::Contact(key), failure));
+                    }
+                }
             }
         }
     }

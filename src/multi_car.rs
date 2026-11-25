@@ -228,6 +228,7 @@ impl MultiSim {
                         mass: &sim.mass,
                         beams: &sim.beams,
                         broken: &sim.broken,
+                        planes: &sim.planes,
                     })
                     .collect();
                 let (contact, impulse_keys) =

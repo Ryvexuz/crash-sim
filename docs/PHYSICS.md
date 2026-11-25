@@ -399,7 +399,8 @@ not guessed normals or successful empty results.
 
 Shallow grazing could still enter and exit the skin between two outside
 samples. For an outside/outside candidate within `skin+2*max_motion` at the
-end, the kernel requires a separating-plane certificate. Using either snapshot's
+end, except a remembered impulse key in the moving entry, the kernel requires
+a separating-plane certificate. Using either snapshot's
 closest-point normal, **both endpoints in both snapshots** must project strictly
 farther than skin from the source. Convex interpolation then certifies that
 every point of the linearly moving segment stays outside that plane throughout
@@ -438,8 +439,9 @@ motion receives no impulse. In exact arithmetic the kinetic change is
 iterated simultaneous-contact solve. In `apply_contacts_moving`, each applied
 impulse also moves its three nodes by their velocity change times the timestep
 (`x += dv*h`), in the same order. No other positions change: there is no projection
-to remove penetration and no second pass. This equals the integrator's position
-update of the post-impulse velocity; normals and fractions come from the incoming
+to remove penetration and no second pass. This equals the unconstrained Euler
+position update of the post-impulse velocity; wheel-mount and plane corrections
+intervene in the actual integrator. Normals and fractions come from the incoming
 positions. `apply_contacts` changes velocities only. Wheel state is unchanged
 during the pass; its subsequent carrier/suspension interaction remains the
 existing single-car implementation.
@@ -464,6 +466,12 @@ energy and next-step speed checks does `apply_contacts_moving` copy both back
 incoming caller state untouched**, even after a trial impulse. A refusal names
 the car and node/beam/contact key (settings errors have no car), with a named
 failure such as `MotionBound`, `PenetrationBound` or `EnergyIncrease`.
+Before commit, the moving entry refuses `PenetrationBound` at a node that goes
+from on/in front of one of its car's planes to behind it; already-behind nodes
+remain the plane rule's responsibility. It also rechecks final staged distances
+in contact-key order for every live cross-car pair that received an impulse or
+whose node or endpoints were followed, refusing `PenetrationBound` with that
+pair's key below the unchanged `skin-max_penetration` bound.
 The result counts deduplicated candidates, actual contacts and applied impulses,
 and reports their summed normal impulse magnitude. Zero impulses are not an
 error for valid separating contacts.
@@ -477,15 +485,15 @@ and wheel translation. At every substep its error must be at most
 `1e-6 * max(1 kg m/s, sum(initial mass * speed))`. It also requires nonzero
 collision impulses and changed velocities on both cars.
 
-`car_contact_never_creates_energy` measures `Sim::total_energy` immediately
-before/after each contact pass, including chassis kinetic, live beam elastic,
-wheel translation/spin and suspension/tyre energy. Only
+`car_contact_never_creates_energy` measures chassis kinetic energy immediately
+before/after each contact pass through `tests/multi_car.rs::step_contact`. Only
 `1e-10 * max(1 J, |E_before|)` roundoff is allowed. The kernel itself enforces
 that same tolerance on chassis kinetic energy before copying back. Position
 following can change live-beam elastic energy, summed in beam order as
 `0.5 * stiffness * stretch * stretch`, where
-`stretch = (pos[a] - pos[b]).length() - rest`. Gravity potential is unchanged
-in exact arithmetic because the impulse conserves momentum and `dx = dv*h`.
+`stretch = (pos[a] - pos[b]).length() - rest`. With a common gravity vector,
+gravity potential is unchanged in exact arithmetic because the impulse conserves
+momentum and `dx = dv*h`.
 The kernel does not measure elastic or wheel terms:
 `head_on_follow_keeps_full_state_energy_and_momentum` measures full-state energy
 over whole substeps, including the integrator and position follow. An in-pass

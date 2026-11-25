@@ -649,6 +649,7 @@ fn sim_view<'a>(sim: &'a mut Sim, old: &'a [Vec3]) -> crash_sim::car_contact::Mo
         mass: &sim.mass,
         beams: &sim.beams,
         broken: &sim.broken,
+        planes: &sim.planes,
     }
 }
 
