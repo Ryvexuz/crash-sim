@@ -155,6 +155,9 @@ pub fn inputs() -> Result<(Config, Body)> {
 }
 
 pub fn validate_body(body: &Body) -> Result<()> {
+    if body.materials.iter().any(|m| m.unload_return.is_some()) {
+        return Err("measurement has no unloading pass (unload_return)".into());
+    }
     if !body.tets.is_empty() || body.materials.iter().any(|m| m.break_strain.is_some()) {
         return Err("measurement has no tet or broken-beam pass".into());
     }
@@ -576,6 +579,9 @@ pub fn split_step(
     materials: &[usize],
     mut observation: Option<&mut Totals>,
 ) -> Result<()> {
+    if sim.unload_return.iter().any(Option::is_some) {
+        return Err("measurement has no unloading pass (unload_return)".into());
+    }
     if !h.is_finite()
         || h <= 0.0
         || sim.cfg.gravity != 0.0

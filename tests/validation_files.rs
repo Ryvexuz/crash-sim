@@ -890,6 +890,7 @@ fn wall_load_of(body: &Body, doc: &str) -> WallLoad {
         let before = split.vel.clone();
         collide::apply(&mut split.pos, &mut split.vel, &[wall], h);
         split.apply_yield();
+        split.apply_unload(h);
         assert!(
             solver.check().is_none(),
             "the split run's solver failed at substep {k}"

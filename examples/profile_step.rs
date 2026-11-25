@@ -12,6 +12,7 @@
 //! velocities, bit for bit, with a second run that uses the real `Sim::advance`; a difference
 //! fails the program. `Sim::apply_breaks` is private and is not called: the scenario's beams have
 //! no break strain (checked at start), so it would never break a beam.
+//! The material passes run `Sim::apply_yield` then `Sim::apply_unload`.
 use crash_sim::collide;
 use crash_sim::input::Script;
 use crash_sim::settle::{self, CarSetup};
@@ -34,7 +35,7 @@ const PHASES: [&str; 8] = [
     "solver step (beam forces + node integration)",
     "Car::post_step (wheel update, axis constraint)",
     "collide::apply (ground and wall contacts)",
-    "Sim::apply_yield (plastic flow)",
+    "Sim::apply_yield + Sim::apply_unload (plastic flow, unloading)",
     "first-contact test + Sim::check",
 ];
 
@@ -168,6 +169,7 @@ fn run_timed(s: &Setup) -> (Sim, [Duration; PHASES.len()], Duration) {
         collide::apply(&mut sim.pos, &mut sim.vel, &sim.planes, h);
         lap(5, &mut acc);
         sim.apply_yield();
+        sim.apply_unload(h);
         lap(6, &mut acc);
         // advance's first-contact test (its result is not needed here) and drive's check.
         let touching = collide::any_at_or_behind(&sim.pos, &sim.planes);

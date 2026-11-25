@@ -514,6 +514,7 @@ fn measure() -> Result<WallForce, WallError> {
         let vel_w = split.vel.clone();
         collide::apply(&mut split.pos, &mut split.vel, &[wall], h);
         split.apply_yield();
+        split.apply_unload(h);
         if let Some(e) = solver.check() {
             return Err(WallError::Unstable(format!("substep {k}: {e}")));
         }
