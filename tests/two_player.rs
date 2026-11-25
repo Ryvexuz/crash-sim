@@ -246,3 +246,403 @@ fn state_hash_refuses_failed_car() {
         Err(RaceHashError::Failed { car: 0, reason }) if !reason.is_empty()
     ));
 }
+
+mod run_tmp;
+
+use std::io::{BufRead, BufReader, Read};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+const PEER_USAGE: &str = "usage: crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> (--host <addr:port> | --join <addr:port>) --input <file> --net-delay <ticks> --net-hash-every <ticks> --net-timeout <s> --net-connect-timeout <s> --net-seed <u64>";
+
+fn exe() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_crash-sim") {
+        return std::path::PathBuf::from(p);
+    }
+    let exe = std::env::current_exe().expect("current_exe of the test executable");
+    let name = format!("crash-sim{}", std::env::consts::EXE_SUFFIX);
+    let dir = exe.parent().and_then(|p| p.parent()).unwrap_or_else(|| {
+        panic!(
+            "CARGO_BIN_EXE_crash-sim is not set and {} has no grandparent folder",
+            exe.display()
+        )
+    });
+    let bin = dir.join(name);
+    assert!(
+        bin.is_file(),
+        "CARGO_BIN_EXE_crash-sim is not set and {} does not exist",
+        bin.display()
+    );
+    bin
+}
+
+fn tmp_file(name: &str, text: &str) -> String {
+    let path = run_tmp::run_tmp().join(format!("two_player_{}_{name}.input", std::process::id()));
+    std::fs::write(&path, text).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+struct PeerChild {
+    child: Arc<Mutex<Child>>,
+    started: Instant,
+    first: mpsc::Receiver<String>,
+    stdout: Option<JoinHandle<String>>,
+    stderr: Option<JoinHandle<String>>,
+    done: mpsc::Sender<()>,
+    watchdog: Option<JoinHandle<bool>>,
+}
+
+struct PeerOutput {
+    code: i32,
+    stdout: String,
+    stderr: String,
+    elapsed: Duration,
+}
+
+impl PeerChild {
+    fn spawn(args: &[String]) -> Self {
+        let started = Instant::now();
+        let mut child = Command::new(exe())
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn crash-sim");
+        let stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (first_tx, first) = mpsc::channel();
+        let stdout = thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut text = String::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).expect("read stdout") != 0 {
+                if text.is_empty() {
+                    let _ = first_tx.send(line.trim_end_matches(['\r', '\n']).to_string());
+                }
+                text.push_str(&line);
+                line.clear();
+            }
+            text
+        });
+        let stderr = thread::spawn(move || {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).expect("read stderr");
+            text
+        });
+        let child = Arc::new(Mutex::new(child));
+        let watched = Arc::clone(&child);
+        let (done, receiver) = mpsc::channel();
+        let watchdog = thread::spawn(move || {
+            if receiver
+                .recv_timeout(Duration::from_secs(60).saturating_sub(started.elapsed()))
+                .is_ok()
+            {
+                return false;
+            }
+            let mut child = watched.lock().unwrap();
+            if child.try_wait().unwrap().is_none() {
+                child.kill().expect("kill timed-out crash-sim");
+                child.wait().expect("reap timed-out crash-sim");
+                return true;
+            }
+            false
+        });
+        Self {
+            child,
+            started,
+            first,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            done,
+            watchdog: Some(watchdog),
+        }
+    }
+
+    fn finish(mut self) -> PeerOutput {
+        let status = loop {
+            if let Some(status) = self.child.lock().unwrap().try_wait().unwrap() {
+                break status;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let _ = self.done.send(());
+        let killed = self.watchdog.take().unwrap().join().unwrap();
+        let stdout = self.stdout.take().unwrap().join().unwrap();
+        let stderr = self.stderr.take().unwrap().join().unwrap();
+        assert!(!killed, "crash-sim exceeded 60 s\n{stdout}\n{stderr}");
+        PeerOutput {
+            code: status.code().expect("exit code"),
+            stdout,
+            stderr,
+            elapsed: self.started.elapsed(),
+        }
+    }
+}
+
+impl Drop for PeerChild {
+    fn drop(&mut self) {
+        let mut child = self.child.lock().unwrap();
+        if child.try_wait().unwrap().is_none() {
+            child.kill().expect("kill unfinished crash-sim");
+            child.wait().expect("reap unfinished crash-sim");
+        }
+        drop(child);
+        let _ = self.done.send(());
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.join().unwrap();
+        }
+    }
+}
+
+fn manifest(path: &str) -> String {
+    format!("{}/{path}", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn common_args(input: &str) -> Vec<String> {
+    vec![
+        "--body".into(),
+        manifest("scenarios/car_basic.bsn"),
+        "--track".into(),
+        manifest("scenarios/tracks/oval.track"),
+        "--grid-gap".into(),
+        "10".into(),
+        "--duration".into(),
+        "20".into(),
+        "--net-delay".into(),
+        "6".into(),
+        "--net-hash-every".into(),
+        "100".into(),
+        "--input".into(),
+        input.into(),
+    ]
+}
+
+fn peer_args(flag: &str, addr: &str, input: &str) -> Vec<String> {
+    let mut args = common_args(input);
+    args.extend(
+        [
+            "--net-timeout",
+            "5",
+            "--net-connect-timeout",
+            "10",
+            "--net-seed",
+            "1",
+            flag,
+            addr,
+        ]
+        .map(String::from),
+    );
+    args
+}
+
+fn replace(args: &mut [String], flag: &str, value: &str) {
+    let i = args.iter().position(|a| a == flag).expect("known flag");
+    args[i + 1] = value.into();
+}
+
+fn pair(guest_input: &str, guest_gap: &str) -> (String, PeerChild, PeerChild) {
+    let host = PeerChild::spawn(&peer_args(
+        "--host",
+        "127.0.0.1:0",
+        &manifest("scenarios/tracks/oval_lap.input"),
+    ));
+    let first = host
+        .first
+        .recv_timeout(Duration::from_secs(60).saturating_sub(host.started.elapsed()))
+        .expect("host listening line before deadline");
+    let addr = first
+        .strip_prefix("net listening addr=")
+        .expect("listening line")
+        .to_string();
+    let socket: std::net::SocketAddr = addr.parse().expect("numeric listening address");
+    assert_eq!(socket.ip(), std::net::Ipv4Addr::LOCALHOST);
+    assert_ne!(socket.port(), 0);
+    let mut args = peer_args("--join", &addr, guest_input);
+    replace(&mut args, "--grid-gap", guest_gap);
+    (addr, host, PeerChild::spawn(&args))
+}
+
+fn race_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| {
+            line.starts_with("car ") || line.starts_with("cars ") || line.starts_with("hash ")
+        })
+        .collect()
+}
+
+fn last(text: &str) -> &str {
+    text.lines().last().expect("nonempty output")
+}
+
+fn check_exit(run: &PeerOutput, code: i32) {
+    assert_eq!(run.code, code, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stderr.is_empty(), "{}", run.stderr);
+}
+
+fn check_hex(hash: &str) {
+    assert_eq!(hash.len(), 16, "{hash}");
+    assert!(hash
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+}
+
+#[test]
+fn two_peers_on_loopback_match_the_local_run() {
+    let still = tmp_file("still", "0 0 1 0\n");
+    let (addr, host, guest) = pair(&still, "10");
+    let (host, guest) = (host.finish(), guest.finish());
+    let mut args = common_args(&manifest("scenarios/tracks/oval_lap.input"));
+    args.extend(["--input2".into(), still]);
+    let reference = PeerChild::spawn(&args).finish();
+    check_exit(&reference, 0);
+    assert!(!reference.stdout.is_empty());
+    assert_eq!(
+        host.stdout.lines().next().unwrap(),
+        format!("net listening addr={addr}")
+    );
+    let mut last_hash = None;
+    for (role, run, role_index) in [("host", &host, 1), ("guest", &guest, 0)] {
+        check_exit(run, 0);
+        assert_eq!(
+            run.stdout.lines().nth(role_index).unwrap(),
+            format!("net role={role} addr={addr} tick_rate=100 input_delay=6 hash_every=100 timeout_s=5.000 seed=1")
+        );
+        assert_eq!(race_lines(&run.stdout).join("\n") + "\n", reference.stdout);
+        assert_eq!(
+            run.stdout.lines().filter(|l| l.starts_with("hash ")).count(),
+            20
+        );
+        assert!(run.stdout.lines().any(|l| l.starts_with("car 1 start ")));
+        let hash = run
+            .stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("hash tick=1999 value="))
+            .unwrap();
+        check_hex(hash);
+        assert_eq!(
+            last(&run.stdout),
+            format!("net: ok ticks=2000 hashes=20 last_hash={hash}")
+        );
+        if let Some(previous) = last_hash {
+            assert_eq!(hash, previous);
+        }
+        last_hash = Some(hash);
+        eprintln!("{role} last: {}", last(&run.stdout));
+    }
+}
+
+#[test]
+fn forced_desync_is_reported_by_both_peers() {
+    let (_, host, guest) = pair(&manifest("scenarios/tracks/oval_lap.input"), "11");
+    let (host, guest) = (host.finish(), guest.finish());
+    let hashes = [&host, &guest].map(|run| {
+        check_exit(run, 1);
+        assert!(race_lines(&run.stdout).is_empty(), "{}", run.stdout);
+        let line = last(&run.stdout);
+        let (own, peer) = line
+            .strip_prefix("net: FAIL desync at tick 99 own=")
+            .expect("desync at first hash tick")
+            .split_once(" peer=")
+            .expect("both hashes");
+        for hash in [own, peer] {
+            check_hex(hash);
+        }
+        assert_ne!(own, peer);
+        eprintln!("desync last: {line}");
+        (own, peer)
+    });
+    assert_eq!(hashes[0], (hashes[1].1, hashes[1].0));
+}
+
+#[test]
+fn no_peer_ends_with_a_named_error() {
+    let input = manifest("scenarios/tracks/oval_lap.input");
+    let mut args = peer_args("--host", "127.0.0.1:0", &input);
+    replace(&mut args, "--net-connect-timeout", "1");
+    let host = PeerChild::spawn(&args).finish();
+    check_exit(&host, 1);
+    assert!(host.elapsed < Duration::from_secs(10), "{:?}", host.elapsed);
+    assert!(host
+        .stdout
+        .lines()
+        .next()
+        .unwrap()
+        .starts_with("net listening addr=127.0.0.1:"));
+    assert_eq!(last(&host.stdout), "net: FAIL no peer within 1.000 s");
+    let guest = PeerChild::spawn(&peer_args("--join", "127.0.0.1:1", &input)).finish();
+    check_exit(&guest, 1);
+    assert!(guest.elapsed < Duration::from_secs(15), "{:?}", guest.elapsed);
+    assert!(last(&guest.stdout).starts_with("net: FAIL cannot connect to 127.0.0.1:1: "));
+}
+
+#[test]
+fn peer_usage_errors() {
+    let base = peer_args(
+        "--host",
+        "127.0.0.1:0",
+        &manifest("scenarios/tracks/oval_lap.input"),
+    );
+    let mut cases = Vec::new();
+    let mut missing_value = base.clone();
+    missing_value.pop();
+    cases.push(missing_value);
+    for flag in ["--net-timeout", "--net-connect-timeout", "--net-seed"] {
+        let mut args = base.clone();
+        let i = args.iter().position(|a| a == flag).unwrap();
+        args.drain(i..i + 2);
+        cases.push(args);
+    }
+    let bad_script = tmp_file("bad", "0 0.1234 0 0\n");
+    let huge_seed = "9".repeat(2048);
+    for (flag, value) in [
+        ("--net-timeout", "0"),
+        ("--net-timeout", "-1"),
+        ("--net-connect-timeout", "nan"),
+        ("--net-timeout", "inf"),
+        ("--net-connect-timeout", "3600.1"),
+        ("--net-seed", "01"),
+        ("--net-seed", "18446744073709551616"),
+        ("--net-seed", huge_seed.as_str()),
+        ("--net-seed", "+1"),
+        ("--net-seed", "-1"),
+        ("--net-seed", ""),
+        ("--net-seed", "1\r2"),
+        ("--host", "localhost:47000"),
+        ("--duration", "20.005"),
+        ("--input", bad_script.as_str()),
+        ("--grid-gap", "nan"),
+        ("--net-delay", "1001"),
+        ("--net-hash-every", "0"),
+    ] {
+        let mut args = base.clone();
+        replace(&mut args, flag, value);
+        cases.push(args);
+    }
+    for extra in [
+        vec!["--join", "127.0.0.1:1"],
+        vec!["--ai", "3"],
+        vec!["--live"],
+        vec!["--dt", "0.01"],
+        vec!["--substeps", "10"],
+        vec!["--net-seed", "1"],
+    ] {
+        let mut args = base.clone();
+        args.extend(extra.into_iter().map(String::from));
+        cases.push(args);
+    }
+    for args in cases {
+        let run = PeerChild::spawn(&args).finish();
+        assert_eq!(run.code, 2, "{args:?}\n{}\n{}", run.stdout, run.stderr);
+        assert!(run.stdout.is_empty(), "{args:?}\n{}", run.stdout);
+        assert!(run.stderr.starts_with("crash-sim: "), "{}", run.stderr);
+        assert!(run.stderr.lines().any(|l| l == PEER_USAGE), "{}", run.stderr);
+        assert!(
+            run.elapsed < Duration::from_secs(5),
+            "{args:?}: {:?}",
+            run.elapsed
+        );
+    }
+}

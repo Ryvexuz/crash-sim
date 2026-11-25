@@ -1,5 +1,7 @@
 #[path = "cli/ai_race.rs"]
 mod ai_race;
+#[path = "cli/net_peer.rs"]
+mod net_peer;
 #[path = "cli/net_race.rs"]
 mod net_race;
 #[path = "cli/race.rs"]
@@ -169,6 +171,11 @@ fn main() {
             &mut std::io::stdout().lock(),
             &mut std::io::stderr(),
         ));
+    }
+    if ai_args.iter().any(|a| a == "--host" || a == "--join")
+        && !ai_args.iter().any(|a| a == "--input2")
+    {
+        exit(net_peer::run_peer_cli(&ai_args));
     }
     if ai_args.iter().any(|a| a == "--ai") {
         exit(ai_race::run_ai_cli(&ai_args));

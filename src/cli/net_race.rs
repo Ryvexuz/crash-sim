@@ -99,22 +99,7 @@ impl<'a> Flags<'a> {
         if hash_every == 0 {
             return Err("--net-hash-every: expected at least 1".into());
         }
-        let count = duration / cfg.dt;
-        let rounded = count.round();
-        // The strict upper bound avoids saturating float-to-u64 conversion at 2^64.
-        let duration_error = || {
-            format!(
-                "--duration: must be a whole number of hash intervals ({hash_every} ticks of {} s)",
-                cfg.dt
-            )
-        };
-        if !rounded.is_finite() || !(1.0..u64::MAX as f64).contains(&rounded) {
-            return Err(duration_error());
-        }
-        let ticks = rounded as u64;
-        if (count - ticks as f64).abs() > 1e-6 || !ticks.is_multiple_of(hash_every) {
-            return Err(duration_error());
-        }
+        let ticks = duration_ticks(duration, &cfg, hash_every)?;
         Ok(Self {
             body: values["--body"],
             track: values["--track"],
@@ -128,7 +113,27 @@ impl<'a> Flags<'a> {
     }
 }
 
-enum Error {
+pub(crate) fn duration_ticks(duration: f64, cfg: &Config, hash_every: u64) -> Result<u64, String> {
+    let count = duration / cfg.dt;
+    let rounded = count.round();
+    // The strict upper bound avoids saturating float-to-u64 conversion at 2^64.
+    let duration_error = || {
+        format!(
+            "--duration: must be a whole number of hash intervals ({hash_every} ticks of {} s)",
+            cfg.dt
+        )
+    };
+    if !rounded.is_finite() || !(1.0..u64::MAX as f64).contains(&rounded) {
+        return Err(duration_error());
+    }
+    let ticks = rounded as u64;
+    if (count - ticks as f64).abs() > 1e-6 || !ticks.is_multiple_of(hash_every) {
+        return Err(duration_error());
+    }
+    Ok(ticks)
+}
+
+pub(crate) enum Error {
     Usage(String),
     Setup(String),
     Internal(String),
@@ -182,7 +187,7 @@ fn thousandths(v: f64) -> Result<i32, &'static str> {
     Ok(m as i32)
 }
 
-fn script(flag: &str, path: &str) -> Result<Vec<(f64, Input)>, String> {
+pub(crate) fn script(flag: &str, path: &str) -> Result<Vec<(f64, Input)>, String> {
     let parsed = Script::parse(&read(flag, path)?).map_err(|e| format!("{flag} {path}: {e}"))?;
     parsed
         .lines()
@@ -206,7 +211,7 @@ fn script(flag: &str, path: &str) -> Result<Vec<(f64, Input)>, String> {
         .collect()
 }
 
-fn input_at(script: &[(f64, Input)], tick: u64, delay: u64, dt: f64, tol: f64) -> Input {
+pub(crate) fn input_at(script: &[(f64, Input)], tick: u64, delay: u64, dt: f64, tol: f64) -> Input {
     if tick < delay {
         return Input::NEUTRAL;
     }
@@ -217,7 +222,7 @@ fn input_at(script: &[(f64, Input)], tick: u64, delay: u64, dt: f64, tol: f64) -
         .map_or(Input::NEUTRAL, |(_, input)| *input)
 }
 
-fn event_line(event: &TickEvent) -> Result<(f64, String), Error> {
+pub(crate) fn event_line(event: &TickEvent) -> Result<(f64, String), Error> {
     let (t, line) = match &event.event {
         LapEvent::Start { t } => (*t, format!("start t={t:.4}")),
         LapEvent::Checkpoint { lap, k, t } => (*t, format!("checkpoint lap={lap} k={k} t={t:.4}")),
@@ -291,22 +296,28 @@ fn execute(flags: &Flags<'_>) -> Result<(String, i32), Error> {
         }
     }
     for car in 0..2 {
-        out.push_str(&format!(
-            "car {} {}",
-            car + 1,
-            heading
-                .final_state(race.multi().sim(car), flags.ticks as f64 * dt)
-                .render()
-        ));
+        out.push_str(&final_line(&heading, &race, car, flags.ticks as f64 * dt));
     }
+    out.push_str(&cars_line(&race));
+    Ok((out, 0))
+}
+
+pub(crate) fn final_line(heading: &HeadingGroups, race: &LockstepRace, car: usize, t: f64) -> String {
+    format!(
+        "car {} {}",
+        car + 1,
+        heading.final_state(race.multi().sim(car), t).render()
+    )
+}
+
+pub(crate) fn cars_line(race: &LockstepRace) -> String {
     match race.gap() {
-        Some(gap) => out.push_str(&format!(
+        Some(gap) => format!(
             "cars gap_min_m={:.2} gap_min_t={:.4} near_substeps={}\n",
             gap.gap_min_m, gap.gap_min_t, gap.near_substeps
-        )),
-        None => out.push_str("cars gap_min_m=none gap_min_t=none near_substeps=0\n"),
+        ),
+        None => "cars gap_min_m=none gap_min_t=none near_substeps=0\n".into(),
     }
-    Ok((out, 0))
 }
 
 #[cfg(test)]
