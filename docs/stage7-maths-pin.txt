@@ -23,6 +23,8 @@ src/solver_m5.rs: let l = je.ln();
 src/solver_m5.rs: let mut ln_je = je_trial.ln();
 src/solver_m5.rs: piola_from(fe, je, je.ln(), law)
 src/solver_m5.rs: t.eta * je * e_c.exp() / eig.lower
+src/tune.rs: (self.from.ln() * (1.0 - fraction) + self.to.ln() * fraction).exp()
+src/tune.rs: self.from * ratio.powf(fraction)
 src/vehicle.rs: Ok((grip_frac * first.mu).atan())
 src/vehicle.rs: c_rr * load * radius * (spin.abs() * radius / ROLLING_RESISTANCE_RAMP_SPEED).tanh()
 src/vehicle.rs: let (s, c) = (self.steer * self.max_steer).sin_cos();
