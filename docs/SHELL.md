@@ -8,13 +8,13 @@ the binary `--shell` branch is follow-up n20-26a-2.
 ```text
 shell tracks=<n> cars=<n>                                           first line
 settings width=<w> height=<h> fullscreen=<true|false> volume=<v> units=<kmh|mph> source=<defaults|file|unsaved>
-best track=t-20261124-162643 seconds=<value> car=t-20261124-162643 date=<YYYY-MM-DD>          one per saved track, sorted by id, at start only
-state main cursor=<i>  |  state track_select cursor=<i>  |  state car_select track=t-20261124-162643 cursor=<i>  |  state settings
-state race track=t-20261124-162643 car=t-20261124-162643  |  state paused track=t-20261124-162643 car=t-20261124-162643 cursor=<i>  |  state results track=t-20261124-162643 car=t-20261124-162643  |  state quit
-action start_race track=t-20261124-162643 track_file=<path as given> car=t-20261124-162643 car_file=<path as given>
+best track=<id> seconds=<value> car=<id> date=<YYYY-MM-DD>          one per saved track, sorted by id, at start only
+state main cursor=<i>  |  state track_select cursor=<i>  |  state car_select track=<id> cursor=<i>  |  state settings
+state race track=<id> car=<id>  |  state paused track=<id> car=<id> cursor=<i>  |  state results track=<id> car=<id>  |  state quit
+action start_race track=<id> track_file=<path as given> car=<id> car_file=<path as given>
 action abort_race  |  action save_settings  |  action quit
 saved settings                       after action save_settings
-saved best track=t-20261124-162643 seconds=<3 decimals>      after `finished <ms>` when the lap beat the saved one (or there was none)
+saved best track=<id> seconds=<3 decimals>      after `finished <ms>` when the lap beat the saved one (or there was none)
 warn settings refused: <settings error text>     the file failed `settings::load`; defaults are in use; the file is not touched
 warn save refused: <save error text>             the file failed `Save::parse`; an empty save is in use; the file is not touched
 warn settings not saved: ... / warn best not saved: ...    a write was asked for while the file is in the refused state (never overwrites a refused file)
