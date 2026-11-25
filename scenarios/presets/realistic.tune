@@ -1,0 +1,14 @@
+tune 1
+# Validated test A set: current material values from scenarios/validation_wall.bsn.
+set material chassis stiffness 300000
+set material chassis damping 200
+set material chassis yield_strain 0.02
+set material cabin stiffness 1000000
+set material cabin damping 6666.67
+set material cabin yield_strain 0.02
+set material crush_front stiffness 35897435.898
+set material crush_front damping 724.569
+set material crush_front yield_strain 0.0024
+set material crush_rear stiffness 143589743.59
+set material crush_rear damping 1982.618
+set material crush_rear yield_strain 0.0024

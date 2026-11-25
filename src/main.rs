@@ -6,6 +6,8 @@ mod net_peer;
 mod net_race;
 #[path = "cli/race.rs"]
 mod race;
+#[path = "cli/tune.rs"]
+mod tune;
 use race::{run_race, RaceMode};
 #[path = "cli/pulse_run.rs"]
 mod pulse_run;
@@ -164,6 +166,9 @@ fn crumple_params(
 
 fn main() {
     let ai_args: Vec<String> = std::env::args().skip(1).collect();
+    if ai_args.first().map(String::as_str) == Some("tune") {
+        exit(tune::run_tune_cli(&ai_args[1..]));
+    }
     if ai_args.iter().any(|a| a == "--shell") {
         exit(crash_sim::shell::run(
             &ai_args,

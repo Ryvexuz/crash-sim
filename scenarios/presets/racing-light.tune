@@ -1,0 +1,5 @@
+# example, NOT validated
+tune 1
+include realistic.tune
+scale material * yield_strain 3
+scale material * stiffness 1.5

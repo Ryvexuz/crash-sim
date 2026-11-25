@@ -30,6 +30,7 @@ pub mod speed_profile;
 pub mod statehash;
 pub mod track;
 pub mod trajectory;
+pub mod tune;
 pub mod vec3;
 pub mod vehicle;
 
