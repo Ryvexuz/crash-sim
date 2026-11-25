@@ -64,8 +64,8 @@ fn encode(snapshot: &Snapshot) -> String {
             .unwrap();
         }
     }
-    for c in 0..2 {
-        let flags: String = snapshot.broken[c]
+    for (c, car) in snapshot.broken.iter().enumerate() {
+        let flags: String = car
             .iter()
             .map(|&broken| if broken { '1' } else { '0' })
             .collect();
@@ -135,7 +135,7 @@ fn decode(text: &str, substep: u64, body: &Body, cfg: &Config) -> Result<Snapsho
             snapshot.vel[c].push(Vec3::new(values[6], values[7], values[8]));
         }
     }
-    for c in 0..2 {
+    for (c, slot) in snapshot.broken.iter_mut().enumerate() {
         let prefix = format!("broken {c} ");
         let flags = lines
             .next()
@@ -144,7 +144,7 @@ fn decode(text: &str, substep: u64, body: &Body, cfg: &Config) -> Result<Snapsho
         if flags.len() != body.beams.len() || !flags.bytes().all(|b| b == b'0' || b == b'1') {
             return Err(format!("invalid broken flags: car={c}"));
         }
-        snapshot.broken[c] = flags.bytes().map(|b| b == b'1').collect();
+        *slot = flags.bytes().map(|b| b == b'1').collect();
     }
     if lines.next().is_some() || encode(&snapshot) != text {
         return Err("extra lines or non-canonical fixture encoding".into());
