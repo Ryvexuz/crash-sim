@@ -1,7 +1,7 @@
 # The shell protocol (n20-26a)
 
-The protocol below is the STAGE7 Milestone 3 text. This task supplies the library;
-the binary `--shell` branch is follow-up n20-26a-2.
+The protocol below is the STAGE7 Milestone 3 text. n20-26a-1 supplied the library;
+n20-26a-2 (crash-sim `1154e3c`) added the binary `--shell` branch.
 
 **The shell protocol (n20-26a, documented in `docs/SHELL.md`).** `crash-sim --shell --data <dir> --shell-track <file> [--shell-track <file> ...] --shell-car <file> [--shell-car <file> ...] --today <YYYY-MM-DD>`. The track and car lists are exactly the repeated flags, in the order given (never scanned, never hard-coded: n20-23's rule), at least one of each, and a track's or car's id is its file stem. `--today` is required (the shell has no clock, so a test is deterministic; the front end passes the UTC date). The data folder holds `settings.txt` (`settings 1`, n20-21) and `best.save` (`save 2`, n20-22), both written canonically and atomically. One line is read from stdin per event: `up`, `down`, `select`, `back`, `pause`, `finished <ms>` or `finished none` (the race ended; the best valid lap in whole milliseconds), and `set <key> <value>` (`width`, `height`, `fullscreen`, `volume`, `units`; only on the settings screen). The shell prints one line per fact, each flushed. At start, after the `settings` and `best` lines and before it reads any event, it prints the initial `state main cursor=0`. After every event except `set` it prints the `state` line (also when the state did not change), then an `action` line if the step returned one, then what carrying the action out printed. A `set` event prints only its `settings` line, or a `warn`, and no `state` line.
 
@@ -105,6 +105,6 @@ file is rewritten, `70.000` becomes `70`, or the unchanged settings state line
 disappears. These mutation checks must be run by the orchestrator, separately,
 with restoration and a clean rerun after each.
 
-Follow-up **n20-26a-2** adds the `src/main.rs` `--shell` branch and the seven
-`tests/shell.rs` binary-level check 3.1 tests, including two processes on one
-data folder, after t-20261124-161051 merges.
+**n20-26a-2** (crash-sim `1154e3c`) added the `src/main.rs` `--shell` branch, which
+hands the arguments to `shell::run`, and the seven `tests/shell.rs` binary-level
+check 3.1 tests, including two processes on one data folder.
