@@ -404,3 +404,34 @@ fn broken_beam_is_left_alone() {
         assert!(broken.pos[1].x - broken.pos[0].x > 1.0);
     }
 }
+
+#[test]
+fn overflowing_reciprocal_gets_the_finite_shift() {
+    let u = f64::from_bits(1 << 44); // 2^-1030; its reciprocal overflows.
+    let small = f64::from_bits(1 << 40); // 2^-1034; small / u = 1/16.
+    for (rest, speed, h, expected) in [
+        (1.25, small, 1.0, 1.1875_f64),
+        (0.75, -small, 1.0, 0.8125),
+        (1.25, f64::from_bits(1 << 46), 1.0, 1.0),
+        (1.25, f64::MAX, 2.0, 1.0),
+    ] {
+        let mut direct = sim(&pair_text("", ""));
+        direct.unload_return[0] = Some(u);
+        direct.beams[0].rest = rest;
+        direct.vel[1].x = speed;
+        let (pos, vel, rest0) = (
+            direct.pos.clone(),
+            direct.vel.clone(),
+            direct.rest0.clone(),
+        );
+        let stiffness = direct.beams[0].stiffness;
+        let damping = direct.beams[0].damping;
+        assert_eq!(direct.apply_unload(h), 1);
+        assert_eq!(direct.beams[0].rest.to_bits(), expected.to_bits());
+        assert_eq!(direct.pos, pos);
+        assert_eq!(direct.vel, vel);
+        assert_eq!(direct.rest0, rest0);
+        assert_eq!(direct.beams[0].stiffness, stiffness);
+        assert_eq!(direct.beams[0].damping, damping);
+    }
+}

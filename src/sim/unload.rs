@@ -11,6 +11,8 @@ use super::Sim;
 /// 4. beta = 1/u - 1. If beta == 0 (u == 1), change nothing, bit for bit.
 /// 5. shift = beta * delta. If |shift| >= |x|, rest' = len; otherwise
 ///    rest' = rest - shift, so x' = x + shift moves toward zero without crossing it.
+///    When 1/u overflows, use delta / u - delta (an infinite delta / u stays
+///    infinite), the same value without the reciprocal overflow.
 /// 6. Keep rest unless rest' is positive and finite (the fail-closed guard).
 ///
 /// Only rest changes: positions, velocities, stiffness, damping, rest0 and all other
@@ -46,7 +48,16 @@ pub(super) fn apply(sim: &mut Sim, h: f64) -> usize {
         if beta == 0.0 {
             continue;
         }
-        let shift = beta * delta;
+        let shift = if beta.is_finite() {
+            beta * delta
+        } else {
+            let q = delta / u;
+            if q.is_finite() {
+                q - delta
+            } else {
+                q
+            }
+        };
         let rest = if shift.abs() >= x.abs() {
             len
         } else {
