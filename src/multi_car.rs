@@ -1,6 +1,10 @@
 //! Fixed-order, lockstep stepping of cars with contact after every substep.
 
-use crate::car_contact::{apply_contacts, ContactCar, ContactError, ContactSettings};
+use std::collections::BTreeSet;
+
+use crate::car_contact::{
+    apply_contacts_moving, ContactError, ContactKey, ContactSettings, MovingContactCar,
+};
 use crate::collide;
 use crate::vec3::Vec3;
 use crate::Sim;
@@ -79,6 +83,7 @@ pub struct MultiSim {
     cars: Vec<Sim>,
     settings: ContactSettings,
     previous_pos: Vec<Vec<Vec3>>,
+    last_impulse_keys: BTreeSet<ContactKey>,
 }
 
 fn finite(v: Vec3) -> bool {
@@ -151,6 +156,7 @@ impl MultiSim {
             cars: sims,
             settings,
             previous_pos,
+            last_impulse_keys: BTreeSet::new(),
         })
     }
 
@@ -165,6 +171,13 @@ impl MultiSim {
 
     pub fn step_index(&self) -> u64 {
         self.cars[0].step
+    }
+
+    /// Impulse keys from the most recent successful contact substep, not the
+    /// union over an output step. Empty initially; a refusal retains that set.
+    /// Used as touching memory by the next substep's contact classification.
+    pub fn last_impulse_keys(&self) -> &BTreeSet<ContactKey> {
+        &self.last_impulse_keys
     }
 
     /// Apply controls, then snapshot/substep/check/contact/first-contact, in
@@ -208,17 +221,19 @@ impl MultiSim {
                     .cars
                     .iter_mut()
                     .zip(&self.previous_pos)
-                    .map(|(sim, old)| ContactCar {
+                    .map(|(sim, old)| MovingContactCar {
                         previous_pos: old,
-                        pos: &sim.pos,
+                        pos: &mut sim.pos,
                         vel: &mut sim.vel,
                         mass: &sim.mass,
                         beams: &sim.beams,
                         broken: &sim.broken,
                     })
                     .collect();
-                let contact =
-                    apply_contacts(&mut views, self.settings).map_err(MultiError::Contact)?;
+                let (contact, impulse_keys) =
+                    apply_contacts_moving(&mut views, self.settings, &self.last_impulse_keys)
+                        .map_err(MultiError::Contact)?;
+                self.last_impulse_keys = impulse_keys;
                 report.candidates += contact.candidates;
                 report.contacts += contact.contacts;
                 report.impulses += contact.impulses;

@@ -7,6 +7,7 @@ use crash_sim::car_contact::{
 use crash_sim::format::parse;
 use crash_sim::vec3::Vec3;
 use crash_sim::{Beam, Config, Sim};
+use std::collections::BTreeSet;
 
 #[derive(Clone)]
 struct Chassis {
@@ -640,10 +641,10 @@ fn extreme_mass_ratio_matches_integer_rational_reference() {
     }
 }
 
-fn sim_view<'a>(sim: &'a mut Sim, old: &'a [Vec3]) -> ContactCar<'a> {
-    ContactCar {
+fn sim_view<'a>(sim: &'a mut Sim, old: &'a [Vec3]) -> crash_sim::car_contact::MovingContactCar<'a> {
+    crash_sim::car_contact::MovingContactCar {
         previous_pos: old,
-        pos: &sim.pos,
+        pos: &mut sim.pos,
         vel: &mut sim.vel,
         mass: &sim.mass,
         beams: &sim.beams,
@@ -717,22 +718,29 @@ fn total_energy(cars: &[Sim]) -> f64 {
     cars.iter().map(Sim::total_energy).sum()
 }
 
-fn step_contact(cars: &mut [Sim; 2]) -> ContactReport {
+fn step_contact(cars: &mut [Sim; 2], memory: &mut BTreeSet<ContactKey>) -> ContactReport {
     let old = [cars[0].pos.clone(), cars[1].pos.clone()];
     for sim in cars.iter_mut() {
         sim.advance(); // exactly one existing single-car physics substep
         sim.check().unwrap();
     }
-    let before = total_energy(cars);
+    let kinetic = |cars: &[Sim]| {
+        cars.iter()
+            .flat_map(|s| s.vel.iter().zip(&s.mass))
+            .map(|(v, m)| 0.5 * m * v.dot(*v))
+            .sum::<f64>()
+    };
+    let before = kinetic(cars);
     let cfg = ContactSettings::new(0.125, 0.0, cars[0].cfg.dt, 0.015625, 0.0625).unwrap();
     let mut views: Vec<_> = cars
         .iter_mut()
         .zip(&old)
         .map(|(s, p)| sim_view(s, p))
         .collect();
-    let r = apply_contacts(&mut views, cfg).unwrap();
+    let (r, keys) = crash_sim::car_contact::apply_contacts_moving(&mut views, cfg, memory).unwrap();
+    *memory = keys;
     drop(views);
-    let after = total_energy(cars);
+    let after = kinetic(cars);
     assert!(before.is_finite() && after.is_finite());
     assert!(
         after - before <= 1e-10 * before.abs().max(1.0),
@@ -744,6 +752,8 @@ fn step_contact(cars: &mut [Sim; 2]) -> ContactReport {
 #[test]
 fn head_on_at_low_speed_conserves_momentum() {
     let mut cars = collision_cars();
+    let e0 = total_energy(&cars);
+    let mut memory = BTreeSet::new();
     let p0 = total_momentum(&cars);
     let tolerance = 1e-6 * momentum_scale(&cars);
     let initial_velocities = [cars[0].vel.clone(), cars[1].vel.clone()];
@@ -752,7 +762,7 @@ fn head_on_at_low_speed_conserves_momentum() {
     let mut worst_error = 0.0_f64;
     // Contact begins after closing the skin gap, not in the initial state.
     for _ in 0..2000 {
-        let report = step_contact(&mut cars);
+        let report = step_contact(&mut cars, &mut memory);
         impulses += report.impulses;
         impulse_sum += report.normal_impulse;
         let error = (total_momentum(&cars) - p0).length();
@@ -769,6 +779,9 @@ fn head_on_at_low_speed_conserves_momentum() {
     for (sim, initial) in cars.iter().zip(initial_velocities) {
         assert_ne!(sim.vel, initial, "both cars must respond");
     }
+    let final_j = total_energy(&cars);
+    println!("head_on initial_j={e0:e} final_j={final_j:e}");
+    assert!(final_j <= e0 + 1e-10 * e0.abs().max(1.0));
 }
 
 #[test]
@@ -784,6 +797,7 @@ fn car_contact_never_creates_energy() {
         .sum();
     assert!((final_kinetic - 2.0 / 7.0).abs() <= 32.0 * f64::EPSILON);
     let mut cars = collision_cars();
+    let mut memory = BTreeSet::new();
     let e0 = total_energy(&cars);
     assert!(e0.is_finite() && e0 > 0.0);
     let mut gain = 0.0_f64;
@@ -791,7 +805,7 @@ fn car_contact_never_creates_energy() {
     let mut rise = 0.0_f64;
     let mut impulses = 0;
     for step in 1..=24000 {
-        impulses += step_contact(&mut cars).impulses;
+        impulses += step_contact(&mut cars, &mut memory).impulses;
         let energy = total_energy(&cars);
         assert!(energy.is_finite());
         gain = gain.max(energy - e0);
@@ -806,6 +820,9 @@ fn car_contact_never_creates_energy() {
     assert!(impulses > 0, "the complete 12 s run must actually collide");
     assert!(min_after.is_finite(), "the post-8 s window must be populated");
     assert!(cars.iter().all(|s| s.car.as_ref().unwrap().drive_work == 0.0));
+    let final_j = total_energy(&cars);
+    println!("car_contact initial_j={e0:e} final_j={final_j:e}");
+    assert!(final_j <= e0 + 1e-10 * e0.abs().max(1.0));
 }
 
 use crash_sim::multi_car::{CarControls, CarPlacement, MultiError, MultiSim};
@@ -1080,6 +1097,7 @@ fn multi_car_same_inputs_same_bytes() {
     let mut a = ordered_collision(2, false);
     let mut b = ordered_collision(2, false);
     let mut reference = short_collision_cars();
+    let mut memory = BTreeSet::new();
     let mut variant_contacts = 0;
     // Two h-sized reference output steps are exactly one two-substep output
     // step here: no planes, controls or gravity; yielding is independent of
@@ -1089,8 +1107,8 @@ fn multi_car_same_inputs_same_bytes() {
     for step in 1..=200 {
         let ra = a.advance(&[ZERO_CONTROLS; 2]).unwrap();
         let rb = b.advance(&[ZERO_CONTROLS; 2]).unwrap();
-        let r0 = step_contact(&mut reference);
-        let r1 = step_contact(&mut reference);
+        let r0 = step_contact(&mut reference, &mut memory);
+        let r1 = step_contact(&mut reference, &mut memory);
         assert_eq!((ra.substeps, rb.substeps), (2, 2));
         assert_eq!(ra, rb);
         assert_eq!(ra.candidates, r0.candidates + r1.candidates, "step={step}");

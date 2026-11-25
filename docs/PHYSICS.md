@@ -334,13 +334,23 @@ Contact time is tracked separately, in the substep loop: `Sim::first_contact_s` 
 
 ## Inter-car chassis contact (n20-19a kernel)
 
-`car_contact::{detect_contacts, apply_contacts}` takes cars in caller-defined fixed
-order, with chassis node positions **before and after one physics substep**,
-post-substep velocities, node masses, beams and a parallel broken-beam mask.
+`car_contact::{detect_contacts, apply_contacts, apply_contacts_moving}` takes cars
+in caller-defined fixed order, with chassis node positions **before and after one
+physics substep**, post-substep velocities, node masses, beams and a parallel broken-beam mask.
 Indices in those slices are the car/node/beam identities; broken beams are not
 compacted. Save positions before stepping, step each car using the existing
 single-car integrator, then call contact after **every physics substep**, not
-only at output frames. This module is not a race loop or a wheel collider.
+only at output frames. `MultiSim` calls `apply_contacts_moving`, supplying the
+immediately preceding successful substep's impulse-key set (empty initially).
+For that entry only, an outside/outside pair within the existing
+`skin+2*max_motion` final-distance band whose key is in that set is treated as
+a contact, with the incoming closest-point normal and fraction. The sweep
+certificate requirements below still apply to every other pair. The returned
+set contains only keys that actually received impulses this substep, replacing
+rather than accumulating the old set. A refusal changes neither the caller's
+positions/velocities nor its retained key set. The keys are deterministic derived
+state, not added to the race hash.
+This module is not a race loop or a wheel collider.
 
 The caller supplies `ContactSettings::new(skin, restitution, timestep,
 max_motion, max_penetration)`. Distances are metres, timestep is seconds, mass is
@@ -425,10 +435,14 @@ The endpoint impulses sum to the negative source impulse; interpolation also
 places their resultant at the closest point. Separating or stationary normal
 motion receives no impulse. In exact arithmetic the kinetic change is
 `-(1-restitution^2)*vn^2/(2*w) <= 0`. This is one sequential pass, not an
-iterated simultaneous-contact solve. Positions are **never** projected to
-remove penetration: spring lengths, rest lengths and elastic energy are
-unchanged by contact. Wheel state is unchanged during the pass; its subsequent
-carrier/suspension interaction remains the existing single-car implementation.
+iterated simultaneous-contact solve. In `apply_contacts_moving`, each applied
+impulse also moves its three nodes by their velocity change times the timestep
+(`x += dv*h`), in the same order. No other positions change: there is no projection
+to remove penetration and no second pass. This equals the integrator's position
+update of the post-impulse velocity; normals and fractions come from the incoming
+positions. `apply_contacts` changes velocities only. Wheel state is unchanged
+during the pass; its subsequent carrier/suspension interaction remains the
+existing single-car implementation.
 
 All lengths, indices (including broken-beam indices), masses, node components,
 and beam scalar fields are validated before response. Masses must be positive
@@ -444,8 +458,9 @@ effective inverse mass, kinetic sum or output velocity arithmetic is refused.
 Tests use exact rational impulse references, power-of-two rescaling, numerical
 skin-band endpoints, extreme masses and nearly cancelling common velocities.
 
-Response runs on private trial velocities. Only after finite output, energy and
-next-step speed checks does it copy velocities back; **any error leaves all
+Response runs on private trial velocities and positions. Only after finite output,
+energy and next-step speed checks does `apply_contacts_moving` copy both back
+(`apply_contacts` copies velocities only); **any error leaves all
 incoming caller state untouched**, even after a trial impulse. A refusal names
 the car and node/beam/contact key (settings errors have no car), with a named
 failure such as `MotionBound`, `PenetrationBound` or `EnergyIncrease`.
@@ -466,9 +481,16 @@ collision impulses and changed velocities on both cars.
 before/after each contact pass, including chassis kinetic, live beam elastic,
 wheel translation/spin and suspension/tyre energy. Only
 `1e-10 * max(1 J, |E_before|)` roundoff is allowed. The kernel itself enforces
-that same tolerance on chassis kinetic energy before copying back; all other
-energy terms are unchanged during contact. In the nonnegative-energy test
-setup this is at least as strict as the full-state tolerance.
+that same tolerance on chassis kinetic energy before copying back. Position
+following can change live-beam elastic energy, summed in beam order as
+`0.5 * stiffness * stretch * stretch`, where
+`stretch = (pos[a] - pos[b]).length() - rest`. Gravity potential is unchanged
+in exact arithmetic because the impulse conserves momentum and `dx = dv*h`.
+The kernel does not measure elastic or wheel terms:
+`head_on_follow_keeps_full_state_energy_and_momentum` measures full-state energy
+over whole substeps, including the integrator and position follow. An in-pass
+elastic-energy check would refuse a steady beam-driven push because of the
+symplectic integrator's own energy error.
 The complete unpowered collision run measures every substep through 12 s:
 gain must be at most `0.01 * E(0)`, and the largest later-minus-earlier energy
 rise over the window from 8 s through 12 s must be at most `0.01 J`.
@@ -508,8 +530,10 @@ It checks the controls count and calls
 2. Calls the existing `Sim::substep(k + 1, h)` for every car in that order,
    including its existing breaking and yielding work, with `h = dt/substeps`.
 3. Calls `Sim::check` for every car in order.
-4. For two or more cars, calls `apply_contacts` once over ordered car views,
-   using those snapshots as `previous_pos`. Counts are summed across substeps.
+4. For two or more cars, calls `apply_contacts_moving` once over ordered car views,
+   using those snapshots as `previous_pos`, so step 5 sees the moved positions.
+   It supplies the last substep's impulse keys and replaces them only on success.
+   Counts are summed across substeps.
 5. For every car in order, sets a previously absent `first_contact_s` if a
    chassis node is at/behind a collider plane, to
    `sim.step as f64 * dt + (k + 1) as f64 * h`, just like `Sim::advance`.

@@ -1,7 +1,7 @@
 //! Ordered, transactional node-versus-live-beam contact between different cars.
 //!
 //! Call after each single-car physics substep, with positions saved before that
-//! substep. No positions, springs or wheels are modified. See docs/PHYSICS.md.
+//! substep. Moving contact follows impulses; see docs/PHYSICS.md for the rule.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -399,6 +399,7 @@ fn separated_pieces(
 fn prepare(
     cars: &[ContactCar<'_>],
     cfg: ContactSettings,
+    previous_impulses: &BTreeSet<ContactKey>,
 ) -> Result<(usize, Vec<Contact>), ContactError> {
     let longest = validate(cars, cfg)?;
     let mut flat = Vec::new();
@@ -465,7 +466,13 @@ fn prepare(
         }
         let normal = delta * (1.0 / distance);
         let old_normal = old_delta * (1.0 / old_distance);
-        if distance <= cfg.skin {
+        // Position following can park an impulsed pair just outside the skin.
+        // Keep it touching for this substep only, within the existing band.
+        if distance <= cfg.skin
+            || (old_distance > cfg.skin
+                && distance <= cfg.skin + 2.0 * cfg.max_motion
+                && previous_impulses.contains(&key))
+        {
             contacts.push(Contact {
                 key,
                 fraction: t,
@@ -493,7 +500,18 @@ pub fn detect_contacts(
     cars: &[ContactCar<'_>],
     cfg: ContactSettings,
 ) -> Result<Vec<Contact>, ContactError> {
-    prepare(cars, cfg).map(|(_, contacts)| contacts)
+    prepare(cars, cfg, &BTreeSet::new()).map(|(_, contacts)| contacts)
+}
+
+/// Same slice identities and pre-substep snapshot meaning as `ContactCar`;
+/// positions follow each applied impulse's velocity change times the timestep.
+pub struct MovingContactCar<'a> {
+    pub previous_pos: &'a [Vec3],
+    pub pos: &'a mut [Vec3],
+    pub vel: &'a mut [Vec3],
+    pub mass: &'a [f64],
+    pub beams: &'a [Beam],
+    pub broken: &'a [bool],
 }
 
 fn kinetic(cars: &[ContactCar<'_>], velocities: &[Vec<Vec3>]) -> Result<f64, ContactError> {
@@ -518,8 +536,61 @@ pub fn apply_contacts(
     cars: &mut [ContactCar<'_>],
     cfg: ContactSettings,
 ) -> Result<ContactReport, ContactError> {
-    let (candidates, contacts) = prepare(cars, cfg)?;
+    let staged = contact_pass(cars, cfg, false, &BTreeSet::new())?;
+    for (car, vel) in cars.iter_mut().zip(staged.velocities) {
+        car.vel.copy_from_slice(&vel);
+    }
+    Ok(staged.report)
+}
+
+/// One transactional sequential pass with `x += dv*h` for every impulse node.
+/// Normals and fractions use incoming positions. Any refusal writes nothing.
+/// Supply only the immediately preceding successful substep's impulse keys
+/// (empty initially). Outside/outside pairs in the existing motion band with
+/// those keys remain contacts; all other pairs keep the usual sweep checks.
+/// Returns the report and the ordered set of keys that actually got impulses.
+pub fn apply_contacts_moving(
+    cars: &mut [MovingContactCar<'_>],
+    cfg: ContactSettings,
+    previous_impulses: &BTreeSet<ContactKey>,
+) -> Result<(ContactReport, BTreeSet<ContactKey>), ContactError> {
+    let staged = {
+        let views: Vec<_> = cars
+            .iter_mut()
+            .map(|c| ContactCar {
+                previous_pos: c.previous_pos,
+                pos: &*c.pos,
+                vel: &mut *c.vel,
+                mass: c.mass,
+                beams: c.beams,
+                broken: c.broken,
+            })
+            .collect();
+        contact_pass(&views, cfg, true, previous_impulses)?
+    };
+    for ((car, vel), pos) in cars.iter_mut().zip(staged.velocities).zip(staged.positions) {
+        car.vel.copy_from_slice(&vel);
+        car.pos.copy_from_slice(&pos);
+    }
+    Ok((staged.report, staged.impulse_keys))
+}
+
+struct StagedContacts {
+    report: ContactReport,
+    impulse_keys: BTreeSet<ContactKey>,
+    velocities: Vec<Vec<Vec3>>,
+    positions: Vec<Vec<Vec3>>,
+}
+
+fn contact_pass(
+    cars: &[ContactCar<'_>],
+    cfg: ContactSettings,
+    follow: bool,
+    previous_impulses: &BTreeSet<ContactKey>,
+) -> Result<StagedContacts, ContactError> {
+    let (candidates, contacts) = prepare(cars, cfg, previous_impulses)?;
     let mut velocities: Vec<Vec<Vec3>> = cars.iter().map(|c| c.vel.to_vec()).collect();
+    let mut positions: Vec<Vec<Vec3>> = cars.iter().map(|c| c.pos.to_vec()).collect();
     let before = kinetic(cars, &velocities)?;
     let mut report = ContactReport {
         candidates,
@@ -527,6 +598,7 @@ pub fn apply_contacts(
         ..ContactReport::default()
     };
     let mut last_impulse = None;
+    let mut impulse_keys = BTreeSet::new();
     for contact in contacts {
         let key = contact.key;
         let b = cars[key.target_car].beams[key.beam];
@@ -558,16 +630,32 @@ pub fn apply_contacts(
         velocities[key.source_car][key.node] += changes[0];
         velocities[key.target_car][b.a] += changes[1];
         velocities[key.target_car][b.b] += changes[2];
+        if follow {
+            positions[key.source_car][key.node] += changes[0] * cfg.timestep;
+            positions[key.target_car][b.a] += changes[1] * cfg.timestep;
+            positions[key.target_car][b.b] += changes[2] * cfg.timestep;
+            if ![
+                positions[key.source_car][key.node],
+                positions[key.target_car][b.a],
+                positions[key.target_car][b.b],
+            ]
+            .iter()
+            .all(|&p| finite(p))
+            {
+                return Err(refusal(Failure::NumericalRange));
+            }
+        }
         report.impulses += 1;
         report.normal_impulse += impulse;
+        impulse_keys.insert(key);
         last_impulse = Some(key);
         if !report.normal_impulse.is_finite() {
             return Err(refusal(Failure::NumericalRange));
         }
     }
-    // Positions and all potential/wheel terms are unchanged, so bounding chassis
-    // kinetic energy bounds total energy at least as strictly when the other
-    // energy terms are nonnegative. Callers can measure their full-state energy.
+    // Bound chassis kinetic energy in-pass. Position following can change beam
+    // elastic energy; callers measure full-state energy over whole substeps,
+    // including the integrator's work, rather than refusing a steady push here.
     let after = kinetic(cars, &velocities)?;
     if after - before > 1e-10 * before.abs().max(1.0) {
         let (car, feature) = last_impulse.map_or((None, Feature::Layout), |key| {
@@ -584,8 +672,10 @@ pub fn apply_contacts(
             }
         }
     }
-    for (car, vel) in cars.iter_mut().zip(velocities) {
-        car.vel.copy_from_slice(&vel);
-    }
-    Ok(report)
+    Ok(StagedContacts {
+        report,
+        impulse_keys,
+        velocities,
+        positions,
+    })
 }
