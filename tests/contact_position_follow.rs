@@ -210,7 +210,7 @@ fn follow_refuses_a_node_pushed_through_the_ground() {
     ] {
         let mut cars = fixture(1e5, -1.0);
         for car in &mut cars {
-            car.planes.push(Plane::new(Vec3::new(0.0, y, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap());
+            car.planes.push(Plane { point: Vec3::new(0.0, y, 0.0), ..Plane::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0)).unwrap() });
         }
         let before = state_bits(&cars);
         let result = apply(&mut cars, settings());
