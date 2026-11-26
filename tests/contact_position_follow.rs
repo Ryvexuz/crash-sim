@@ -448,8 +448,7 @@ fn kinetic_plus_elastic(cars: &[Chassis]) -> f64 {
 
 #[test]
 fn follow_never_increases_kinetic_plus_elastic() {
-    // Form 2: report the in-pass elastic change; only whole-substep full-state
-    // energy is a gate. A stiff beam may gain energy during this pass alone.
+    // Gate the in-pass energy change for stiffnesses inside the step limit.
     for k in [0.0, 1e3, 1e5, 1e6, 1e7] {
         for vy in [-0.25, -1.0, -4.0] {
             let mut cars = fixture(k, vy);
@@ -458,7 +457,18 @@ fn follow_never_increases_kinetic_plus_elastic() {
             assert_eq!(report.impulses, 1, "k={k:e} vy={vy:e}");
             let after = kinetic_plus_elastic(&cars);
             assert!(before.is_finite() && after.is_finite());
-            println!("follow energy k={k:e} vy={vy:e} result=ok before={before:e} after={after:e}");
+            if k <= 1e6 {
+                assert!(
+                    after <= before,
+                    "k={k:e} vy={vy:e} before={before:e} after={after:e}"
+                );
+                println!("follow energy k={k:e} vy={vy:e} result=ok before={before:e} after={after:e}");
+            } else {
+                // At k=1e7, m=1 kg and h=0.001 s: omega*h=sqrt(2e7)*0.001 ≈ 4.47.
+                println!(
+                    "follow energy k={k:e} vy={vy:e} result=ok before={before:e} after={after:e} outside step limit (omega*h > 2), report only"
+                );
+            }
         }
     }
 }
