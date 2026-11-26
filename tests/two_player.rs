@@ -255,6 +255,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+static PROCESS_TESTS: Mutex<()> = Mutex::new(());
+
 const PEER_USAGE: &str = "usage: crash-sim --body <car.bsn> --track <file> --grid-gap <m> --duration <s> (--host <addr:port> | --join <addr:port>) --input <file> --net-delay <ticks> --net-hash-every <ticks> --net-timeout <s> --net-connect-timeout <s> --net-seed <u64>";
 
 fn exe() -> std::path::PathBuf {
@@ -495,6 +497,7 @@ fn check_hex(hash: &str) {
 
 #[test]
 fn two_peers_on_loopback_match_the_local_run() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let still = tmp_file("still", "0 0 1 0\n");
     let (addr, host, guest) = pair(&still, "10");
     let (host, guest) = (host.finish(), guest.finish());
@@ -540,6 +543,7 @@ fn two_peers_on_loopback_match_the_local_run() {
 
 #[test]
 fn forced_desync_is_reported_by_both_peers() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let (_, host, guest) = pair(&manifest("scenarios/tracks/oval_lap.input"), "11");
     let (host, guest) = (host.finish(), guest.finish());
     let hashes = [&host, &guest].map(|run| {
@@ -563,6 +567,7 @@ fn forced_desync_is_reported_by_both_peers() {
 
 #[test]
 fn no_peer_ends_with_a_named_error() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let input = manifest("scenarios/tracks/oval_lap.input");
     let mut args = peer_args("--host", "127.0.0.1:0", &input);
     replace(&mut args, "--net-connect-timeout", "1");
@@ -584,6 +589,7 @@ fn no_peer_ends_with_a_named_error() {
 
 #[test]
 fn peer_usage_errors() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let base = peer_args(
         "--host",
         "127.0.0.1:0",
@@ -746,6 +752,7 @@ fn reference_run(input: &str, still: &str) -> PeerOutput {
 
 #[test]
 fn silent_peer_ends_with_timeout() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let input = manifest("scenarios/tracks/oval_lap.input");
     let still = tmp_file("silent_still", "0 0 1 0\n");
     let reference = reference_run(&input, &still);
@@ -785,6 +792,7 @@ fn silent_peer_ends_with_timeout() {
 
 #[test]
 fn killed_peer_ends_with_a_named_error() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let input = manifest("scenarios/tracks/oval_lap.input");
     let still = tmp_file("killed_still", "0 0 1 0\n");
     let mut args = peer_args("--host", "127.0.0.1:0", &input);
@@ -831,6 +839,7 @@ fn killed_peer_ends_with_a_named_error() {
 
 #[test]
 fn host_and_guest_inputs_drive_their_own_cars() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let input = manifest("scenarios/tracks/oval_lap.input");
     let still = tmp_file("routing_still", "0 0 1 0\n");
     let mut args = peer_args("--host", "127.0.0.1:0", &input);
@@ -883,6 +892,7 @@ fn host_and_guest_inputs_drive_their_own_cars() {
 
 #[test]
 fn no_race_lines_of_an_unconfirmed_interval_are_printed() {
+    let _serial = PROCESS_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let input = manifest("scenarios/tracks/oval_lap.input");
     let still = tmp_file("unconfirmed_still", "0 0 1 0\n");
     let reference = reference_run(&input, &still);
