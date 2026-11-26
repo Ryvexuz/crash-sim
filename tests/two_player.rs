@@ -249,7 +249,7 @@ fn state_hash_refuses_failed_car() {
 
 mod run_tmp;
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -288,6 +288,7 @@ struct PeerChild {
     child: Arc<Mutex<Child>>,
     started: Instant,
     first: mpsc::Receiver<String>,
+    lines: mpsc::Receiver<String>,
     stdout: Option<JoinHandle<String>>,
     stderr: Option<JoinHandle<String>>,
     done: mpsc::Sender<()>,
@@ -314,6 +315,7 @@ impl PeerChild {
         let stdout = child.stdout.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();
         let (first_tx, first) = mpsc::channel();
+        let (lines_tx, lines) = mpsc::channel();
         let stdout = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut text = String::new();
@@ -322,6 +324,7 @@ impl PeerChild {
                 if text.is_empty() {
                     let _ = first_tx.send(line.trim_end_matches(['\r', '\n']).to_string());
                 }
+                let _ = lines_tx.send(line.trim_end_matches(['\r', '\n']).to_string());
                 text.push_str(&line);
                 line.clear();
             }
@@ -354,6 +357,7 @@ impl PeerChild {
             child,
             started,
             first,
+            lines,
             stdout: Some(stdout),
             stderr: Some(stderr),
             done,
@@ -645,4 +649,286 @@ fn peer_usage_errors() {
             run.elapsed
         );
     }
+}
+
+struct FakePlan {
+    corrupt_hash_at: Option<u64>,
+    silent_after_hash: Option<u64>,
+}
+
+fn fake_guest(addr: &str, plan: FakePlan) -> JoinHandle<()> {
+    let addr = loopback_addr(addr);
+    thread::spawn(move || {
+        use crash_sim::net::{decode, encode, Msg};
+        let mut stream = std::net::TcpStream::connect(addr).expect("fake guest connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "host hello");
+        let hello = Msg::Hello {
+            seed: 1,
+            tick_rate: 100,
+        };
+        assert_eq!(decode(line.trim_end_matches(['\r', '\n'])), Ok(hello));
+        writeln!(stream, "{}", encode(&hello)).unwrap();
+        stream.flush().unwrap();
+        let mut silent = false;
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).expect("fake guest read") == 0 {
+                break;
+            }
+            let msg = decode(line.trim_end_matches(['\r', '\n'])).expect("host message");
+            if msg == Msg::Bye {
+                break;
+            }
+            if silent {
+                continue;
+            }
+            let reply = match msg {
+                Msg::Input { tick, .. } => Msg::Input {
+                    tick,
+                    throttle: 0,
+                    brake: if tick < 6 { 0 } else { 1000 },
+                    steer: 0,
+                },
+                Msg::Hash { tick, hash } => {
+                    silent = plan.silent_after_hash == Some(tick);
+                    Msg::Hash {
+                        tick,
+                        hash: if plan.corrupt_hash_at == Some(tick) {
+                            hash ^ 1
+                        } else {
+                            hash
+                        },
+                    }
+                }
+                other => panic!("unexpected host message: {other:?}"),
+            };
+            writeln!(stream, "{}", encode(&reply)).expect("fake guest reply");
+            stream.flush().unwrap();
+        }
+    })
+}
+
+fn loopback_addr(addr: &str) -> std::net::SocketAddr {
+    let socket: std::net::SocketAddr = addr.parse().expect("numeric listening address");
+    assert_eq!(socket.ip(), std::net::Ipv4Addr::LOCALHOST);
+    assert_ne!(socket.port(), 0);
+    socket
+}
+
+fn listening_addr(host: &PeerChild) -> String {
+    let first = host
+        .first
+        .recv_timeout(Duration::from_secs(60).saturating_sub(host.started.elapsed()))
+        .expect("host listening line before deadline");
+    let addr = first
+        .strip_prefix("net listening addr=")
+        .expect("listening line");
+    loopback_addr(addr);
+    addr.to_string()
+}
+
+fn reference_run(input: &str, still: &str) -> PeerOutput {
+    let mut args = common_args(input);
+    args.extend(["--input2".into(), still.into()]);
+    let reference = PeerChild::spawn(&args).finish();
+    check_exit(&reference, 0);
+    assert!(!reference.stdout.is_empty());
+    reference
+}
+
+#[test]
+fn silent_peer_ends_with_timeout() {
+    let input = manifest("scenarios/tracks/oval_lap.input");
+    let still = tmp_file("silent_still", "0 0 1 0\n");
+    let reference = reference_run(&input, &still);
+    let mut args = peer_args("--host", "127.0.0.1:0", &input);
+    replace(&mut args, "--net-timeout", "1");
+    let host = PeerChild::spawn(&args);
+    let guest = fake_guest(
+        &listening_addr(&host),
+        FakePlan {
+            corrupt_hash_at: None,
+            silent_after_hash: Some(99),
+        },
+    );
+    let host = host.finish();
+    guest.join().expect("fake guest completed");
+    check_exit(&host, 1);
+    assert!(host.elapsed < Duration::from_secs(10), "{:?}", host.elapsed);
+    let hashes: Vec<_> = host
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("hash "))
+        .collect();
+    let first_hash = reference
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("hash tick=99 value="))
+        .expect("reference first hash");
+    assert_eq!(hashes, vec![first_hash], "{}", host.stdout);
+    assert!(!host.stdout.lines().any(|l| l.starts_with("net: ok")));
+    assert_eq!(
+        last(&host.stdout),
+        "net: FAIL timeout at tick 106 after 1.000 s",
+        "{}",
+        host.stdout
+    );
+}
+
+#[test]
+fn killed_peer_ends_with_a_named_error() {
+    let input = manifest("scenarios/tracks/oval_lap.input");
+    let still = tmp_file("killed_still", "0 0 1 0\n");
+    let mut args = peer_args("--host", "127.0.0.1:0", &input);
+    replace(&mut args, "--duration", "3000");
+    let host = PeerChild::spawn(&args);
+    let addr = listening_addr(&host);
+    let mut args = peer_args("--join", &addr, &still);
+    replace(&mut args, "--duration", "3000");
+    let mut guest = PeerChild::spawn(&args);
+    loop {
+        let line = host
+            .lines
+            .recv_timeout(Duration::from_secs(60).saturating_sub(host.started.elapsed()))
+            .expect("host first hash before deadline");
+        if line.starts_with("hash ") {
+            break;
+        }
+    }
+    guest.child.lock().unwrap().kill().expect("kill guest");
+    let killed_at = Instant::now();
+    let host = host.finish();
+    let after_kill = killed_at.elapsed();
+    // A process killed by a signal need not have a numeric exit code.
+    guest.child.lock().unwrap().wait().expect("reap killed guest");
+    guest.stdout.take().unwrap().join().expect("guest stdout");
+    guest.stderr.take().unwrap().join().expect("guest stderr");
+    drop(guest);
+    check_exit(&host, 1);
+    assert!(after_kill < Duration::from_secs(15), "{after_kill:?}");
+    assert!(host.stdout.lines().any(|l| l.starts_with("hash ")));
+    assert!(!host.stdout.lines().any(|l| l.starts_with("net: ok")));
+    let line = last(&host.stdout);
+    eprintln!("killed peer host last: {line}");
+    let tick = line
+        .strip_prefix("net: FAIL disconnected at tick ")
+        .or_else(|| {
+            line.strip_prefix("net: FAIL timeout at tick ")?
+                .strip_suffix(" after 5.000 s")
+        })
+        .expect("named disconnected or timeout failure");
+    let parsed: u64 = tick.parse().expect("failure tick");
+    assert_eq!(tick, parsed.to_string(), "{line}");
+}
+
+#[test]
+fn host_and_guest_inputs_drive_their_own_cars() {
+    let input = manifest("scenarios/tracks/oval_lap.input");
+    let still = tmp_file("routing_still", "0 0 1 0\n");
+    let mut args = peer_args("--host", "127.0.0.1:0", &input);
+    replace(&mut args, "--duration", "2");
+    let host = PeerChild::spawn(&args);
+    let mut args = peer_args("--join", &listening_addr(&host), &still);
+    replace(&mut args, "--duration", "2");
+    let guest = PeerChild::spawn(&args);
+    let a = [host.finish(), guest.finish()];
+    let mut args = peer_args("--host", "127.0.0.1:0", &still);
+    replace(&mut args, "--duration", "2");
+    let host = PeerChild::spawn(&args);
+    let mut args = peer_args("--join", &listening_addr(&host), &input);
+    replace(&mut args, "--duration", "2");
+    let guest = PeerChild::spawn(&args);
+    let b = [host.finish(), guest.finish()];
+    for (label, runs) in [("A", &a), ("B", &b)] {
+        for run in runs {
+            check_exit(run, 0);
+            assert!(
+                last(&run.stdout).starts_with("net: ok "),
+                "run {label}\n{}",
+                run.stdout
+            );
+        }
+    }
+    for (peer, (a, b)) in ["host", "guest"].into_iter().zip(a.iter().zip(&b)) {
+        let positions = [1, 2].map(|car| {
+            let prefix = format!("car {car} final ");
+            let final_a = a.stdout.lines().find(|l| l.starts_with(&prefix)).unwrap();
+            let final_b = b.stdout.lines().find(|l| l.starts_with(&prefix)).unwrap();
+            assert_ne!(final_a, final_b);
+            [final_a, final_b].map(|line| {
+                let fields: Vec<_> = line
+                    .split_whitespace()
+                    .filter_map(|field| field.strip_prefix("x="))
+                    .collect();
+                assert_eq!(fields.len(), 1, "one final x field: {line}");
+                let x: f64 = fields[0].parse().expect("numeric final x");
+                assert!(x.is_finite(), "finite final x: {line}");
+                x
+            })
+        });
+        let [[a1, b1], [a2, b2]] = positions;
+        eprintln!("{peer} final x: A car 1={a1}, A car 2={a2}, B car 1={b1}, B car 2={b2}");
+        assert!(a1 - b1 > 3.0, "{peer}: car 1 must drive only in A");
+        assert!(b2 - a2 > 3.0, "{peer}: car 2 must drive only in B");
+    }
+}
+
+#[test]
+fn no_race_lines_of_an_unconfirmed_interval_are_printed() {
+    let input = manifest("scenarios/tracks/oval_lap.input");
+    let still = tmp_file("unconfirmed_still", "0 0 1 0\n");
+    let reference = reference_run(&input, &still);
+    let lines: Vec<_> = reference.stdout.lines().collect();
+    let first_car = lines
+        .iter()
+        .position(|l| l.starts_with("car "))
+        .expect("reference race event");
+    let i = lines[..first_car]
+        .iter()
+        .filter(|l| l.starts_with("hash "))
+        .count();
+    assert!((1..=18).contains(&i), "first event interval i={i}");
+    let t = 100 * i + 99;
+    eprintln!("unconfirmed interval i={i} t={t}");
+    let prefix = format!("hash tick={t} value=");
+    let hash = lines
+        .iter()
+        .find_map(|l| l.strip_prefix(&prefix))
+        .expect("reference hash of event interval");
+    check_hex(hash);
+    let own = u64::from_str_radix(hash, 16).unwrap();
+    let host = PeerChild::spawn(&peer_args("--host", "127.0.0.1:0", &input));
+    let addr = listening_addr(&host);
+    let guest = fake_guest(
+        &addr,
+        FakePlan {
+            corrupt_hash_at: Some(u64::try_from(t).unwrap()),
+            silent_after_hash: None,
+        },
+    );
+    let host = host.finish();
+    guest.join().expect("fake guest completed");
+    check_exit(&host, 1);
+    assert!(host.elapsed < Duration::from_secs(30), "{:?}", host.elapsed);
+    // The first event follows exactly i confirmed hashes; none of its interval is released.
+    let mut expected = format!(
+        "net listening addr={addr}\nnet role=host addr={addr} tick_rate=100 input_delay=6 hash_every=100 timeout_s=5.000 seed=1\n"
+    );
+    for line in &lines[..first_car] {
+        expected.push_str(line);
+        expected.push('\n');
+    }
+    expected.push_str(&format!(
+        "net: FAIL desync at tick {t} own={own:016x} peer={:016x}\n",
+        own ^ 1
+    ));
+    assert_eq!(host.stdout, expected);
 }
