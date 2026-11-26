@@ -572,6 +572,12 @@ pub fn apply_contacts_moving(
     };
     for (ci, (car, positions)) in cars.iter().zip(&staged.positions).enumerate() {
         for (i, (&before, &after)) in car.pos.iter().zip(positions).enumerate() {
+            if before.x.to_bits() == after.x.to_bits()
+                && before.y.to_bits() == after.y.to_bits()
+                && before.z.to_bits() == after.z.to_bits()
+            {
+                continue;
+            }
             for plane in car.planes {
                 let old_distance = plane.distance(before);
                 let distance = plane.distance(after);

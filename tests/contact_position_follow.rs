@@ -304,6 +304,19 @@ fn remembered_band_endpoint_is_exact() {
             ),
         ];
         cars[0].vel[0].y = -1.0;
+        if expected == 0 {
+            // Unmoved nodes must skip plane arithmetic even when it overflows.
+            // Use public fields so this regression does not depend on Plane::new
+            // accepting extreme points.
+            let plane = Plane {
+                point: Vec3::new(-f64::MAX, -f64::MAX, 0.0),
+                ..Plane::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0)).unwrap()
+            };
+            for car in &mut cars {
+                assert!(!plane.distance(car.pos[0]).is_finite());
+                car.planes.push(plane);
+            }
+        }
         let before = state_bits(&cars);
         let mut views: Vec<_> = cars.iter_mut().map(Chassis::moving).collect();
         let (report, keys) = apply_contacts_moving(&mut views, settings(), &remembered).unwrap();

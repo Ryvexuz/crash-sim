@@ -466,12 +466,14 @@ energy and next-step speed checks does `apply_contacts_moving` copy both back
 incoming caller state untouched**, even after a trial impulse. A refusal names
 the car and node/beam/contact key (settings errors have no car), with a named
 failure such as `MotionBound`, `PenetrationBound` or `EnergyIncrease`.
-Before commit, the moving entry refuses `PenetrationBound` at a node that goes
-from on/in front of one of its car's planes to behind it; already-behind nodes
-remain the plane rule's responsibility. It also rechecks final staged distances
-in contact-key order for every live cross-car pair that received an impulse or
-whose node or endpoints were followed, refusing `PenetrationBound` with that
-pair's key below the unchanged `skin-max_penetration` bound.
+Before commit, the moving entry refuses `PenetrationBound` when a follow changes
+a node's `Plane::distance` from >= 0 to < 0, as computed by `Plane::distance`
+(the same predicate as the plane rule). Nodes whose position bits did not change
+are not tested; already-behind nodes remain the plane rule's responsibility.
+It also rechecks final staged distances in contact-key order for every live
+cross-car pair that received an impulse or whose node or endpoints were followed,
+refusing `PenetrationBound` with that pair's key below the unchanged
+`skin-max_penetration` bound.
 The result counts deduplicated candidates, actual contacts and applied impulses,
 and reports their summed normal impulse magnitude. Zero impulses are not an
 error for valid separating contacts.
