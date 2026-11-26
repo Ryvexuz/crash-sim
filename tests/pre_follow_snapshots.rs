@@ -398,10 +398,6 @@ fn rear_end_snapshot_is_proved_separated() {
         .into_iter()
         .find(|(_, slacks)| slacks.iter().all(|&value| value > 0.0))
         .expect("substep=2780 missing blended separating plane");
-    assert!(
-        slacks.iter().all(|&value| value > 0.0),
-        "substep=2780 blend lambda={lambda:?} slacks={slacks:?}"
-    );
     let min_slack = slacks.into_iter().fold(f64::INFINITY, f64::min);
     eprintln!("sweep blend lambda=<{lambda:.6}> min_slack=<{min_slack:e}>");
     let r = (p1 - p0) - ((a1 - a0) * (1.0 - t1) + (b1 - b0) * t1);
