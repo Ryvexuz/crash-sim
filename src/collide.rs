@@ -33,11 +33,22 @@ impl Plane {
     /// A plane through `point` with the given normal, which need not be unit length. It is
     /// scaled by its largest component before its length is taken (so a huge or tiny normal
     /// cannot overflow or underflow), then divided by that length. A zero or non-finite
-    /// normal is an error.
+    /// normal is an error. The point must be finite and each coordinate must have magnitude
+    /// at most `solver_m5::MAX_COORD_M` (1e6 m, inclusive), to limit cancellation in distance
+    /// calculations for nodes within the same coordinate bound.
     pub fn new(point: Vec3, normal: Vec3) -> Result<Plane, String> {
         let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
         if !finite(point) {
             return Err(format!("plane point ({}, {}, {}) is not finite", point.x, point.y, point.z));
+        }
+        if point.x.abs() > crate::solver_m5::MAX_COORD_M
+            || point.y.abs() > crate::solver_m5::MAX_COORD_M
+            || point.z.abs() > crate::solver_m5::MAX_COORD_M
+        {
+            return Err(format!(
+                "plane point ({}, {}, {}) exceeds the coordinate limit of {} m",
+                point.x, point.y, point.z, crate::solver_m5::MAX_COORD_M
+            ));
         }
         // f64::max skips a NaN, so finiteness is checked on every component first.
         let m = normal.x.abs().max(normal.y.abs()).max(normal.z.abs());
