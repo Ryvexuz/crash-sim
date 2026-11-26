@@ -125,7 +125,7 @@ deg/s) although the steering is wound off to 0 by 10.30 s: power oversteer.
 2. **Full lock at speed is far past the tyre's saturation angle (secondary: dead steering, then
    late countersteer).** In the 54 rows at full lock above 5 m/s the front slip angle averaged
    18.7 deg against the 5.03 deg at which the tyre saturates, with 0.88 of the front friction
-   circle used and 0.472 g. This tyre model has no peak-then-fall (docs/physics/wheels.md, "What the model ignores",
+   circle used and 0.472 g. This tyre model has no peak-then-fall (docs/PHYSICS.md line 100,
    "no peak-then-fall of the slip curve"), so the extra lock does not lose grip, but it adds none:
    past about 5 deg of front slip the lock only scrubs. With the steer ramped at 3.0 per second,
    countersteer from full lock to centre takes about 1 / 3.0 = 0.33 s, during which (spin 1,
@@ -135,11 +135,11 @@ deg/s) although the steering is wound off to 0 by 10.30 s: power oversteer.
    lap, 22.50 to 23.30 s, throttle 0, brake 0, steer 0: speed 13.85 m/s in every row, and ax
    0.000 g in every row from 22.60 s (0.012 at 22.50 s, the first row after the throttle went
    to 0). Lazlo's lap: 27 straight coasting rows above 2 m/s average ax = +0.0094 g, so no slowing
-   either. docs/physics/wheels.md, "What the model ignores" now says "Rolling resistance and aero drag are modelled".
+   either. docs/PHYSICS.md line 100 lists "no rolling resistance" among what the model ignores.
    Letting go of W gives no engine braking or drag to help the car settle, which reads as ice.
 4. **Steady-state lateral grip is not the problem.** Before the wall the highest 0.1 s mean
    lateral acceleration was 0.859 g (t = 8.40 s, throttle 0, steer 0.66, 8.33 m/s), against the
-   skidpad's 0.842 g steady limit (docs/physics/wheels.md, the skidpad try table (try 1, limit_g 0.842); not re-measured here). Off throttle
+   skidpad's 0.842 g steady limit (docs/PHYSICS.md line 118; not re-measured here). Off throttle
    the car corners at its grip limit; under full throttle its mean |ay| drops to 0.319 g.
 5. **Not established by these runs:** the low-speed tyre model and yaw damping as separate
    causes. The one large sideslip at low speed (peak |beta| 115.028 deg at t = 11.80 s, 1.40 m/s)
